@@ -20,6 +20,7 @@ import {
   Filter,
   ChevronsUpDown,
   Layers,
+  Lightbulb,
 } from "lucide-react";
 import {
   LineChart,
@@ -83,7 +84,12 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities";
+type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
+
+/** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
+const GSC_OPPORTUNITY_MIN_IMPRESSIONS = 100;
+const GSC_OPPORTUNITY_MAX_CTR = 0.03;
 type MetricKey  = "users" | "sessions" | "pageviews" | "bounceRate";
 type SortDir    = "desc" | "asc";
 type ComparisonMode = "none" | "prevPeriod" | "prevYear";
@@ -1128,6 +1134,10 @@ export default function App() {
   const [gscSeriesKeys, setGscSeriesKeys] = useState<string[]>([]);
   const [gscQueries, setGscQueries]       = useState<QueryRow[]>([]);
   const [gscQueriesCmp, setGscQueriesCmp] = useState<QueryRow[]>([]);
+  /** Always query dimension (up to API row cap) — used for SEO Opportunities, independent of GSC table dimension. */
+  const [gscOpportunityQueries, setGscOpportunityQueries]     = useState<QueryRow[]>([]);
+  const [gscOpportunityQueriesCmp, setGscOpportunityQueriesCmp] = useState<QueryRow[]>([]);
+  const [oppSort, setOppSort] = useState<{ col: OppSortCol; dir: SortDir }>({ col: "impressions", dir: "desc" });
   const [gscDevices, setGscDevices]       = useState<DeviceRow[]>([]);
   const [gscCountries, setGscCountries]   = useState<string[]>([]);
   const [gscCountryRows, setGscCountryRows]     = useState<CountryRow[]>([]);
@@ -1490,11 +1500,13 @@ export default function App() {
     const fetchList: Promise<Response>[] = [
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["date"], rowLimit: days, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: [queryDim], rowLimit: 500, ...singleFilter }) }),
+      fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["query"], rowLimit: 25000, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["device"], rowLimit: 10, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["country"], rowLimit: 100 }) }),
       ...(cmpRange ? [
         fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: ["date"], rowLimit: days, ...singleFilter }) }),
         fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: [queryDim], rowLimit: 500, ...singleFilter }) }),
+        fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: ["query"], rowLimit: 25000, ...singleFilter }) }),
         fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: ["country"], rowLimit: 100 }) }),
       ] : []),
       ...(needsSeries
@@ -1517,10 +1529,12 @@ export default function App() {
     let idx = 0;
     const dailyData    = jsons[idx++];
     const queryData    = jsons[idx++];
+    const opportunityQueryData = jsons[idx++];
     const deviceData   = jsons[idx++];
     const countryData  = jsons[idx++];
     const cmpDailyGsc   = cmpRange ? jsons[idx++] : null;
     const cmpQueryData  = cmpRange ? jsons[idx++] : null;
+    const cmpOpportunityQueryData = cmpRange ? jsons[idx++] : null;
     const cmpCountryData = cmpRange ? jsons[idx++] : null;
     const seriesDataArr = jsons.slice(idx);
 
@@ -1547,6 +1561,8 @@ export default function App() {
 
     setGscQueries(parseGscQueries(queryData));
     setGscQueriesCmp(cmpQueryData ? parseGscQueries(cmpQueryData) : []);
+    setGscOpportunityQueries(parseGscQueries(opportunityQueryData));
+    setGscOpportunityQueriesCmp(cmpOpportunityQueryData ? parseGscQueries(cmpOpportunityQueryData) : []);
 
     setGscDevices((deviceData.rows as GSCApiRow[])?.map((r) => ({
       device:      r.keys[0],
@@ -1642,6 +1658,32 @@ export default function App() {
     });
     return rows;
   }, [gscQueries, gscFilters]);
+
+  const gscOpportunityRows = useMemo(() => {
+    let rows = gscOpportunityQueries.filter(
+      (q) =>
+        q.query.trim().length > 0 &&
+        q.impressions >= GSC_OPPORTUNITY_MIN_IMPRESSIONS &&
+        q.ctr <= GSC_OPPORTUNITY_MAX_CTR &&
+        q.clicks < q.impressions * 0.05,
+    );
+    const { col, dir } = oppSort;
+    rows = [...rows].sort((a, b) => {
+      if (col === "query") {
+        const c = a.query.localeCompare(b.query);
+        return dir === "asc" ? c : -c;
+      }
+      const av = a[col] as number;
+      const bv = b[col] as number;
+      const nat = av - bv;
+      return dir === "asc" ? nat : -nat;
+    });
+    return rows;
+  }, [gscOpportunityQueries, oppSort]);
+
+  function handleOppSort(col: OppSortCol) {
+    setOppSort((s) => (s.col !== col ? { col, dir: "desc" } : { col, dir: s.dir === "desc" ? "asc" : "desc" }));
+  }
 
   function handleGscSort(col: GSCFilters["sortBy"]) {
     setGscFilters((f) => {
@@ -1750,6 +1792,7 @@ export default function App() {
     { key: "gsc",   label: "GSC",      icon: Search },
     { key: "blend", label: "Blend",    icon: Layers },
     { key: "intl",  label: "International", icon: Globe },
+    { key: "opportunities", label: "SEO Opportunities", icon: Lightbulb },
   ];
 
   // ─── Render ────────────────────────────────────────────────────────────────
@@ -2350,6 +2393,111 @@ export default function App() {
                       <Layers size={28} className="text-purple-200 mx-auto mb-3" />
                       <p className="text-gray-400 text-sm">Select a GA4 property and GSC property above to see blended data.</p>
                     </div>
+                  )}
+                </section>
+              </>
+            )}
+
+            {/* ── SEO Opportunities (GSC) ── */}
+            {activeView === "opportunities" && (
+              <>
+                <SectionDivider label="SEO OPPORTUNITIES" />
+                <section>
+                  <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
+                    <div className="flex items-center gap-3">
+                      <div className="bg-amber-50 border border-amber-100 rounded-xl p-2">
+                        <Lightbulb size={16} className="text-amber-600" />
+                      </div>
+                      <div>
+                        <h2 className="text-sm font-bold text-gray-900">SEO opportunities</h2>
+                        <p className="text-xs text-gray-400 max-w-xl">
+                          Queries from Search Console with high impressions but relatively few clicks (≥{GSC_OPPORTUNITY_MIN_IMPRESSIONS} impressions, CTR ≤{(GSC_OPPORTUNITY_MAX_CTR * 100).toFixed(0)}%, and clicks under 5% of impressions). Uses the same date range, comparison, and device/country filters as GSC.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="max-w-[260px] w-full min-w-[200px]">
+                      <Select value={selectedGSC} onChange={setSelectedGSC} options={gscProperties} placeholder="Select GSC Property" disabled={gscProperties.length === 0} />
+                    </div>
+                  </div>
+
+                  <GSCFilterPanel filters={gscFilters} setFilters={setGscFilters} countryOptions={countryOptions} />
+
+                  {gscLoading && gscOpportunityQueries.length === 0 && <Spinner />}
+
+                  {gscOpportunityQueries.length > 0 && (
+                    <div className={`space-y-4 transition-opacity duration-200 ${gscLoading ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
+                      <ComparisonBanner days={parseInt(gscFilters.dateRange)} mode={gscFilters.comparison} />
+                      {gscOpportunityRows.length > 0 ? (
+                        <ChartCard title={`Low clicks, high impressions${hasGscCmp ? ` — vs ${gscCmpLabel}` : ""}`}>
+                          <p className="text-xs text-gray-500 mb-3">
+                            {gscOpportunityRows.length} quer{gscOpportunityRows.length === 1 ? "y" : "ies"} · from {gscOpportunityQueries.length.toLocaleString()} top queries in GSC (same filters)
+                          </p>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="border-b border-gray-100">
+                                  {([
+                                    { key: "query" as const,       label: "Query" },
+                                    { key: "clicks" as const,      label: "Clicks" },
+                                    { key: "impressions" as const, label: "Impressions" },
+                                    { key: "ctr" as const,         label: "CTR" },
+                                    { key: "position" as const,    label: "Position" },
+                                  ]).map(({ key, label }) => (
+                                    <th key={label}
+                                      onClick={() => handleOppSort(key)}
+                                      className="pb-2.5 text-left font-semibold text-gray-400 uppercase tracking-wide pr-3 last:pr-0 text-[10px] cursor-pointer hover:text-amber-700 select-none">
+                                      <span className="inline-flex items-center gap-1">
+                                        {label}
+                                        <SortIcon col={key} sortBy={oppSort.col} sortDir={oppSort.dir} />
+                                      </span>
+                                    </th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {gscOpportunityRows.map((q, i) => {
+                                  const c = hasGscCmp ? gscOpportunityQueriesCmp.find((x) => x.query === q.query) : null;
+                                  const cd = c ? ((q.clicks - c.clicks) / Math.abs(c.clicks || 1)) * 100 : null;
+                                  const pd = c ? q.position - c.position : null;
+                                  return (
+                                    <tr key={`${q.query}-${i}`} className="border-b border-gray-50 last:border-0 hover:bg-amber-50/30 transition-colors">
+                                      <td className="py-2 pr-3 text-gray-800 font-medium max-w-[220px] truncate" title={q.query}>{q.query}</td>
+                                      <td className="py-2 pr-3">
+                                        <span className="text-gray-900 font-semibold">{q.clicks.toLocaleString()}</span>
+                                        {cd !== null && <span className={`ml-1 text-[10px] font-bold ${cd >= 0 ? "text-emerald-600" : "text-red-500"}`}>{cd >= 0 ? "+" : ""}{cd.toFixed(0)}%</span>}
+                                        {c && <div className="text-[10px] text-gray-400">{c.clicks.toLocaleString()}</div>}
+                                      </td>
+                                      <td className="py-2 pr-3">
+                                        <span className="text-gray-700 font-medium">{q.impressions.toLocaleString()}</span>
+                                        {c && <div className="text-[10px] text-gray-400">{c.impressions.toLocaleString()}</div>}
+                                      </td>
+                                      <td className="py-2 pr-3">
+                                        <span className="text-gray-600">{(q.ctr * 100).toFixed(2)}%</span>
+                                        {c && <div className="text-[10px] text-gray-400">{(c.ctr * 100).toFixed(2)}%</div>}
+                                      </td>
+                                      <td className="py-2">
+                                        <PosBadge pos={q.position} />
+                                        {pd !== null && <div className={`text-[10px] font-bold mt-0.5 ${pd <= 0 ? "text-emerald-600" : "text-red-500"}`}>{pd <= 0 ? "" : "+"}{pd.toFixed(1)}</div>}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </ChartCard>
+                      ) : (
+                        <div className="bg-white border border-gray-100 rounded-2xl p-6 text-center shadow-sm">
+                          <Lightbulb size={24} className="text-amber-200 mx-auto mb-2" />
+                          <p className="text-gray-500 text-sm">No queries match the low-click / high-impression rules for this period and filters.</p>
+                          <p className="text-gray-400 text-xs mt-2">Try a longer date range or relax filters if your site has limited GSC volume.</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {!gscLoading && selectedGSC && gscOpportunityQueries.length === 0 && (
+                    <p className="text-sm text-gray-400 py-4">No query data for this property / filter combination.</p>
                   )}
                 </section>
               </>
