@@ -21,6 +21,9 @@ import {
   ChevronsUpDown,
   Layers,
   Lightbulb,
+  ShoppingCart,
+  AlertTriangle,
+  LogOut,
 } from "lucide-react";
 import {
   LineChart,
@@ -71,6 +74,50 @@ const DATE_RANGES = [
   { value: "28", label: "Last 28 days" },
   { value: "90", label: "Last 90 days" },
 ];
+const DATE_RANGES_WITH_CUSTOM = [...DATE_RANGES, { value: "custom", label: "Custom range" }];
+
+const LS_GOOGLE_TOKEN = "vcc_google_access_token";
+const LS_GOOGLE_TOKEN_EXP = "vcc_google_token_expires_at";
+
+function persistGoogleToken(r: { access_token?: string; expires_in?: number }) {
+  if (!r.access_token) return;
+  localStorage.setItem(LS_GOOGLE_TOKEN, r.access_token);
+  const ms = (r.expires_in ?? 3599) * 1000;
+  localStorage.setItem(LS_GOOGLE_TOKEN_EXP, String(Date.now() + ms - 120_000));
+}
+function readStoredGoogleToken(): string | null {
+  const t = localStorage.getItem(LS_GOOGLE_TOKEN);
+  const e = localStorage.getItem(LS_GOOGLE_TOKEN_EXP);
+  if (!t || !e) return null;
+  if (Date.now() > parseInt(e, 10)) {
+    localStorage.removeItem(LS_GOOGLE_TOKEN);
+    localStorage.removeItem(LS_GOOGLE_TOKEN_EXP);
+    return null;
+  }
+  return t;
+}
+function clearGoogleToken() {
+  localStorage.removeItem(LS_GOOGLE_TOKEN);
+  localStorage.removeItem(LS_GOOGLE_TOKEN_EXP);
+}
+
+function daysInclusive(startISO: string, endISO: string): number {
+  const a = new Date(startISO + "T12:00:00").getTime();
+  const b = new Date(endISO + "T12:00:00").getTime();
+  return Math.max(1, Math.round((b - a) / 86400000) + 1);
+}
+function addDaysISO(iso: string, delta: number): string {
+  const d = new Date(iso + "T12:00:00");
+  d.setDate(d.getDate() + delta);
+  return toISODate(d);
+}
+/** Previous period of same length ending the day before `startISO`. */
+function comparisonWindowBefore(startISO: string, endISO: string): { startDate: string; endDate: string } {
+  const len = daysInclusive(startISO, endISO);
+  const cmpEnd = addDaysISO(startISO, -1);
+  const cmpStart = addDaysISO(cmpEnd, -(len - 1));
+  return { startDate: cmpStart, endDate: cmpEnd };
+}
 
 const METRIC_OPTIONS = [
   { value: "users", label: "Active Users" },
@@ -84,7 +131,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "conversions" | "seoIssues";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -166,6 +213,10 @@ interface SeriesRow  { date: string; [key: string]: number | string }
 
 interface GA4Filters {
   dateRange:    string;
+  customStart?: string;
+  customEnd?: string;
+  customCompareStart?: string;
+  customCompareEnd?: string;
   metrics:      MetricKey[];
   channelFilter: string[];
   deviceFilter:  string[];
@@ -174,6 +225,10 @@ interface GA4Filters {
 type QueryFilterMode = "contains" | "notContains" | "regex";
 interface GSCFilters {
   dateRange:       string;
+  customStart?: string;
+  customEnd?: string;
+  customCompareStart?: string;
+  customCompareEnd?: string;
   dimension:       "date" | "query" | "page" | "country" | "device";
   queryFilter:     string;
   queryFilterMode: QueryFilterMode;
@@ -212,6 +267,52 @@ function getComparisonRange(days: number, mode: "prevPeriod" | "prevYear") {
   return { startDate: nDaysAgo(days - 1 + 365), endDate: nDaysAgo(365) };
 }
 
+type Ga4DateWin = { startDate: string; endDate: string };
+
+function ga4DateWindows(f: GA4Filters): { current: Ga4DateWin; comparison: Ga4DateWin | null } {
+  let current: Ga4DateWin;
+  if (f.dateRange === "custom" && f.customStart && f.customEnd) {
+    current = { startDate: f.customStart, endDate: f.customEnd };
+  } else {
+    const d = Math.max(1, parseInt(f.dateRange, 10) || 28);
+    current = { startDate: `${d - 1}daysAgo`, endDate: "today" };
+  }
+  if (f.comparison === "none") return { current, comparison: null };
+  if (f.dateRange === "custom" && f.customStart && f.customEnd) {
+    if (f.customCompareStart && f.customCompareEnd) {
+      return { current, comparison: { startDate: f.customCompareStart, endDate: f.customCompareEnd } };
+    }
+    return { current, comparison: comparisonWindowBefore(f.customStart, f.customEnd) };
+  }
+  const days = Math.max(1, parseInt(f.dateRange, 10) || 28);
+  const cmp = getComparisonRange(days, f.comparison as "prevPeriod" | "prevYear");
+  return { current, comparison: { startDate: cmp.startDate, endDate: cmp.endDate } };
+}
+
+function gscDateWindows(f: GSCFilters): { startDate: string; endDate: string; comparison: { startDate: string; endDate: string } | null } {
+  const today = toISODate(new Date());
+  let startDate: string;
+  let endDate: string;
+  if (f.dateRange === "custom" && f.customStart && f.customEnd) {
+    startDate = f.customStart;
+    endDate = f.customEnd;
+  } else {
+    const d = Math.max(1, parseInt(f.dateRange, 10) || 28);
+    startDate = nDaysAgo(d - 1);
+    endDate = today;
+  }
+  if (f.comparison === "none") return { startDate, endDate, comparison: null };
+  if (f.dateRange === "custom" && f.customStart && f.customEnd) {
+    if (f.customCompareStart && f.customCompareEnd) {
+      return { startDate, endDate, comparison: { startDate: f.customCompareStart, endDate: f.customCompareEnd } };
+    }
+    return { startDate, endDate, comparison: comparisonWindowBefore(f.customStart, f.customEnd) };
+  }
+  const days = Math.max(1, parseInt(f.dateRange, 10) || 28);
+  const cmp = getComparisonRange(days, f.comparison as "prevPeriod" | "prevYear");
+  return { startDate, endDate, comparison: { startDate: cmp.startDate, endDate: cmp.endDate } };
+}
+
 // ─── UI Primitives ────────────────────────────────────────────────────────────
 
 function DeltaBadge({ current, previous, lowerIsBetter = false }: { current: number; previous: number; lowerIsBetter?: boolean }) {
@@ -230,14 +331,21 @@ function DeltaBadge({ current, previous, lowerIsBetter = false }: { current: num
   );
 }
 
-function KpiCard({ label, value, sub, icon: Icon, cmpValue, cmpLabel }: {
+function KpiCard({ label, value, sub, icon: Icon, cmpValue, cmpLabel, onClick, active }: {
   label: string; value: string; sub?: string; icon: React.ElementType;
   cmpValue?: number; cmpLabel?: string;
+  onClick?: () => void;
+  active?: boolean;
 }) {
   // Parse numeric from formatted string for delta calculation
   const currentNum = parseFloat(value.replace(/[^0-9.-]/g, ""));
   return (
-    <div className="bg-white border border-purple-100 rounded-2xl p-4 flex items-start gap-3 shadow-sm hover:shadow-md transition-shadow">
+    <div
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
+      className={`bg-white border rounded-2xl p-4 flex items-start gap-3 shadow-sm transition-shadow ${active ? "border-purple-500 ring-2 ring-purple-200" : "border-purple-100 hover:shadow-md"} ${onClick ? "cursor-pointer" : ""}`}>
       <div className="rounded-xl p-2 bg-purple-100 shrink-0">
         <Icon size={16} className="text-purple-700" />
       </div>
@@ -304,8 +412,25 @@ function ChartCard({ title, children, className = "" }: { title: string; childre
   );
 }
 
-function ComparisonBanner({ days, mode }: { days: number; mode: ComparisonMode }) {
+/** Scrollable table body area (~10 table rows visible). */
+function ScrollTable({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div className={`max-h-[17.5rem] overflow-x-auto overflow-y-auto rounded-xl border border-gray-50 ${className}`}>
+      {children}
+    </div>
+  );
+}
+
+function ComparisonBanner({ days, mode, rangeHint }: { days: number; mode: ComparisonMode; rangeHint?: string }) {
   if (mode === "none") return null;
+  if (rangeHint) {
+    return (
+      <div className="flex items-center gap-3 text-xs bg-purple-50 border border-purple-100 rounded-xl px-3 py-2 mb-4 flex-wrap">
+        <span className="font-semibold text-purple-700">Comparing:</span>
+        <span className="text-gray-700">{rangeHint}</span>
+      </div>
+    );
+  }
   const today     = new Date();
   const fmtRange  = (s: string, e: string) => `${formatDisplayDate(s)} – ${formatDisplayDate(e)}`;
   const curStart  = nDaysAgo(days - 1);
@@ -489,7 +614,7 @@ function GA4FilterPanel({ filters, setFilters, channelOptions }: {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
               <label className="block text-xs text-gray-500 mb-1.5 font-medium">Date Range</label>
-              <Select value={filters.dateRange} onChange={(v) => setFilters((f) => ({ ...f, dateRange: v }))} options={DATE_RANGES} />
+              <Select value={filters.dateRange} onChange={(v) => setFilters((f) => ({ ...f, dateRange: v }))} options={DATE_RANGES_WITH_CUSTOM} />
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1.5 font-medium">Metrics</label>
@@ -524,6 +649,34 @@ function GA4FilterPanel({ filters, setFilters, channelOptions }: {
               />
             </div>
           </div>
+          {filters.dateRange === "custom" && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1 border-t border-purple-100">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1 font-medium">Start (current)</label>
+                <input type="date" value={filters.customStart ?? ""} onChange={(e) => setFilters((f) => ({ ...f, customStart: e.target.value }))}
+                  className="w-full bg-white border border-gray-200 rounded-xl px-2 py-2 text-sm text-gray-700" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1 font-medium">End (current)</label>
+                <input type="date" value={filters.customEnd ?? ""} onChange={(e) => setFilters((f) => ({ ...f, customEnd: e.target.value }))}
+                  className="w-full bg-white border border-gray-200 rounded-xl px-2 py-2 text-sm text-gray-700" />
+              </div>
+              {filters.comparison !== "none" && (
+                <>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1 font-medium">Compare start</label>
+                    <input type="date" value={filters.customCompareStart ?? ""} onChange={(e) => setFilters((f) => ({ ...f, customCompareStart: e.target.value }))}
+                      className="w-full bg-white border border-gray-200 rounded-xl px-2 py-2 text-sm text-gray-700" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1 font-medium">Compare end</label>
+                    <input type="date" value={filters.customCompareEnd ?? ""} onChange={(e) => setFilters((f) => ({ ...f, customCompareEnd: e.target.value }))}
+                      className="w-full bg-white border border-gray-200 rounded-xl px-2 py-2 text-sm text-gray-700" />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           <ComparisonToggle value={filters.comparison} onChange={(v) => setFilters((f) => ({ ...f, comparison: v }))} />
         </div>
       )}
@@ -565,7 +718,7 @@ function GSCFilterPanel({ filters, setFilters, countryOptions }: {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
               <label className="block text-xs text-gray-500 mb-1.5 font-medium">Date Range</label>
-              <Select value={filters.dateRange} onChange={(v) => setFilters((f) => ({ ...f, dateRange: v }))} options={DATE_RANGES} />
+              <Select value={filters.dateRange} onChange={(v) => setFilters((f) => ({ ...f, dateRange: v }))} options={DATE_RANGES_WITH_CUSTOM} />
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1.5 font-medium">Dimension</label>
@@ -584,6 +737,34 @@ function GSCFilterPanel({ filters, setFilters, countryOptions }: {
                 placeholder="All Devices" maxSelections={3} />
             </div>
           </div>
+          {filters.dateRange === "custom" && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1 border-t border-purple-100">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1 font-medium">Start (current)</label>
+                <input type="date" value={filters.customStart ?? ""} onChange={(e) => setFilters((f) => ({ ...f, customStart: e.target.value }))}
+                  className="w-full bg-white border border-gray-200 rounded-xl px-2 py-2 text-sm text-gray-700" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1 font-medium">End (current)</label>
+                <input type="date" value={filters.customEnd ?? ""} onChange={(e) => setFilters((f) => ({ ...f, customEnd: e.target.value }))}
+                  className="w-full bg-white border border-gray-200 rounded-xl px-2 py-2 text-sm text-gray-700" />
+              </div>
+              {filters.comparison !== "none" && (
+                <>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1 font-medium">Compare start</label>
+                    <input type="date" value={filters.customCompareStart ?? ""} onChange={(e) => setFilters((f) => ({ ...f, customCompareStart: e.target.value }))}
+                      className="w-full bg-white border border-gray-200 rounded-xl px-2 py-2 text-sm text-gray-700" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1 font-medium">Compare end</label>
+                    <input type="date" value={filters.customCompareEnd ?? ""} onChange={(e) => setFilters((f) => ({ ...f, customCompareEnd: e.target.value }))}
+                      className="w-full bg-white border border-gray-200 rounded-xl px-2 py-2 text-sm text-gray-700" />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           <div className="flex items-end">
             <ComparisonToggle value={filters.comparison} onChange={(v) => setFilters((f) => ({ ...f, comparison: v }))} />
           </div>
@@ -752,6 +933,33 @@ function countryFlag(code: string): string {
   return codePoints.map((cp) => String.fromCodePoint(cp)).join("");
 }
 
+function IntlGlobePreview({ gscRows, ga4Rows }: { gscRows: CountryRow[]; ga4Rows: Ga4CountryRow[] }) {
+  const heat = new Map<string, number>();
+  gscRows.forEach((r) => heat.set(r.country, (heat.get(r.country) ?? 0) + r.clicks));
+  ga4Rows.forEach((r) => heat.set(r.country, (heat.get(r.country) ?? 0) + r.sessions));
+  const top = [...heat.entries()].sort((a, b) => b[1] - a[1]).slice(0, 14);
+  const POS: Record<string, { left: string; top: string }> = {
+    usa: { left: "20%", top: "38%" }, can: { left: "18%", top: "24%" }, gbr: { left: "45%", top: "28%" }, deu: { left: "50%", top: "30%" },
+    fra: { left: "47%", top: "34%" }, esp: { left: "44%", top: "36%" }, ita: { left: "51%", top: "36%" }, ind: { left: "67%", top: "42%" },
+    chn: { left: "76%", top: "38%" }, jpn: { left: "84%", top: "36%" }, aus: { left: "82%", top: "62%" }, bra: { left: "28%", top: "58%" },
+    mex: { left: "14%", top: "42%" }, rus: { left: "62%", top: "22%" }, zaf: { left: "52%", top: "62%" }, kor: { left: "80%", top: "36%" },
+    nld: { left: "48%", top: "27%" }, swe: { left: "52%", top: "20%" },
+  };
+  return (
+    <div className="relative w-full max-w-md mx-auto aspect-[2/1] rounded-full bg-gradient-to-br from-sky-900 via-indigo-950 to-slate-950 border border-teal-200 shadow-inner mb-5 overflow-hidden">
+      <div className="absolute inset-0 opacity-30 bg-[radial-gradient(circle_at_30%_30%,#38bdf8_0%,transparent_55%)]" />
+      {top.map(([c]) => {
+        const pos = POS[c] ?? { left: "50%", top: "50%" };
+        return (
+          <span key={c} title={c.toUpperCase()} className="absolute w-3 h-3 rounded-full bg-teal-400 border border-white shadow-md -translate-x-1/2 -translate-y-1/2 z-10"
+            style={{ left: pos.left, top: pos.top }} />
+        );
+      })}
+      <div className="absolute bottom-2 left-0 right-0 text-center text-[10px] text-teal-100/90 font-semibold tracking-wide">Highlighted: top countries by GSC + GA4 activity</div>
+    </div>
+  );
+}
+
 type IntlTab = "overview" | "gsc" | "ga4" | "rising";
 type IntlSortCol = "country" | "clicks" | "impressions" | "ctr" | "position" | "users" | "sessions";
 
@@ -843,6 +1051,8 @@ function IntlView({
     <div className="space-y-5">
       <SectionDivider label="International" />
 
+      {!noData && <IntlGlobePreview gscRows={gscCountryRows} ga4Rows={ga4CountryRows} />}
+
       {/* Header */}
       <div className="flex items-center gap-3 mb-2">
         <div className="bg-teal-100 rounded-xl p-2"><Globe size={16} className="text-teal-700" /></div>
@@ -915,9 +1125,9 @@ function IntlView({
           {/* ── GSC Countries tab ── */}
           {tab === "gsc" && (
             <ChartCard title={`GSC Countries${hasGscCmp ? " — with comparison" : ""}`}>
-              <div className="overflow-x-auto">
+              <ScrollTable>
                 <table className="w-full text-xs">
-                  <thead>
+                  <thead className="sticky top-0 z-10 bg-white shadow-sm">
                     <tr className="border-b border-gray-100">
                       {([
                         { col: "country",     label: "Country" },
@@ -971,16 +1181,16 @@ function IntlView({
                     })}
                   </tbody>
                 </table>
-              </div>
+              </ScrollTable>
             </ChartCard>
           )}
 
           {/* ── GA4 Countries tab ── */}
           {tab === "ga4" && (
             <ChartCard title={`GA4 Countries${hasCmp ? " — with comparison" : ""}`}>
-              <div className="overflow-x-auto">
+              <ScrollTable>
                 <table className="w-full text-xs">
-                  <thead>
+                  <thead className="sticky top-0 z-10 bg-white shadow-sm">
                     <tr className="border-b border-gray-100">
                       {([
                         { col: "country",  label: "Country" },
@@ -1030,7 +1240,7 @@ function IntlView({
                     })}
                   </tbody>
                 </table>
-              </div>
+              </ScrollTable>
             </ChartCard>
           )}
 
@@ -1167,6 +1377,22 @@ export default function App() {
     sortBy: "clicks", sortDir: "desc", comparison: "none",
   });
 
+  /** When set, GA4 + GSC requests are scoped to this page path (contains match). */
+  const [pageDrillPath, setPageDrillPath] = useState("");
+  const [ga4TrendMetricFocus, setGa4TrendMetricFocus] = useState<MetricKey | null>(null);
+  const [convEventName, setConvEventName] = useState("purchase");
+  const [convDaily, setConvDaily] = useState<{ date: string; count: number }[]>([]);
+  const [convDailyCmp, setConvDailyCmp] = useState<{ date: string; count: number }[]>([]);
+  const [seoNoTraffic, setSeoNoTraffic] = useState<{ page: string; sessions: number }[]>([]);
+  const [seoLowEngagement, setSeoLowEngagement] = useState<{ page: string; engagementRate: number; sessions: number }[]>([]);
+  const [seo404Titles, setSeo404Titles] = useState<{ title: string; page: string; sessions: number }[]>([]);
+  const [gscLinkQuery, setGscLinkQuery] = useState<string | null>(null);
+  const [gscLinkPage, setGscLinkPage] = useState<string | null>(null);
+  const [gscCrossPages, setGscCrossPages] = useState<QueryRow[]>([]);
+  const [gscCrossQueries, setGscCrossQueries] = useState<QueryRow[]>([]);
+  const [seoIssuesLoading, setSeoIssuesLoading] = useState(false);
+  const [convLoading, setConvLoading] = useState(false);
+
   useEffect(() => {
     const t = setInterval(() => {
       if (window.google?.accounts?.oauth2) { setGoogleReady(true); clearInterval(t); }
@@ -1178,7 +1404,7 @@ export default function App() {
   useEffect(() => {
     const t = setTimeout(() => setGa4FetchFilters(ga4Filters), 400);
     return () => clearTimeout(t);
-  }, [ga4Filters.dateRange, ga4Filters.comparison, ga4Filters.channelFilter, ga4Filters.deviceFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ga4Filters.dateRange, ga4Filters.customStart, ga4Filters.customEnd, ga4Filters.customCompareStart, ga4Filters.customCompareEnd, ga4Filters.comparison, ga4Filters.channelFilter, ga4Filters.deviceFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // metrics changes don't hit the API — propagate immediately
   useEffect(() => {
@@ -1189,7 +1415,13 @@ export default function App() {
   useEffect(() => {
     const t = setTimeout(() => setGscFetchFilters(gscFilters), 400);
     return () => clearTimeout(t);
-  }, [gscFilters.dateRange, gscFilters.comparison, gscFilters.dimension, gscFilters.countryFilter, gscFilters.deviceFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [gscFilters.dateRange, gscFilters.customStart, gscFilters.customEnd, gscFilters.customCompareStart, gscFilters.customCompareEnd, gscFilters.comparison, gscFilters.dimension, gscFilters.countryFilter, gscFilters.deviceFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!googleReady) return;
+    const stored = readStoredGoogleToken();
+    if (stored) setAccessToken(stored);
+  }, [googleReady]);
 
   const handleLogin = useCallback(() => {
     if (!googleReady) return;
@@ -1197,9 +1429,22 @@ export default function App() {
     window.google.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID,
       scope: "https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/webmasters.readonly",
-      callback: (r) => { setAccessToken(r.access_token); setIsLoggingIn(false); },
+      callback: (r) => {
+        setIsLoggingIn(false);
+        if (!r.access_token) return;
+        persistGoogleToken(r as { access_token: string; expires_in?: number });
+        setAccessToken(r.access_token);
+      },
     }).requestAccessToken();
   }, [googleReady]);
+
+  const handleLogout = useCallback(() => {
+    clearGoogleToken();
+    setAccessToken("");
+    setPageDrillPath("");
+    setGscLinkQuery(null);
+    setGscLinkPage(null);
+  }, []);
 
   const loadProperties = useCallback(async (token: string) => {
     const [a, b] = await Promise.all([
@@ -1221,9 +1466,6 @@ export default function App() {
   const fetchGA4 = useCallback(async () => {
     if (!selectedGA4 || !accessToken) return;
     setGa4Loading(true);
-    const days      = parseInt(ga4FetchFilters.dateRange);
-    const startDate = `${days - 1}daysAgo`;
-    const endDate   = "today";
     const headers   = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
     const base      = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
 
@@ -1235,23 +1477,39 @@ export default function App() {
     const multiDevice  = f.deviceFilter.length > 1;
     const needsSeries  = multiChannel || multiDevice;
 
-    const cmpRange = f.comparison !== "none"
-      ? getComparisonRange(days, f.comparison)
-      : null;
+    const { current: curWin, comparison: cmpWin } = ga4DateWindows(f);
+    const cmpRange = cmpWin;
 
-    // Single-series dimension filter (0 or 1 channel/device selected)
+    const daySpan =
+      f.dateRange === "custom" && f.customStart && f.customEnd
+        ? Math.min(400, daysInclusive(f.customStart, f.customEnd))
+        : Math.max(1, parseInt(f.dateRange, 10) || 28);
+
+    const startDate = curWin.startDate;
+    const endDate   = curWin.endDate;
+
+    const drillExprs: object[] = pageDrillPath.trim()
+      ? [{ filter: { fieldName: "pagePathPlusQueryString", stringFilter: { matchType: "CONTAINS", value: pageDrillPath.trim() } } }]
+      : [];
     const singleFilterClauses: object[] = [];
     if (!needsSeries && f.channelFilter.length === 1) singleFilterClauses.push(makeChannelFilter(f.channelFilter[0]));
     if (!needsSeries && f.deviceFilter.length === 1)  singleFilterClauses.push(makeDeviceFilter(f.deviceFilter[0]));
-    const singleDimFilter = singleFilterClauses.length
-      ? { dimensionFilter: { andGroup: { expressions: singleFilterClauses } } }
+    const dimExprs = [...singleFilterClauses, ...drillExprs];
+    const singleDimFilter = dimExprs.length
+      ? { dimensionFilter: { andGroup: { expressions: dimExprs } } }
       : {};
+
+    const aiSourceRegexFilter = { filter: { fieldName: "sessionSourceMedium", stringFilter: { matchType: "PARTIAL_REGEXP", value: "(chat\\.openai\\.com|chatgpt\\.com|perplexity\\.ai|claude\\.ai|bard\\.google\\.com|gemini\\.google\\.com|copilot\\.microsoft\\.com|bing\\.com|you\\.com|poe\\.com|phind\\.com|komo\\.ai|reka\\.ai|pi\\.ai|character\\.ai|huggingface\\.co)" } } };
+    const aiDimFilter = drillExprs.length
+      ? { dimensionFilter: { andGroup: { expressions: [aiSourceRegexFilter, ...drillExprs] } } }
+      : { dimensionFilter: aiSourceRegexFilter };
 
     const dailyBody = {
       dateRanges: [{ startDate, endDate }],
       dimensions: [{ name: "date" }],
       metrics: [{ name: "activeUsers" }, { name: "sessions" }, { name: "screenPageViews" }, { name: "bounceRate" }],
       orderBys: [{ dimension: { dimensionName: "date" } }],
+      limit: daySpan + 5,
       ...singleDimFilter,
     };
 
@@ -1265,13 +1523,14 @@ export default function App() {
         metrics: [{ name: "activeUsers" }, { name: "sessions" }],
         orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
         limit: 10,
+        ...singleDimFilter,
       }) }),
       // AI channels
       fetch(base, { method: "POST", headers, body: JSON.stringify({
         dateRanges: [{ startDate, endDate }],
         dimensions: [{ name: "sessionSourceMedium" }],
         metrics: [{ name: "activeUsers" }, { name: "sessions" }],
-        dimensionFilter: { filter: { fieldName: "sessionSourceMedium", stringFilter: { matchType: "PARTIAL_REGEXP", value: "(chat\\.openai\\.com|chatgpt\\.com|perplexity\\.ai|claude\\.ai|bard\\.google\\.com|gemini\\.google\\.com|copilot\\.microsoft\\.com|bing\\.com|you\\.com|poe\\.com|phind\\.com|komo\\.ai|reka\\.ai|pi\\.ai|character\\.ai|huggingface\\.co)" } } },
+        ...aiDimFilter,
         orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
         limit: 100,
       }) }),
@@ -1281,7 +1540,8 @@ export default function App() {
         dimensions: [{ name: "landingPagePlusQueryString" }],
         metrics: [{ name: "activeUsers" }, { name: "sessions" }, { name: "bounceRate" }],
         orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
-        limit: 10,
+        limit: 200,
+        ...singleDimFilter,
       }) }),
       // Comparison period — daily, channels, AI, landing (4 requests when active)
       ...(cmpRange
@@ -1291,6 +1551,7 @@ export default function App() {
               dimensions: [{ name: "date" }],
               metrics: [{ name: "activeUsers" }, { name: "sessions" }, { name: "screenPageViews" }, { name: "bounceRate" }],
               orderBys: [{ dimension: { dimensionName: "date" } }],
+              limit: daySpan + 5,
               ...singleDimFilter,
             }) }),
             fetch(base, { method: "POST", headers, body: JSON.stringify({
@@ -1299,12 +1560,13 @@ export default function App() {
               metrics: [{ name: "activeUsers" }, { name: "sessions" }],
               orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
               limit: 10,
+              ...singleDimFilter,
             }) }),
             fetch(base, { method: "POST", headers, body: JSON.stringify({
               dateRanges: [{ startDate: cmpRange.startDate, endDate: cmpRange.endDate }],
               dimensions: [{ name: "sessionSourceMedium" }],
               metrics: [{ name: "activeUsers" }, { name: "sessions" }],
-              dimensionFilter: { filter: { fieldName: "sessionSourceMedium", stringFilter: { matchType: "PARTIAL_REGEXP", value: "(chat\\.openai\\.com|chatgpt\\.com|perplexity\\.ai|claude\\.ai|bard\\.google\\.com|gemini\\.google\\.com|copilot\\.microsoft\\.com|bing\\.com|you\\.com|poe\\.com|phind\\.com|komo\\.ai|reka\\.ai|pi\\.ai|character\\.ai|huggingface\\.co)" } } },
+              ...aiDimFilter,
               orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
               limit: 100,
             }) }),
@@ -1313,22 +1575,28 @@ export default function App() {
               dimensions: [{ name: "landingPagePlusQueryString" }],
               metrics: [{ name: "activeUsers" }, { name: "sessions" }, { name: "bounceRate" }],
               orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
-              limit: 10,
+              limit: 200,
+              ...singleDimFilter,
             }) }),
           ]
         : []
       ),
       // Per-series fetches (multi-channel or multi-device)
       ...(needsSeries
-        ? (multiChannel ? f.channelFilter : f.deviceFilter).map((key) =>
-            fetch(base, { method: "POST", headers, body: JSON.stringify({
+        ? (multiChannel ? f.channelFilter : f.deviceFilter).map((key) => {
+            const baseCh = multiChannel ? makeChannelFilter(key) : makeDeviceFilter(key);
+            const seriesDimFilter = drillExprs.length
+              ? { dimensionFilter: { andGroup: { expressions: [baseCh, ...drillExprs] } } }
+              : { dimensionFilter: baseCh };
+            return fetch(base, { method: "POST", headers, body: JSON.stringify({
               dateRanges: [{ startDate, endDate }],
               dimensions: [{ name: "date" }],
               metrics: [{ name: "activeUsers" }, { name: "sessions" }, { name: "screenPageViews" }, { name: "bounceRate" }],
-              dimensionFilter: multiChannel ? makeChannelFilter(key) : makeDeviceFilter(key),
+              ...seriesDimFilter,
               orderBys: [{ dimension: { dimensionName: "date" } }],
-            }) })
-          )
+              limit: daySpan + 5,
+            }) });
+          })
         : []
       ),
       // Country data (always last so index is predictable)
@@ -1338,6 +1606,7 @@ export default function App() {
         metrics: [{ name: "activeUsers" }, { name: "sessions" }],
         orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
         limit: 50,
+        ...singleDimFilter,
       }) }),
       ...(cmpRange ? [fetch(base, { method: "POST", headers, body: JSON.stringify({
         dateRanges: [{ startDate: cmpRange.startDate, endDate: cmpRange.endDate }],
@@ -1345,6 +1614,7 @@ export default function App() {
         metrics: [{ name: "activeUsers" }, { name: "sessions" }],
         orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
         limit: 50,
+        ...singleDimFilter,
       }) })] : []),
     ];
 
@@ -1461,16 +1731,27 @@ export default function App() {
     }
 
     setGa4Loading(false);
-  }, [selectedGA4, accessToken, ga4FetchFilters]);
+  }, [selectedGA4, accessToken, ga4FetchFilters, pageDrillPath]);
 
   // ── Fetch GSC ──────────────────────────────────────────────────────────────
   const fetchGSC = useCallback(async () => {
     if (!selectedGSC || !accessToken) return;
     setGscLoading(true);
     const gf       = gscFetchFilters;
-    const days      = parseInt(gf.dateRange);
-    const startDate = nDaysAgo(days - 1);
-    const endDate   = toISODate(new Date());
+    const { startDate, endDate, comparison: gscCmp } = gscDateWindows(gf);
+    const cmpRange = gscCmp;
+    const gscDaySpan =
+      gf.dateRange === "custom" && gf.customStart && gf.customEnd
+        ? Math.min(400, daysInclusive(gf.customStart, gf.customEnd))
+        : Math.max(1, parseInt(gf.dateRange, 10) || 28);
+    const cmpDaySpan =
+      cmpRange && gf.dateRange === "custom" && gf.customCompareStart && gf.customCompareEnd
+        ? Math.min(400, daysInclusive(gf.customCompareStart, gf.customCompareEnd))
+        : cmpRange
+          ? (gf.dateRange === "custom" && gf.customStart && gf.customEnd
+              ? Math.min(400, daysInclusive(cmpRange.startDate, cmpRange.endDate))
+              : gscDaySpan)
+          : gscDaySpan;
     const base      = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
     const headers   = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
 
@@ -1479,6 +1760,7 @@ export default function App() {
       const filters: object[] = [];
       if (device)  filters.push({ dimension: "device",  operator: "equals", expression: device });
       if (country) filters.push({ dimension: "country", operator: "equals", expression: country });
+      if (pageDrillPath.trim()) filters.push({ dimension: "page", operator: "contains", expression: pageDrillPath.trim() });
       return filters.length ? { dimensionFilterGroups: [{ filters }] } : {};
     };
 
@@ -1493,26 +1775,22 @@ export default function App() {
 
     const queryDim = gf.dimension === "date" ? "query" : gf.dimension;
 
-    const cmpRange = gf.comparison !== "none"
-      ? getComparisonRange(days, gf.comparison)
-      : null;
-
     const fetchList: Promise<Response>[] = [
-      fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["date"], rowLimit: days, ...singleFilter }) }),
+      fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["date"], rowLimit: gscDaySpan, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: [queryDim], rowLimit: 500, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["query"], rowLimit: 25000, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["device"], rowLimit: 10, ...singleFilter }) }),
-      fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["country"], rowLimit: 100 }) }),
+      fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["country"], rowLimit: 100, ...singleFilter }) }),
       ...(cmpRange ? [
-        fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: ["date"], rowLimit: days, ...singleFilter }) }),
+        fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: ["date"], rowLimit: cmpDaySpan, ...singleFilter }) }),
         fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: [queryDim], rowLimit: 500, ...singleFilter }) }),
         fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: ["query"], rowLimit: 25000, ...singleFilter }) }),
-        fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: ["country"], rowLimit: 100 }) }),
+        fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: ["country"], rowLimit: 100, ...singleFilter }) }),
       ] : []),
       ...(needsSeries
         ? (multiCountry ? gf.countryFilter : gf.deviceFilter).map((key) =>
             fetch(base, { method: "POST", headers, body: JSON.stringify({
-              startDate, endDate, dimensions: ["date"], rowLimit: days,
+              startDate, endDate, dimensions: ["date"], rowLimit: gscDaySpan,
               ...buildDimFilter(
                 multiDevice ? key : (gf.deviceFilter[0] || undefined),
                 multiCountry ? key : (gf.countryFilter[0] || undefined),
@@ -1613,7 +1891,169 @@ export default function App() {
 
     setGscLoading(false);
     setLastUpdated(new Date());
-  }, [selectedGSC, accessToken, gscFetchFilters]);
+  }, [selectedGSC, accessToken, gscFetchFilters, pageDrillPath]);
+
+  const convEventNameRef = useRef(convEventName);
+  convEventNameRef.current = convEventName;
+
+  const fetchConversions = useCallback(async () => {
+    if (!selectedGA4 || !accessToken) return;
+    setConvLoading(true);
+    const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+    const base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
+    const f = ga4FetchFilters;
+    const { current: curWin, comparison: cmpWin } = ga4DateWindows(f);
+    const name = convEventNameRef.current.trim() || "purchase";
+    const eventFilter = { dimensionFilter: { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: name } } } };
+    const body = {
+      dateRanges: [{ startDate: curWin.startDate, endDate: curWin.endDate }],
+      dimensions: [{ name: "date" }],
+      metrics: [{ name: "eventCount" }],
+      ...eventFilter,
+      orderBys: [{ dimension: { dimensionName: "date" } }],
+      limit: 400,
+    };
+    const parse = (data: { rows?: GA4ApiRow[] }) =>
+      (data.rows as GA4ApiRow[])?.map((r) => ({
+        date: formatGa4Date(r.dimensionValues[0].value),
+        count: parseInt(r.metricValues[0].value, 10),
+      })) ?? [];
+    const cur = await fetch(base, { method: "POST", headers, body: JSON.stringify(body) }).then((r) => r.json());
+    setConvDaily(parse(cur));
+    if (cmpWin) {
+      const cmpBody = { ...body, dateRanges: [{ startDate: cmpWin.startDate, endDate: cmpWin.endDate }] };
+      const cmp = await fetch(base, { method: "POST", headers, body: JSON.stringify(cmpBody) }).then((r) => r.json());
+      setConvDailyCmp(parse(cmp));
+    } else setConvDailyCmp([]);
+    setConvLoading(false);
+  }, [selectedGA4, accessToken, ga4FetchFilters]);
+
+  const fetchSeoIssues = useCallback(async () => {
+    if (!selectedGA4 || !accessToken) return;
+    setSeoIssuesLoading(true);
+    const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+    const base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
+    const { current: curWin } = ga4DateWindows(ga4FetchFilters);
+    const common = { dateRanges: [{ startDate: curWin.startDate, endDate: curWin.endDate }] };
+    const [noTr, lowEng, t404] = await Promise.all([
+      fetch(base, { method: "POST", headers, body: JSON.stringify({
+        ...common,
+        dimensions: [{ name: "landingPagePlusQueryString" }],
+        metrics: [{ name: "sessions" }],
+        orderBys: [{ metric: { metricName: "sessions" }, desc: false }],
+        limit: 200,
+      }) }).then((r) => r.json()),
+      fetch(base, { method: "POST", headers, body: JSON.stringify({
+        ...common,
+        dimensions: [{ name: "landingPagePlusQueryString" }],
+        metrics: [{ name: "engagementRate" }, { name: "sessions" }],
+        orderBys: [{ metric: { metricName: "engagementRate" }, desc: false }],
+        limit: 200,
+      }) }).then((r) => r.json()),
+      fetch(base, { method: "POST", headers, body: JSON.stringify({
+        ...common,
+        dimensions: [{ name: "pageTitle" }, { name: "pagePathPlusQueryString" }],
+        metrics: [{ name: "sessions" }],
+        dimensionFilter: { filter: { fieldName: "pageTitle", stringFilter: { matchType: "CONTAINS", value: "404" } } },
+        limit: 100,
+      }) }).then((r) => r.json()),
+    ]);
+    setSeoNoTraffic(
+      ((noTr.rows as GA4ApiRow[]) ?? [])
+        .map((r) => ({ page: r.dimensionValues[0].value, sessions: parseInt(r.metricValues[0].value, 10) }))
+        .filter((r) => r.sessions < 3)
+        .slice(0, 100),
+    );
+    setSeoLowEngagement(
+      ((lowEng.rows as GA4ApiRow[]) ?? [])
+        .map((r) => ({
+          page: r.dimensionValues[0].value,
+          engagementRate: parseFloat(r.metricValues[0].value),
+          sessions: parseInt(r.metricValues[1].value, 10),
+        }))
+        .filter((r) => r.sessions >= 10 && r.engagementRate < 0.35)
+        .slice(0, 100),
+    );
+    setSeo404Titles(
+      ((t404.rows as GA4ApiRow[]) ?? []).map((r) => ({
+        title: r.dimensionValues[0].value,
+        page: r.dimensionValues[1].value,
+        sessions: parseInt(r.metricValues[0].value, 10),
+      })),
+    );
+    setSeoIssuesLoading(false);
+  }, [selectedGA4, accessToken, ga4FetchFilters]);
+
+  useEffect(() => { if (activeView === "conversions" && selectedGA4 && accessToken) void fetchConversions(); }, [activeView, selectedGA4, accessToken, fetchConversions]);
+
+  useEffect(() => {
+    if (activeView !== "conversions" || !selectedGA4 || !accessToken) return;
+    const t = setTimeout(() => void fetchConversions(), 450);
+    return () => clearTimeout(t);
+  }, [convEventName]); // eslint-disable-line react-hooks/exhaustive-deps -- conversions mount/refetch is handled by the effect above
+
+  useEffect(() => { if (activeView === "seoIssues" && selectedGA4 && accessToken) void fetchSeoIssues(); }, [activeView, selectedGA4, accessToken, fetchSeoIssues]);
+
+  useEffect(() => {
+    if (!selectedGSC || !accessToken || (!gscLinkQuery && !gscLinkPage)) {
+      setGscCrossPages([]);
+      setGscCrossQueries([]);
+      return;
+    }
+    const ac = new AbortController();
+    const gf = gscFetchFilters;
+    const { startDate, endDate } = gscDateWindows(gf);
+    const base = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
+    const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+    const parseGscDim = (data: { rows?: GSCApiRow[] }): QueryRow[] =>
+      (data?.rows as GSCApiRow[])?.map((r) => ({
+        query: r.keys[0],
+        clicks: Math.round(r.clicks),
+        impressions: Math.round(r.impressions),
+        ctr: r.ctr,
+        position: r.position,
+      })) ?? [];
+    (async () => {
+      try {
+        if (gscLinkQuery) {
+          const j = await fetch(base, {
+            method: "POST",
+            headers,
+            signal: ac.signal,
+            body: JSON.stringify({
+              startDate,
+              endDate,
+              dimensions: ["page"],
+              dimensionFilterGroups: [{ filters: [{ dimension: "query", operator: "equals", expression: gscLinkQuery }] }],
+              rowLimit: 100,
+            }),
+          }).then((r) => r.json());
+          setGscCrossPages(parseGscDim(j));
+        } else setGscCrossPages([]);
+        if (gscLinkPage) {
+          const j2 = await fetch(base, {
+            method: "POST",
+            headers,
+            signal: ac.signal,
+            body: JSON.stringify({
+              startDate,
+              endDate,
+              dimensions: ["query"],
+              dimensionFilterGroups: [{ filters: [{ dimension: "page", operator: "equals", expression: gscLinkPage }] }],
+              rowLimit: 100,
+            }),
+          }).then((r) => r.json());
+          setGscCrossQueries(parseGscDim(j2));
+        } else setGscCrossQueries([]);
+      } catch {
+        if (!ac.signal.aborted) {
+          setGscCrossPages([]);
+          setGscCrossQueries([]);
+        }
+      }
+    })();
+    return () => ac.abort();
+  }, [gscLinkQuery, gscLinkPage, selectedGSC, accessToken, gscFetchFilters]);
 
   useEffect(() => { fetchGA4(); }, [fetchGA4]);
   useEffect(() => { fetchGSC(); }, [fetchGSC]);
@@ -1621,6 +2061,8 @@ export default function App() {
   async function handleRefresh() {
     setRefreshing(true);
     await Promise.all([fetchGA4(), fetchGSC()]);
+    if (activeView === "conversions") await fetchConversions();
+    if (activeView === "seoIssues") await fetchSeoIssues();
     setRefreshing(false);
   }
 
@@ -1787,12 +2229,42 @@ export default function App() {
     }));
   }, [ga4Daily, gscDaily]);
 
+  const ga4ChartMetrics = useMemo(
+    () =>
+      ga4TrendMetricFocus && ga4Filters.metrics.includes(ga4TrendMetricFocus)
+        ? [ga4TrendMetricFocus]
+        : ga4Filters.metrics,
+    [ga4TrendMetricFocus, ga4Filters.metrics],
+  );
+
+  const isoDateStr = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+  const ga4BannerHint = useMemo(() => {
+    if (ga4Filters.comparison === "none") return undefined;
+    if (ga4FetchFilters.dateRange !== "custom" || !ga4FetchFilters.customStart || !ga4FetchFilters.customEnd) return undefined;
+    const w = ga4DateWindows(ga4FetchFilters);
+    if (!w.comparison || !isoDateStr(w.current.startDate) || !isoDateStr(w.current.endDate)) return undefined;
+    if (!isoDateStr(w.comparison.startDate) || !isoDateStr(w.comparison.endDate)) return undefined;
+    const fmt = (a: string, b: string) => `${formatDisplayDate(a)} – ${formatDisplayDate(b)}`;
+    return `${fmt(w.current.startDate, w.current.endDate)} vs ${fmt(w.comparison.startDate, w.comparison.endDate)}`;
+  }, [ga4Filters.comparison, ga4FetchFilters]);
+
+  const gscBannerHint = useMemo(() => {
+    if (gscFilters.comparison === "none") return undefined;
+    if (gscFetchFilters.dateRange !== "custom" || !gscFetchFilters.customStart || !gscFetchFilters.customEnd) return undefined;
+    const w = gscDateWindows(gscFetchFilters);
+    if (!w.comparison) return undefined;
+    const fmt = (a: string, b: string) => `${formatDisplayDate(a)} – ${formatDisplayDate(b)}`;
+    return `${fmt(w.startDate, w.endDate)} vs ${fmt(w.comparison.startDate, w.comparison.endDate)}`;
+  }, [gscFilters.comparison, gscFetchFilters]);
+
   const VIEWS: { key: ActiveView; label: string; icon: React.ElementType }[] = [
     { key: "ga4",   label: "GA4",      icon: Users },
     { key: "gsc",   label: "GSC",      icon: Search },
     { key: "blend", label: "Blend",    icon: Layers },
     { key: "intl",  label: "International", icon: Globe },
     { key: "opportunities", label: "SEO Opportunities", icon: Lightbulb },
+    { key: "conversions", label: "Conversions", icon: ShoppingCart },
+    { key: "seoIssues", label: "SEO Issues", icon: AlertTriangle },
   ];
 
   // ─── Render ────────────────────────────────────────────────────────────────
@@ -1816,9 +2288,13 @@ export default function App() {
             {isLoggedIn && (
               <>
                 {lastUpdated && <span className="text-xs text-gray-400 hidden sm:block">{lastUpdated.toLocaleTimeString()}</span>}
-                <button onClick={handleRefresh} disabled={refreshing || ga4Loading || gscLoading}
+                <button onClick={handleRefresh} disabled={refreshing || ga4Loading || gscLoading || convLoading || seoIssuesLoading}
                   className="p-2 rounded-xl bg-gray-50 border border-gray-200 text-gray-400 hover:text-purple-700 hover:border-purple-300 disabled:opacity-40 transition-all">
                   <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
+                </button>
+                <button type="button" onClick={handleLogout}
+                  className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-red-600 px-2 py-1.5 rounded-lg border border-transparent hover:border-red-100 transition-colors">
+                  <LogOut size={12} /> Log out
                 </button>
                 <div className="flex items-center gap-2 bg-purple-50 text-purple-700 px-3 py-1.5 rounded-xl text-xs font-semibold border border-purple-200">
                   <Activity size={12} /> Connected
@@ -1837,6 +2313,12 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-10">
+        {isLoggedIn && pageDrillPath && (
+          <div className="flex items-center justify-between gap-3 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-2.5 text-sm text-amber-900">
+            <span className="truncate"><span className="font-semibold">Page scope:</span> {pageDrillPath}</span>
+            <button type="button" onClick={() => { setPageDrillPath(""); setGscLinkQuery(null); setGscLinkPage(null); }} className="shrink-0 text-xs font-bold text-amber-800 hover:text-amber-950 underline">Clear</button>
+          </div>
+        )}
         {/* Login CTA */}
         {!isLoggedIn && (
           <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center max-w-lg mx-auto shadow-sm">
@@ -1858,7 +2340,7 @@ export default function App() {
         {isLoggedIn && (
           <>
             {/* ── View Switcher ── */}
-            <div className="flex items-center gap-1.5 bg-white border border-gray-100 rounded-2xl p-1.5 shadow-sm w-fit">
+            <div className="flex items-center gap-1.5 bg-white border border-gray-100 rounded-2xl p-1.5 shadow-sm w-fit flex-wrap max-w-full">
               {VIEWS.map(({ key, label, icon: Icon }) => (
                 <button key={key} onClick={() => setActiveView(key)}
                   className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${activeView === key ? "bg-purple-700 text-white shadow-sm" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"}`}>
@@ -1892,22 +2374,25 @@ export default function App() {
 
                 {ga4Daily.length > 0 && activeView !== "blend" && (
                   <div className={`space-y-4 transition-opacity duration-200 ${ga4Loading ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
-                    <ComparisonBanner days={parseInt(ga4Filters.dateRange)} mode={ga4Filters.comparison} />
+                    <ComparisonBanner days={parseInt(ga4FetchFilters.dateRange, 10) || 28} mode={ga4Filters.comparison} rangeHint={ga4BannerHint} />
                     {/* KPIs */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <KpiCard label="Active Users"  value={ga4TotalUsers.toLocaleString()}    sub={`${ga4Filters.dateRange}d`} icon={Users}       cmpValue={hasCmp ? ga4CmpUsers    : undefined} cmpLabel={ga4CmpLabel} />
-                      <KpiCard label="Sessions"      value={ga4TotalSessions.toLocaleString()} sub={`${ga4Filters.dateRange}d`} icon={Activity}    cmpValue={hasCmp ? ga4CmpSessions : undefined} cmpLabel={ga4CmpLabel} />
-                      <KpiCard label="Pageviews"     value={ga4TotalPV.toLocaleString()}        sub={`${ga4Filters.dateRange}d`} icon={Eye}          cmpValue={hasCmp ? ga4CmpPV       : undefined} cmpLabel={ga4CmpLabel} />
-                      <KpiCard label="Avg Bounce"    value={`${ga4AvgBounce}%`}                 icon={TrendingUp}                                    cmpValue={hasCmp ? ga4CmpBounce   : undefined} cmpLabel={ga4CmpLabel} />
+                      <KpiCard label="Active Users"  value={ga4TotalUsers.toLocaleString()}    sub={ga4Filters.dateRange === "custom" ? "custom" : `${ga4Filters.dateRange}d`} icon={Users}       cmpValue={hasCmp ? ga4CmpUsers    : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "users" ? null : "users"))} active={ga4TrendMetricFocus === "users"} />
+                      <KpiCard label="Sessions"      value={ga4TotalSessions.toLocaleString()} sub={ga4Filters.dateRange === "custom" ? "custom" : `${ga4Filters.dateRange}d`} icon={Activity}    cmpValue={hasCmp ? ga4CmpSessions : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "sessions" ? null : "sessions"))} active={ga4TrendMetricFocus === "sessions"} />
+                      <KpiCard label="Pageviews"     value={ga4TotalPV.toLocaleString()}        sub={ga4Filters.dateRange === "custom" ? "custom" : `${ga4Filters.dateRange}d`} icon={Eye}          cmpValue={hasCmp ? ga4CmpPV       : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "pageviews" ? null : "pageviews"))} active={ga4TrendMetricFocus === "pageviews"} />
+                      <KpiCard label="Avg Bounce"    value={`${ga4AvgBounce}%`}                 icon={TrendingUp}                                    cmpValue={hasCmp ? ga4CmpBounce   : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "bounceRate" ? null : "bounceRate"))} active={ga4TrendMetricFocus === "bounceRate"} />
                     </div>
+                    {ga4TrendMetricFocus && (
+                      <p className="text-xs text-purple-600">Trend chart shows <strong>{metricLabel[ga4TrendMetricFocus]}</strong> only. Click the same KPI again to show all selected metrics.</p>
+                    )}
 
                     {/* Metric chart */}
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                      <ChartCard title={isSingleSeries ? `${ga4Filters.metrics.map((m) => metricLabel[m]).join(", ")} over time${ga4Filters.comparison !== "none" ? ` — ${ga4Filters.comparison === "prevPeriod" ? "vs Prev Period" : "vs Prev Year"}` : ""}` : `${ga4Filters.deviceFilter.length > 1 ? "Devices" : "Channels"} — ${ga4Filters.metrics.map((m) => metricLabel[m]).join(", ")}`} className="lg:col-span-2">
+                      <ChartCard title={isSingleSeries ? `${ga4ChartMetrics.map((m) => metricLabel[m]).join(", ")} over time${ga4Filters.comparison !== "none" ? ` — ${ga4Filters.comparison === "prevPeriod" ? "vs Prev Period" : "vs Prev Year"}` : ""}` : `${ga4Filters.deviceFilter.length > 1 ? "Devices" : "Channels"} — ${ga4ChartMetrics.map((m) => metricLabel[m]).join(", ")}`} className="lg:col-span-2">
                         <ResponsiveContainer width="100%" height={200}>
                           <LineChart data={chartGA4Data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                             <defs>
-                              {ga4Filters.metrics.map((m, i) => (
+                              {ga4ChartMetrics.map((m, i) => (
                                 <linearGradient key={m} id={`grad_${m}`} x1="0" y1="0" x2="0" y2="1">
                                   <stop offset="5%"  stopColor={SERIES_COLORS[i % SERIES_COLORS.length]} stopOpacity={0.12} />
                                   <stop offset="95%" stopColor={SERIES_COLORS[i % SERIES_COLORS.length]} stopOpacity={0} />
@@ -1920,7 +2405,7 @@ export default function App() {
                             <Tooltip {...chartTooltipStyle} />
                             <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} iconType="circle" iconSize={7} />
                             {isSingleSeries
-                              ? ga4Filters.metrics.map((m, i) => [
+                              ? ga4ChartMetrics.map((m, i) => [
                                   <Line key={m} type="monotone" dataKey={m} name={metricLabel[m]} stroke={SERIES_COLORS[i % SERIES_COLORS.length]} strokeWidth={2} dot={false} activeDot={{ r: 3 }} />,
                                   ga4Filters.comparison !== "none" && ga4DailyCmp.length > 0
                                     ? <Line key={`${m}_cmp`} type="monotone" dataKey={`${m}_cmp`} name={`${metricLabel[m]} (cmp)`} stroke={SERIES_COLORS[i % SERIES_COLORS.length]} strokeWidth={1.5} strokeDasharray="5 3" dot={false} activeDot={{ r: 2 }} />
@@ -1983,9 +2468,9 @@ export default function App() {
                         <div className="mb-3">
                           <TextInput value={landingPageFilter} onChange={setLandingPageFilter} placeholder="Filter by page path…" className="max-w-xs" />
                         </div>
-                        <div className="overflow-x-auto">
+                        <ScrollTable>
                           <table className="w-full text-xs">
-                            <thead>
+                            <thead className="sticky top-0 z-10 bg-white shadow-sm">
                               <tr className="border-b border-gray-100">
                                 <th className="pb-2.5 text-left font-semibold text-gray-400 uppercase tracking-wide pr-4 text-[10px]">Page</th>
                                 <th className="pb-2.5 text-left font-semibold text-gray-400 uppercase tracking-wide pr-4 text-[10px]">Users</th>
@@ -1999,7 +2484,11 @@ export default function App() {
                                 const uDelta = c ? ((p.users - c.users) / Math.abs(c.users || 1)) * 100 : null;
                                 const sDelta = c ? ((p.sessions - c.sessions) / Math.abs(c.sessions || 1)) * 100 : null;
                                 return (
-                                  <tr key={i} className="border-b border-gray-50 last:border-0 hover:bg-purple-50/40 transition-colors">
+                                  <tr
+                                    key={i}
+                                    className="border-b border-gray-50 last:border-0 hover:bg-purple-50/40 transition-colors cursor-pointer"
+                                    onClick={() => { setPageDrillPath(p.page); setGscLinkQuery(null); setGscLinkPage(null); }}
+                                  >
                                     <td className="py-2 pr-4 text-gray-700 font-medium max-w-[200px] truncate" title={p.page}>{p.page}</td>
                                     <td className="py-2 pr-4">
                                       <span className="text-gray-900 font-semibold">{p.users.toLocaleString()}</span>
@@ -2017,7 +2506,7 @@ export default function App() {
                               })}
                             </tbody>
                           </table>
-                        </div>
+                        </ScrollTable>
                       </ChartCard>
                     )}
                   </div>
@@ -2097,9 +2586,10 @@ export default function App() {
                             })}
                           </div>
                         </div>
-                        <div className="mt-3 pt-3 border-t border-gray-100 overflow-x-auto">
-                          <table className="w-full text-xs">
-                            <thead>
+                        <div className="mt-3 pt-3 border-t border-gray-100">
+                          <ScrollTable>
+                            <table className="w-full text-xs">
+                              <thead className="sticky top-0 z-10 bg-white shadow-sm">
                               <tr>
                                 <th className="pb-2 text-left text-gray-400 font-semibold pr-3 uppercase tracking-wide text-[10px]">Source</th>
                                 <th className="pb-2 text-left text-gray-400 font-semibold pr-3 uppercase tracking-wide text-[10px]">Sessions</th>
@@ -2128,6 +2618,7 @@ export default function App() {
                               })}
                             </tbody>
                           </table>
+                          </ScrollTable>
                         </div>
                       </ChartCard>
                     </div>
@@ -2162,10 +2653,10 @@ export default function App() {
 
                   {gscDaily.length > 0 && activeView !== "blend" && (
                     <div className={`space-y-4 transition-opacity duration-200 ${gscLoading ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
-                      <ComparisonBanner days={parseInt(gscFilters.dateRange)} mode={gscFilters.comparison} />
+                      <ComparisonBanner days={parseInt(gscFetchFilters.dateRange, 10) || 28} mode={gscFilters.comparison} rangeHint={gscBannerHint} />
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        <KpiCard label="Total Clicks"  value={gscTotalClicks.toLocaleString()}      sub={`${gscFilters.dateRange}d`} icon={MousePointerClick} cmpValue={hasGscCmp ? gscCmpClicks      : undefined} cmpLabel={gscCmpLabel} />
-                        <KpiCard label="Impressions"   value={gscTotalImpressions.toLocaleString()} sub={`${gscFilters.dateRange}d`} icon={Eye}               cmpValue={hasGscCmp ? gscCmpImpressions : undefined} cmpLabel={gscCmpLabel} />
+                        <KpiCard label="Total Clicks"  value={gscTotalClicks.toLocaleString()}      sub={gscFilters.dateRange === "custom" ? "custom" : `${gscFilters.dateRange}d`} icon={MousePointerClick} cmpValue={hasGscCmp ? gscCmpClicks      : undefined} cmpLabel={gscCmpLabel} />
+                        <KpiCard label="Impressions"   value={gscTotalImpressions.toLocaleString()} sub={gscFilters.dateRange === "custom" ? "custom" : `${gscFilters.dateRange}d`} icon={Eye}               cmpValue={hasGscCmp ? gscCmpImpressions : undefined} cmpLabel={gscCmpLabel} />
                         <KpiCard label="Avg CTR"       value={`${gscAvgCTR}%`}                      icon={TrendingUp}                                          cmpValue={hasGscCmp ? gscCmpCTR         : undefined} cmpLabel={gscCmpLabel} />
                         <KpiCard label="Avg Position"  value={gscAvgPosition}                       icon={ArrowUpRight}                                        cmpValue={hasGscCmp ? gscCmpPosition    : undefined} cmpLabel={gscCmpLabel} />
                       </div>
@@ -2239,12 +2730,74 @@ export default function App() {
                       {/* ── Query filter bar ── */}
                       <QueryFilterBar filters={gscFilters} setFilters={setGscFilters} totalRows={gscQueries.length} filteredCount={filteredGscRows.length} />
 
+                      <p className="text-xs text-gray-500">Click a <strong>query</strong> row to load top pages for that query, or a <strong>page</strong> row to load top queries. Click again in the linked table to <strong>scope the whole dashboard</strong> to that page.</p>
+
+                      {(gscLinkQuery || gscLinkPage) && (
+                        <div className="flex flex-wrap gap-2 items-center text-xs">
+                          {gscLinkQuery && <FilterPill label={`Selected query: ${gscLinkQuery}`} onRemove={() => setGscLinkQuery(null)} />}
+                          {gscLinkPage && <FilterPill label={`Selected page`} onRemove={() => setGscLinkPage(null)} />}
+                        </div>
+                      )}
+
+                      {(gscCrossPages.length > 0 || gscCrossQueries.length > 0) && (
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                          {gscCrossPages.length > 0 && (
+                            <ChartCard title="Top pages for this query">
+                              <ScrollTable>
+                                <table className="w-full text-xs">
+                                  <thead className="sticky top-0 z-10 bg-white">
+                                    <tr className="border-b border-gray-100">
+                                      <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Page</th>
+                                      <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Clicks</th>
+                                      <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Impr.</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {gscCrossPages.map((row, i) => (
+                                      <tr key={i} className="border-b border-gray-50 hover:bg-purple-50/50 cursor-pointer" onClick={() => { setPageDrillPath(row.query); setGscLinkQuery(null); setGscLinkPage(null); }}>
+                                        <td className="py-2 pr-2 max-w-[200px] truncate" title={row.query}>{row.query}</td>
+                                        <td className="py-2 pr-2 font-semibold">{row.clicks.toLocaleString()}</td>
+                                        <td className="py-2 text-gray-500">{row.impressions.toLocaleString()}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </ScrollTable>
+                            </ChartCard>
+                          )}
+                          {gscCrossQueries.length > 0 && (
+                            <ChartCard title="Top queries for this page">
+                              <ScrollTable>
+                                <table className="w-full text-xs">
+                                  <thead className="sticky top-0 z-10 bg-white">
+                                    <tr className="border-b border-gray-100">
+                                      <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Query</th>
+                                      <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Clicks</th>
+                                      <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Impr.</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {gscCrossQueries.map((row, i) => (
+                                      <tr key={i} className="border-b border-gray-50 hover:bg-purple-50/50 cursor-pointer" onClick={() => { setGscLinkQuery(row.query); setGscLinkPage(null); }}>
+                                        <td className="py-2 pr-2 max-w-[200px] truncate" title={row.query}>{row.query}</td>
+                                        <td className="py-2 pr-2 font-semibold">{row.clicks.toLocaleString()}</td>
+                                        <td className="py-2 text-gray-500">{row.impressions.toLocaleString()}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </ScrollTable>
+                            </ChartCard>
+                          )}
+                        </div>
+                      )}
+
                       {/* Queries table with sortable columns */}
                       {filteredGscRows.length > 0 && (
                         <ChartCard title={`Top by ${gscFilters.dimension === "date" ? "Query" : gscFilters.dimension}${hasGscCmp ? ` — vs ${gscCmpLabel}` : ""}`}>
-                          <div className="overflow-x-auto">
+                          <ScrollTable>
                             <table className="w-full text-xs">
-                              <thead>
+                              <thead className="sticky top-0 z-10 bg-white shadow-sm">
                                 <tr className="border-b border-gray-100">
                                   {[
                                     { key: null,          label: "Query / Page" },
@@ -2270,7 +2823,20 @@ export default function App() {
                                   const cd = c ? ((q.clicks - c.clicks) / Math.abs(c.clicks || 1)) * 100 : null;
                                   const pd = c ? q.position - c.position : null;
                                   return (
-                                    <tr key={i} className="border-b border-gray-50 last:border-0 hover:bg-purple-50/40 transition-colors">
+                                    <tr
+                                      key={i}
+                                      className="border-b border-gray-50 last:border-0 hover:bg-purple-50/40 transition-colors cursor-pointer"
+                                      onClick={() => {
+                                        if (gscFilters.dimension === "query" || gscFilters.dimension === "date") {
+                                          setGscLinkQuery(q.query);
+                                          setGscLinkPage(null);
+                                        } else if (gscFilters.dimension === "page") {
+                                          setGscLinkPage(q.query);
+                                          setGscLinkQuery(null);
+                                          setPageDrillPath(q.query);
+                                        }
+                                      }}
+                                    >
                                       <td className="py-2 pr-3 text-gray-800 font-medium max-w-[180px] truncate">{q.query}</td>
                                       <td className="py-2 pr-3">
                                         <span className="text-gray-900 font-semibold">{q.clicks.toLocaleString()}</span>
@@ -2294,7 +2860,7 @@ export default function App() {
                                 })}
                               </tbody>
                             </table>
-                          </div>
+                          </ScrollTable>
                         </ChartCard>
                       )}
                     </div>
@@ -2363,9 +2929,9 @@ export default function App() {
                         </ChartCard>
 
                         <ChartCard title="Top GSC Queries">
-                          <div className="overflow-x-auto">
+                          <ScrollTable>
                             <table className="w-full text-xs">
-                              <thead>
+                              <thead className="sticky top-0 z-10 bg-white shadow-sm">
                                 <tr className="border-b border-gray-100">
                                   <th className="pb-2 text-left text-gray-400 font-semibold uppercase tracking-wide text-[10px] pr-3">Query</th>
                                   <th className="pb-2 text-left text-gray-400 font-semibold uppercase tracking-wide text-[10px] pr-3">Clicks</th>
@@ -2382,7 +2948,7 @@ export default function App() {
                                 ))}
                               </tbody>
                             </table>
-                          </div>
+                          </ScrollTable>
                         </ChartCard>
                       </div>
                     </>
@@ -2426,15 +2992,15 @@ export default function App() {
 
                   {gscOpportunityQueries.length > 0 && (
                     <div className={`space-y-4 transition-opacity duration-200 ${gscLoading ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
-                      <ComparisonBanner days={parseInt(gscFilters.dateRange)} mode={gscFilters.comparison} />
+                      <ComparisonBanner days={parseInt(gscFetchFilters.dateRange, 10) || 28} mode={gscFilters.comparison} rangeHint={gscBannerHint} />
                       {gscOpportunityRows.length > 0 ? (
                         <ChartCard title={`Low clicks, high impressions${hasGscCmp ? ` — vs ${gscCmpLabel}` : ""}`}>
                           <p className="text-xs text-gray-500 mb-3">
                             {gscOpportunityRows.length} quer{gscOpportunityRows.length === 1 ? "y" : "ies"} · from {gscOpportunityQueries.length.toLocaleString()} top queries in GSC (same filters)
                           </p>
-                          <div className="overflow-x-auto">
+                          <ScrollTable>
                             <table className="w-full text-xs">
-                              <thead>
+                              <thead className="sticky top-0 z-10 bg-white shadow-sm">
                                 <tr className="border-b border-gray-100">
                                   {([
                                     { key: "query" as const,       label: "Query" },
@@ -2484,7 +3050,7 @@ export default function App() {
                                 })}
                               </tbody>
                             </table>
-                          </div>
+                          </ScrollTable>
                         </ChartCard>
                       ) : (
                         <div className="bg-white border border-gray-100 rounded-2xl p-6 text-center shadow-sm">
@@ -2503,7 +3069,172 @@ export default function App() {
               </>
             )}
 
-            {/* ── International Section ── */}
+            {/* ── Conversions (GA4 event) ── */}
+            {activeView === "conversions" && (
+              <>
+                <SectionDivider label="CONVERSIONS" />
+                <section className="space-y-4">
+                  <div className="flex items-center justify-between gap-4 flex-wrap">
+                    <div className="flex items-center gap-3">
+                      <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-2"><ShoppingCart size={16} className="text-emerald-700" /></div>
+                      <div>
+                        <h2 className="text-sm font-bold text-gray-900">Conversions</h2>
+                        <p className="text-xs text-gray-400">Event counts by day — uses the same date range &amp; comparison as GA4 filters.</p>
+                      </div>
+                    </div>
+                    <div className="max-w-[220px] w-full min-w-[180px]">
+                      <Select value={selectedGA4} onChange={setSelectedGA4} options={ga4Properties} placeholder="Select GA4 Property" disabled={ga4Properties.length === 0} />
+                    </div>
+                  </div>
+                  <GA4FilterPanel filters={ga4Filters} setFilters={setGa4Filters} channelOptions={channelOptions} />
+                  <div className="flex flex-wrap items-end gap-3">
+                    <div className="min-w-[200px]">
+                      <label className="block text-xs text-gray-500 mb-1 font-medium">Event name</label>
+                      <TextInput value={convEventName} onChange={setConvEventName} placeholder="e.g. purchase, generate_lead" />
+                    </div>
+                    <button type="button" onClick={() => void fetchConversions()} className="px-4 py-2 rounded-xl bg-purple-700 text-white text-sm font-semibold hover:bg-purple-800">Update</button>
+                  </div>
+                  {convLoading && convDaily.length === 0 && <Spinner />}
+                  {convDaily.length > 0 && (
+                    <div className={`space-y-4 ${convLoading ? "opacity-60" : ""}`}>
+                      <ComparisonBanner days={parseInt(ga4FetchFilters.dateRange, 10) || 28} mode={ga4Filters.comparison} rangeHint={ga4BannerHint} />
+                      <ChartCard title={`Event: ${convEventName.trim() || "purchase"}`}>
+                        <ResponsiveContainer width="100%" height={260}>
+                          <LineChart data={convDaily.map((r, i) => {
+                            const row: Record<string, string | number> = { date: r.date, count: r.count };
+                            const c = convDailyCmp[i];
+                            if (c) row.count_cmp = c.count;
+                            return row;
+                          })} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#ecfdf5" />
+                            <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
+                            <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={44} />
+                            <Tooltip {...chartTooltipStyle} />
+                            <Legend wrapperStyle={{ fontSize: 11 }} />
+                            <Line type="monotone" dataKey="count" name="Event count" stroke="#059669" strokeWidth={2} dot={false} />
+                            {convDailyCmp.length > 0 && <Line type="monotone" dataKey="count_cmp" name="Compare" stroke="#6ee7b7" strokeWidth={1.5} strokeDasharray="5 3" dot={false} />}
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </ChartCard>
+                      <ChartCard title="Daily counts (table)">
+                        <ScrollTable>
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 z-10 bg-white shadow-sm">
+                              <tr className="border-b border-gray-100">
+                                <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Date</th>
+                                <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Count</th>
+                                {convDailyCmp.length > 0 && <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Compare</th>}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {convDaily.map((r, i) => (
+                                <tr key={r.date} className="border-b border-gray-50">
+                                  <td className="py-2">{r.date}</td>
+                                  <td className="py-2 font-semibold">{r.count.toLocaleString()}</td>
+                                  {convDailyCmp.length > 0 && <td className="py-2 text-gray-500">{(convDailyCmp[i]?.count ?? 0).toLocaleString()}</td>}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </ScrollTable>
+                      </ChartCard>
+                    </div>
+                  )}
+                  {!convLoading && selectedGA4 && convDaily.length === 0 && (
+                    <p className="text-sm text-gray-400 py-4">No event data for this name in the selected range.</p>
+                  )}
+                </section>
+              </>
+            )}
+
+            {/* ── SEO Issues ── */}
+            {activeView === "seoIssues" && (
+              <>
+                <SectionDivider label="SEO ISSUES" />
+                <section className="space-y-4">
+                  <div className="flex items-center justify-between gap-4 flex-wrap">
+                    <div className="flex items-center gap-3">
+                      <div className="bg-red-50 border border-red-100 rounded-xl p-2"><AlertTriangle size={16} className="text-red-600" /></div>
+                      <div>
+                        <h2 className="text-sm font-bold text-gray-900">SEO issues</h2>
+                        <p className="text-xs text-gray-400">GA4 signals: low traffic, low engagement, &amp; pages whose title contains &quot;404&quot;.</p>
+                      </div>
+                    </div>
+                    <div className="max-w-[220px] w-full min-w-[180px]">
+                      <Select value={selectedGA4} onChange={setSelectedGA4} options={ga4Properties} placeholder="Select GA4 Property" disabled={ga4Properties.length === 0} />
+                    </div>
+                  </div>
+                  <GA4FilterPanel filters={ga4Filters} setFilters={setGa4Filters} channelOptions={channelOptions} />
+                  {seoIssuesLoading && <Spinner />}
+                  {!seoIssuesLoading && (
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                      <ChartCard title="Pages with almost no sessions">
+                        <ScrollTable>
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 z-10 bg-white shadow-sm">
+                              <tr className="border-b border-gray-100"><th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Page</th><th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Sessions</th></tr>
+                            </thead>
+                            <tbody>
+                              {seoNoTraffic.map((r, i) => (
+                                <tr key={i} className="border-b border-gray-50 cursor-pointer hover:bg-red-50/40" onClick={() => { setPageDrillPath(r.page); setGscLinkQuery(null); setGscLinkPage(null); }}>
+                                  <td className="py-2 pr-2 max-w-[180px] truncate" title={r.page}>{r.page}</td>
+                                  <td className="py-2 font-semibold">{r.sessions}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </ScrollTable>
+                      </ChartCard>
+                      <ChartCard title="Low engagement (≥10 sessions, &lt;35% engagement)">
+                        <ScrollTable>
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 z-10 bg-white shadow-sm">
+                              <tr className="border-b border-gray-100">
+                                <th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Page</th>
+                                <th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Eng.</th>
+                                <th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Sess.</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {seoLowEngagement.map((r, i) => (
+                                <tr key={i} className="border-b border-gray-50 cursor-pointer hover:bg-red-50/40" onClick={() => { setPageDrillPath(r.page); setGscLinkQuery(null); setGscLinkPage(null); }}>
+                                  <td className="py-2 pr-2 max-w-[140px] truncate" title={r.page}>{r.page}</td>
+                                  <td className="py-2">{(r.engagementRate * 100).toFixed(1)}%</td>
+                                  <td className="py-2">{r.sessions}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </ScrollTable>
+                      </ChartCard>
+                      <ChartCard title="404 in page title">
+                        <ScrollTable>
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 z-10 bg-white shadow-sm">
+                              <tr className="border-b border-gray-100">
+                                <th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Title</th>
+                                <th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Page</th>
+                                <th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Sess.</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {seo404Titles.map((r, i) => (
+                                <tr key={i} className="border-b border-gray-50 cursor-pointer hover:bg-red-50/40" onClick={() => { setPageDrillPath(r.page); setGscLinkQuery(null); setGscLinkPage(null); }}>
+                                  <td className="py-2 pr-2 max-w-[120px] truncate" title={r.title}>{r.title}</td>
+                                  <td className="py-2 pr-2 max-w-[120px] truncate" title={r.page}>{r.page}</td>
+                                  <td className="py-2">{r.sessions}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </ScrollTable>
+                      </ChartCard>
+                    </div>
+                  )}
+                </section>
+              </>
+            )}
+
             {activeView === "intl" && (
               <IntlView
                 gscCountryRows={gscCountryRows}
