@@ -78,6 +78,8 @@ const DATE_RANGES_WITH_CUSTOM = [...DATE_RANGES, { value: "custom", label: "Cust
 
 const LS_GOOGLE_TOKEN = "vcc_google_access_token";
 const LS_GOOGLE_TOKEN_EXP = "vcc_google_token_expires_at";
+const LS_SELECTED_GA4 = "vcc_selected_ga4";
+const LS_SELECTED_GSC = "vcc_selected_gsc";
 
 function persistGoogleToken(r: { access_token?: string; expires_in?: number }) {
   if (!r.access_token) return;
@@ -1319,9 +1321,9 @@ export default function App() {
   const [activeView, setActiveView]     = useState<ActiveView>("ga4");
 
   const [ga4Properties, setGa4Properties] = useState<{ value: string; label: string }[]>([]);
-  const [selectedGA4, setSelectedGA4]     = useState("");
+  const [selectedGA4, setSelectedGA4]     = useState(() => localStorage.getItem(LS_SELECTED_GA4) ?? "");
   const [gscProperties, setGscProperties] = useState<{ value: string; label: string }[]>([]);
-  const [selectedGSC, setSelectedGSC]     = useState("");
+  const [selectedGSC, setSelectedGSC]     = useState(() => localStorage.getItem(LS_SELECTED_GSC) ?? "");
 
   // GA4 data
   const [ga4Daily, setGa4Daily]               = useState<DailyGA4[]>([]);
@@ -1461,6 +1463,10 @@ export default function App() {
   }, []);
 
   useEffect(() => { if (accessToken) loadProperties(accessToken); }, [accessToken, loadProperties]);
+
+  // ── Persist selected properties across refreshes ─────────────────────────
+  useEffect(() => { if (selectedGA4) localStorage.setItem(LS_SELECTED_GA4, selectedGA4); else localStorage.removeItem(LS_SELECTED_GA4); }, [selectedGA4]);
+  useEffect(() => { if (selectedGSC) localStorage.setItem(LS_SELECTED_GSC, selectedGSC); else localStorage.removeItem(LS_SELECTED_GSC); }, [selectedGSC]);
 
   // ── Fetch GA4 ──────────────────────────────────────────────────────────────
   const fetchGA4 = useCallback(async () => {
