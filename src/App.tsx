@@ -2234,7 +2234,7 @@ export default function App() {
 
   const ga4ChartMetrics = useMemo(
     () =>
-      ga4TrendMetricFocus && ga4Filters.metrics.includes(ga4TrendMetricFocus)
+      ga4TrendMetricFocus
         ? [ga4TrendMetricFocus]
         : ga4Filters.metrics,
     [ga4TrendMetricFocus, ga4Filters.metrics],
