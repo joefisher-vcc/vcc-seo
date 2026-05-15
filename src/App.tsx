@@ -80,6 +80,7 @@ const LS_GOOGLE_TOKEN = "vcc_google_access_token";
 const LS_GOOGLE_TOKEN_EXP = "vcc_google_token_expires_at";
 const LS_SELECTED_GA4 = "vcc_selected_ga4";
 const LS_SELECTED_GSC = "vcc_selected_gsc";
+const LS_ACTIVE_VIEW = "vcc_active_view";
 
 function persistGoogleToken(r: { access_token?: string; expires_in?: number }) {
   if (!r.access_token) return;
@@ -1467,6 +1468,7 @@ export default function App() {
   // ── Persist selected properties across refreshes ─────────────────────────
   useEffect(() => { if (selectedGA4) localStorage.setItem(LS_SELECTED_GA4, selectedGA4); else localStorage.removeItem(LS_SELECTED_GA4); }, [selectedGA4]);
   useEffect(() => { if (selectedGSC) localStorage.setItem(LS_SELECTED_GSC, selectedGSC); else localStorage.removeItem(LS_SELECTED_GSC); }, [selectedGSC]);
+  useEffect(() => { localStorage.setItem(LS_ACTIVE_VIEW, activeView); }, [activeView]);
 
   // ── Fetch GA4 ──────────────────────────────────────────────────────────────
   const fetchGA4 = useCallback(async () => {
