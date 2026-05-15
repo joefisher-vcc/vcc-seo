@@ -1370,6 +1370,81 @@ function IntlView({
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 
+async function copyTableToClipboard(table: HTMLTableElement) {
+  const rows = Array.from(table.querySelectorAll("tr"));
+  const tsv = rows
+    .map((r) =>
+      Array.from(r.querySelectorAll("th,td"))
+        .map((c) => (c.textContent || "").replace(/\s+/g, " ").trim())
+        .join("\t")
+    )
+    .join("\n");
+  const html = `<table border="1" cellspacing="0" cellpadding="4">${table.innerHTML}</table>`;
+  try {
+    const CI = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
+    if (navigator.clipboard && CI) {
+      await navigator.clipboard.write([
+        new CI({
+          "text/plain": new Blob([tsv], { type: "text/plain" }),
+          "text/html": new Blob([html], { type: "text/html" }),
+        }),
+      ]);
+      return;
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    await navigator.clipboard.writeText(tsv);
+  } catch {
+    /* ignore */
+  }
+}
+
+function printElementAsPdf(el: HTMLElement, title: string) {
+  const w = window.open("", "_blank", "width=1024,height=900");
+  if (!w) return;
+  const styleNodes = Array.from(
+    document.querySelectorAll('style, link[rel="stylesheet"]')
+  )
+    .map((n) => n.outerHTML)
+    .join("\n");
+  const safeTitle = title.replace(/[<>]/g, "");
+  w.document.open();
+  w.document.write(`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>${safeTitle}</title>
+${styleNodes}
+<style>
+  @page { size: A4; margin: 12mm; }
+  body { padding: 16px; font-family: system-ui, -apple-system, sans-serif; background: #fff; color: #111; }
+  [data-deco-ui], button { display: none !important; }
+  table { page-break-inside: auto; }
+  tr { page-break-inside: avoid; page-break-after: auto; }
+  thead { display: table-header-group; }
+  .print-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+  .print-meta { font-size: 11px; color: #666; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+<div class="print-title">${safeTitle}</div>
+<div class="print-meta">Generated ${new Date().toLocaleString()}</div>
+${el.outerHTML}
+</body>
+</html>`);
+  w.document.close();
+  const trigger = () => {
+    try { w.focus(); w.print(); } catch { /* ignore */ }
+  };
+  if (w.document.readyState === "complete") {
+    setTimeout(trigger, 350);
+  } else {
+    w.addEventListener("load", () => setTimeout(trigger, 350));
+  }
+}
+
 export default function App() {
   const [accessToken, setAccessToken]   = useState("");
   const [isLoggingIn, setIsLoggingIn]   = useState(false);
@@ -1384,6 +1459,66 @@ export default function App() {
   const [selectedGA4, setSelectedGA4]     = useState(() => localStorage.getItem(LS_SELECTED_GA4) ?? "");
   const [gscProperties, setGscProperties] = useState<{ value: string; label: string }[]>([]);
   const [selectedGSC, setSelectedGSC]     = useState(() => localStorage.getItem(LS_SELECTED_GSC) ?? "");
+
+  // ── Auto-decorate every <table> with a Copy button and every <section> with a Download-PDF button ──
+  useEffect(() => {
+    let raf = 0;
+    const decorate = () => {
+      document.querySelectorAll<HTMLTableElement>("table:not([data-tbl-deco])").forEach((tbl) => {
+        tbl.setAttribute("data-tbl-deco", "1");
+        const bar = document.createElement("div");
+        bar.className = "flex justify-end mb-1 print:hidden";
+        bar.setAttribute("data-deco-ui", "1");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = "📋 Copy table";
+        btn.className =
+          "text-[10px] px-1.5 py-0.5 rounded text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors";
+        btn.addEventListener("click", async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          await copyTableToClipboard(tbl);
+          const orig = "📋 Copy table";
+          btn.textContent = "✓ Copied";
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        });
+        bar.appendChild(btn);
+        tbl.parentElement?.insertBefore(bar, tbl);
+      });
+      document.querySelectorAll<HTMLElement>("section:not([data-sec-deco])").forEach((sec) => {
+        const h2 = sec.querySelector("h2");
+        if (!h2) return;
+        sec.setAttribute("data-sec-deco", "1");
+        const title = (h2.textContent || "Section").trim();
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = "⬇ Download PDF";
+        btn.setAttribute("data-deco-ui", "1");
+        btn.className =
+          "ml-2 text-[10px] px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 align-middle print:hidden";
+        btn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          printElementAsPdf(sec, title);
+        });
+        h2.appendChild(btn);
+      });
+    };
+    const schedule = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; decorate(); });
+    };
+    decorate();
+    const obs = new MutationObserver((mutations) => {
+      // Ignore mutations caused solely by our own injected UI nodes
+      const meaningful = mutations.some((m) =>
+        Array.from(m.addedNodes).some((n) => !(n instanceof HTMLElement) || !n.hasAttribute("data-deco-ui"))
+      );
+      if (meaningful) schedule();
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+    return () => { obs.disconnect(); if (raf) cancelAnimationFrame(raf); };
+  }, []);
 
   // GA4 data
   const [ga4Daily, setGa4Daily]               = useState<DailyGA4[]>([]);
