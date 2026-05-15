@@ -1793,8 +1793,8 @@ export default function App() {
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: [queryDim], rowLimit: 500, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["query"], rowLimit: 25000, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["device"], rowLimit: 10, ...singleFilter }) }),
-      fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["page"], rowLimit: 1000, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["country"], rowLimit: 100, ...singleFilter }) }),
+      fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["page"], rowLimit: 1000, ...singleFilter }) }),
       ...(cmpRange ? [
         fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: ["date"], rowLimit: cmpDaySpan, ...singleFilter }) }),
         fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: [queryDim], rowLimit: 500, ...singleFilter }) }),
@@ -2257,15 +2257,17 @@ export default function App() {
   );
 
 
-  // ── Performance Analysis derived data ─────────────────────────────────────
+
+  // ── Performance Analysis ───────────────────────────────────────────────────
   const getPerf = (clicks: number): "high"|"med"|"low" =>
     clicks >= 20 ? "high" : clicks >= 5 ? "med" : "low";
   const PERF_COLORS_MAP: Record<string, string> = { high: "#059669", med: "#d97706", low: "#dc2626" };
   const PERF_LABELS: Record<string, string> = { high: "High (20+ clicks)", med: "Medium (5–19)", low: "Low (<5)" };
-  const PERF_BG: Record<string, string>     = { high: "bg-emerald-100 text-emerald-800", med: "bg-amber-100 text-amber-800", low: "bg-red-100 text-red-800" };
+  const PERF_BG: Record<string, string> = { high: "bg-emerald-100 text-emerald-800", med: "bg-amber-100 text-amber-800", low: "bg-red-100 text-red-800" };
 
-  const perfPieData = useMemo(() => {
-    const counts: Record<string, number> = { high: 0, med: 0, low: 0 };
+  // URL performance
+  const perfUrlPieData = useMemo(() => {
+    const counts = { high: 0, med: 0, low: 0 };
     gscPages.forEach((p) => { counts[getPerf(p.clicks)]++; });
     return (["high","med","low"] as const)
       .map((k) => ({ name: PERF_LABELS[k], value: counts[k], key: k }))
@@ -2277,24 +2279,18 @@ export default function App() {
     [gscPages, perfPieFilter]
   );
 
-  const perfSubfolders = useMemo(() => {
-    const map = new Map<string, { clicks: number; impressions: number; urls: number }>();
-    gscPages.forEach((p) => {
-      let path = p.page;
-      try { path = new URL(p.page).pathname; } catch {}
-      const seg = path.split("/").filter(Boolean)[0] ?? "(root)";
-      const key = `/${seg}`;
-      const prev = map.get(key) ?? { clicks: 0, impressions: 0, urls: 0 };
-      map.set(key, { clicks: prev.clicks + p.clicks, impressions: prev.impressions + p.impressions, urls: prev.urls + 1 });
-    });
-    return Array.from(map.entries())
-      .map(([folder, d]) => ({ folder, ...d }))
-      .sort((a, b) => b.clicks - a.clicks);
-  }, [gscPages]);
+  // Query performance
+  const perfQueryPieData = useMemo(() => {
+    const counts = { high: 0, med: 0, low: 0 };
+    gscQueries.forEach((q) => { counts[getPerf(q.clicks)]++; });
+    return (["high","med","low"] as const)
+      .map((k) => ({ name: PERF_LABELS[k], value: counts[k], key: k }))
+      .filter((d) => d.value > 0);
+  }, [gscQueries]);
 
-  const perfSubPieData = useMemo(() =>
-    perfSubfolders.slice(0, 8).map((s, i) => ({ name: s.folder, value: s.clicks, color: SERIES_COLORS[i % SERIES_COLORS.length] })),
-    [perfSubfolders]
+  const perfFilteredQueries = useMemo(() =>
+    perfSubFilter ? gscQueries.filter((q) => getPerf(q.clicks) === perfSubFilter as "high"|"med"|"low") : gscQueries,
+    [gscQueries, perfSubFilter]
   );
 
   const isoDateStr = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
@@ -3298,6 +3294,7 @@ export default function App() {
 
 
             {/* ── Performance Analysis ── */}
+            {/* ── Performance Analysis ── */}
             {activeView === "performance" && (
               <>
                 <SectionDivider label="PERFORMANCE ANALYSIS" />
@@ -3315,23 +3312,22 @@ export default function App() {
                   )}
                   {selectedGSC && !gscLoading && gscPages.length > 0 && (
                     <>
-                      {/* Element 1 — URL performance */}
+                      {/* ── Element 1: URL performance ── */}
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                         <ChartCard title="URL Performance by Clicks">
                           <div className="flex gap-4 items-center">
                             <ResponsiveContainer width="45%" height={210}>
                               <PieChart>
                                 <Pie
-                                  data={perfPieData}
-                                  dataKey="value"
-                                  nameKey="name"
+                                  data={perfUrlPieData}
+                                  dataKey="value" nameKey="name"
                                   cx="50%" cy="50%"
                                   outerRadius={80} innerRadius={44}
                                   paddingAngle={3}
                                   onClick={(d: any) => setPerfPieFilter((c) => c === d.key ? null : d.key)}
                                   style={{ cursor: "pointer" }}
                                 >
-                                  {perfPieData.map((d) => (
+                                  {perfUrlPieData.map((d) => (
                                     <Cell
                                       key={d.key}
                                       fill={PERF_COLORS_MAP[d.key]}
@@ -3345,9 +3341,8 @@ export default function App() {
                               </PieChart>
                             </ResponsiveContainer>
                             <div className="flex-1 space-y-2">
-                              {perfPieData.map((d) => (
-                                <button
-                                  key={d.key}
+                              {perfUrlPieData.map((d) => (
+                                <button key={d.key}
                                   onClick={() => setPerfPieFilter((c) => c === d.key ? null : d.key)}
                                   className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border transition-all text-left ${perfPieFilter === d.key ? "border-gray-400 shadow-sm" : "border-transparent hover:border-gray-200"}`}
                                   style={{ backgroundColor: PERF_COLORS_MAP[d.key] + "18" }}
@@ -3360,9 +3355,7 @@ export default function App() {
                                 </button>
                               ))}
                               {perfPieFilter && (
-                                <button onClick={() => setPerfPieFilter(null)} className="w-full text-xs text-purple-600 hover:text-purple-800 pt-1 text-center">
-                                  ✕ Clear filter
-                                </button>
+                                <button onClick={() => setPerfPieFilter(null)} className="w-full text-xs text-purple-600 hover:text-purple-800 pt-1 text-center">✕ Clear filter</button>
                               )}
                             </div>
                           </div>
@@ -3386,15 +3379,13 @@ export default function App() {
                                   try { displayUrl = new URL(p.page).pathname || "/"; } catch {}
                                   return (
                                     <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
-                                      <td className="py-1.5 pr-2" style={{ maxWidth: 0, width: "50%" }}>
+                                      <td className="py-1.5 pr-2" style={{ maxWidth: 0, width: "52%" }}>
                                         <span className="block truncate text-gray-700" title={p.page}>{displayUrl}</span>
                                       </td>
                                       <td className="py-1.5 pr-2 text-right text-gray-900 font-semibold tabular-nums">{p.clicks.toLocaleString()}</td>
                                       <td className="py-1.5 pr-2 text-right text-gray-500 tabular-nums">{p.impressions.toLocaleString()}</td>
                                       <td className="py-1.5">
-                                        <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${PERF_BG[tier]}`}>
-                                          {tier}
-                                        </span>
+                                        <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${PERF_BG[tier]}`}>{tier}</span>
                                       </td>
                                     </tr>
                                   );
@@ -3405,83 +3396,82 @@ export default function App() {
                         </ChartCard>
                       </div>
 
-                      {/* Element 2 — Subfolder performance */}
+                      {/* ── Element 2: Query performance ── */}
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        <ChartCard title="Performance by Subfolder">
+                        <ChartCard title="Query Performance by Clicks">
                           <div className="flex gap-4 items-center">
                             <ResponsiveContainer width="45%" height={210}>
                               <PieChart>
                                 <Pie
-                                  data={perfSubPieData}
-                                  dataKey="value"
-                                  nameKey="name"
+                                  data={perfQueryPieData}
+                                  dataKey="value" nameKey="name"
                                   cx="50%" cy="50%"
                                   outerRadius={80} innerRadius={44}
                                   paddingAngle={3}
-                                  onClick={(d: any) => setPerfSubFilter((c) => c === d.name ? null : d.name)}
+                                  onClick={(d: any) => setPerfSubFilter((c) => c === d.key ? null : d.key)}
                                   style={{ cursor: "pointer" }}
                                 >
-                                  {perfSubPieData.map((d) => (
+                                  {perfQueryPieData.map((d) => (
                                     <Cell
-                                      key={d.name}
-                                      fill={d.color}
-                                      opacity={perfSubFilter && perfSubFilter !== d.name ? 0.3 : 1}
-                                      stroke={perfSubFilter === d.name ? "#374151" : "none"}
-                                      strokeWidth={perfSubFilter === d.name ? 2 : 0}
+                                      key={d.key}
+                                      fill={PERF_COLORS_MAP[d.key]}
+                                      opacity={perfSubFilter && perfSubFilter !== d.key ? 0.3 : 1}
+                                      stroke={perfSubFilter === d.key ? "#374151" : "none"}
+                                      strokeWidth={perfSubFilter === d.key ? 2 : 0}
                                     />
                                   ))}
                                 </Pie>
-                                <Tooltip {...chartTooltipStyle} formatter={(v: number, n: string) => [v.toLocaleString() + " clicks", n]} />
+                                <Tooltip {...chartTooltipStyle} formatter={(v: number, n: string) => [v.toLocaleString() + " queries", n]} />
                               </PieChart>
                             </ResponsiveContainer>
-                            <div className="flex-1 space-y-1.5 overflow-y-auto" style={{ maxHeight: 210 }}>
-                              {perfSubPieData.map((d) => (
-                                <button
-                                  key={d.name}
-                                  onClick={() => setPerfSubFilter((c) => c === d.name ? null : d.name)}
-                                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all text-left ${perfSubFilter === d.name ? "border-gray-400 shadow-sm" : "border-transparent hover:border-gray-200"}`}
-                                  style={{ backgroundColor: d.color + "18" }}
+                            <div className="flex-1 space-y-2">
+                              {perfQueryPieData.map((d) => (
+                                <button key={d.key}
+                                  onClick={() => setPerfSubFilter((c) => c === d.key ? null : d.key)}
+                                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border transition-all text-left ${perfSubFilter === d.key ? "border-gray-400 shadow-sm" : "border-transparent hover:border-gray-200"}`}
+                                  style={{ backgroundColor: PERF_COLORS_MAP[d.key] + "18" }}
                                 >
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: d.color }} />
-                                    <span className="text-xs font-medium text-gray-700 truncate">{d.name}</span>
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: PERF_COLORS_MAP[d.key] }} />
+                                    <span className="text-xs font-medium text-gray-700">{PERF_LABELS[d.key]}</span>
                                   </div>
-                                  <span className="text-xs font-bold text-gray-900 shrink-0 ml-2">{d.value.toLocaleString()}</span>
+                                  <span className="text-xs font-bold text-gray-900">{d.value.toLocaleString()} queries</span>
                                 </button>
                               ))}
                               {perfSubFilter && (
-                                <button onClick={() => setPerfSubFilter(null)} className="w-full text-xs text-purple-600 hover:text-purple-800 pt-1 text-center">
-                                  ✕ Clear filter
-                                </button>
+                                <button onClick={() => setPerfSubFilter(null)} className="w-full text-xs text-purple-600 hover:text-purple-800 pt-1 text-center">✕ Clear filter</button>
                               )}
                             </div>
                           </div>
                         </ChartCard>
 
-                        <ChartCard title={`Subfolders${perfSubFilter ? ` — ${perfSubFilter}` : ""} (${(perfSubFilter ? perfSubfolders.filter((s) => s.folder === perfSubFilter) : perfSubfolders).length} total)`}>
+                        <ChartCard title={`Queries — ${perfSubFilter ? PERF_LABELS[perfSubFilter] : "All"} (${perfFilteredQueries.length.toLocaleString()})`}>
                           <div className="overflow-y-auto" style={{ maxHeight: 230 }}>
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 bg-white z-10">
                                 <tr className="text-left text-gray-400 border-b border-gray-100">
-                                  <th className="pb-2 pr-3 font-medium">Subfolder</th>
-                                  <th className="pb-2 pr-3 font-medium text-right">URLs</th>
-                                  <th className="pb-2 pr-3 font-medium text-right">Clicks</th>
-                                  <th className="pb-2 font-medium text-right">Impr.</th>
+                                  <th className="pb-2 pr-2 font-medium">Query</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">Clicks</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">Impr.</th>
+                                  <th className="pb-2 font-medium">Tier</th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {(perfSubFilter ? perfSubfolders.filter((s) => s.folder === perfSubFilter) : perfSubfolders).map((s, i) => (
-                                  <tr
-                                    key={i}
-                                    className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer"
-                                    onClick={() => setPerfSubFilter((c) => c === s.folder ? null : s.folder)}
-                                  >
-                                    <td className="py-1.5 pr-3 font-medium text-gray-800">{s.folder}</td>
-                                    <td className="py-1.5 pr-3 text-right text-gray-500 tabular-nums">{s.urls.toLocaleString()}</td>
-                                    <td className="py-1.5 pr-3 text-right text-gray-900 font-semibold tabular-nums">{s.clicks.toLocaleString()}</td>
-                                    <td className="py-1.5 text-right text-gray-500 tabular-nums">{s.impressions.toLocaleString()}</td>
-                                  </tr>
-                                ))}
+                                {perfFilteredQueries.slice(0, 100).map((q, i) => {
+                                  const tier = getPerf(q.clicks);
+                                  return (
+                                    <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                                      <td className="py-1.5 pr-2" style={{ maxWidth: 0, width: "52%" }}>
+                                        <span className="block truncate text-gray-700" title={q.query}>{q.query}</span>
+                                      </td>
+                                      <td className="py-1.5 pr-2 text-right text-gray-900 font-semibold tabular-nums">{q.clicks.toLocaleString()}</td>
+                                      <td className="py-1.5 pr-2 text-right text-gray-500 tabular-nums">{q.impressions.toLocaleString()}</td>
+                                      <td className="py-1.5">
+                                        <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${PERF_BG[tier]}`}>{tier}</span>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </div>
