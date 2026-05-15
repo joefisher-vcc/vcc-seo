@@ -796,6 +796,61 @@ function SortIcon({ col, sortBy, sortDir }: { col: string; sortBy: string; sortD
   return sortDir === "asc" ? <ChevronUp size={11} className="text-purple-600" /> : <ChevronDown size={11} className="text-purple-600" />;
 }
 
+
+// ─── Generic sortable table helpers ───────────────────────────────────────────
+type AnySort = { key: string; dir: SortDir };
+function useTableSort<T>(
+  rows: T[],
+  initial: AnySort,
+  accessor?: (row: T, key: string) => unknown,
+) {
+  const [sort, setSort] = useState<AnySort>(initial);
+  const sorted = useMemo(() => {
+    const get = accessor ?? ((r: T, k: string) => (r as unknown as Record<string, unknown>)[k]);
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      const av = get(a, sort.key);
+      const bv = get(b, sort.key);
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (typeof av === "string" && typeof bv === "string") {
+        return sort.dir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+      }
+      const an = Number(av), bn = Number(bv);
+      return sort.dir === "asc" ? an - bn : bn - an;
+    });
+    return copy;
+  }, [rows, sort, accessor]);
+  const toggle = (key: string) =>
+    setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" }));
+  return { sorted, sort, toggle };
+}
+
+function SortableTh({
+  label, sortKey, sort, onToggle, className = "",
+}: {
+  label: React.ReactNode;
+  sortKey: string | null;
+  sort: AnySort;
+  onToggle?: (k: string) => void;
+  className?: string;
+}) {
+  const clickable = !!sortKey && !!onToggle;
+  return (
+    <th
+      onClick={clickable ? () => onToggle!(sortKey!) : undefined}
+      className={`${className} ${clickable ? "cursor-pointer hover:text-purple-600 select-none" : ""}`}
+    >
+      <span className="inline-flex items-center gap-1">
+        {label}
+        {sortKey && <SortIcon col={sortKey} sortBy={sort.key} sortDir={sort.dir} />}
+      </span>
+    </th>
+  );
+}
+
+
 // ─── Query Filter Bar (above GSC table) ───────────────────────────────────────
 
 const FILTER_MODES: { value: QueryFilterMode; label: string }[] = [
@@ -2329,6 +2384,33 @@ export default function App() {
     [gscOpportunityQueries, perfSubFilter]
   );
 
+  // ── Sort state for non-sortable tables ──────────────────────────────────────
+  const URL_TIER_RANK: Record<string, number> = { high: 4, med: 3, low: 2, opportunity: 1 };
+  const landingSort = useTableSort(filteredLandingPages, { key: "users", dir: "desc" });
+  const aiSourcesSort = useTableSort(ga4AiSources, { key: "sessions", dir: "desc" });
+  const crossPagesSort = useTableSort(gscCrossPages, { key: "clicks", dir: "desc" });
+  const crossQueriesSort = useTableSort(gscCrossQueries, { key: "clicks", dir: "desc" });
+  const blendQueriesRows = useMemo(() => gscQueries.slice(0, 5), [gscQueries]);
+  const blendQueriesSort = useTableSort(blendQueriesRows, { key: "clicks", dir: "desc" });
+  const convDailyMerged = useMemo(
+    () => convDaily.map((r, i) => ({ date: r.date, count: r.count, compare: convDailyCmp[i]?.count ?? null })),
+    [convDaily, convDailyCmp]
+  );
+  const convDailySort = useTableSort(convDailyMerged, { key: "date", dir: "asc" });
+  const seoNoTrafficSort = useTableSort(seoNoTraffic, { key: "sessions", dir: "asc" });
+  const seoLowEngSort = useTableSort(seoLowEngagement, { key: "engagementRate", dir: "asc" });
+  const seo404Sort = useTableSort(seo404Titles, { key: "sessions", dir: "desc" });
+  const perfPagesSort = useTableSort(
+    perfFilteredPages,
+    { key: "clicks", dir: "desc" },
+    (r, k) => k === "tier" ? URL_TIER_RANK[getUrlPerf((r as { clicks: number }).clicks)] : (r as unknown as Record<string, unknown>)[k]
+  );
+  const perfQueriesSort = useTableSort(
+    perfFilteredQueries,
+    { key: "clicks", dir: "desc" },
+    (r, k) => k === "tier" ? URL_TIER_RANK[getPerf((r as { position: number }).position)] : (r as unknown as Record<string, unknown>)[k]
+  );
+
   const isoDateStr = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
   const ga4BannerHint = useMemo(() => {
     if (ga4Filters.comparison === "none") return undefined;
@@ -2565,14 +2647,14 @@ export default function App() {
                           <table className="w-full text-xs">
                             <thead className="sticky top-0 z-10 bg-white shadow-sm">
                               <tr className="border-b border-gray-100">
-                                <th className="pb-2.5 text-left font-semibold text-gray-400 uppercase tracking-wide pr-4 text-[10px]">Page</th>
-                                <th className="pb-2.5 text-left font-semibold text-gray-400 uppercase tracking-wide pr-4 text-[10px]">Users</th>
-                                <th className="pb-2.5 text-left font-semibold text-gray-400 uppercase tracking-wide pr-4 text-[10px]">Sessions</th>
-                                <th className="pb-2.5 text-left font-semibold text-gray-400 uppercase tracking-wide text-[10px]">Bounce</th>
+                                <SortableTh label="Page" sortKey="page" sort={landingSort.sort} onToggle={landingSort.toggle} className="pb-2.5 text-left font-semibold text-gray-400 uppercase tracking-wide pr-4 text-[10px]" />
+                                <SortableTh label="Users" sortKey="users" sort={landingSort.sort} onToggle={landingSort.toggle} className="pb-2.5 text-left font-semibold text-gray-400 uppercase tracking-wide pr-4 text-[10px]" />
+                                <SortableTh label="Sessions" sortKey="sessions" sort={landingSort.sort} onToggle={landingSort.toggle} className="pb-2.5 text-left font-semibold text-gray-400 uppercase tracking-wide pr-4 text-[10px]" />
+                                <SortableTh label="Bounce" sortKey="bounceRate" sort={landingSort.sort} onToggle={landingSort.toggle} className="pb-2.5 text-left font-semibold text-gray-400 uppercase tracking-wide text-[10px]" />
                               </tr>
                             </thead>
                             <tbody>
-                              {filteredLandingPages.map((p, i) => {
+                              {landingSort.sorted.map((p, i) => {
                                 const c = hasCmp ? ga4LandingPagesCmp.find((x) => x.page === p.page) : null;
                                 const uDelta = c ? ((p.users - c.users) / Math.abs(c.users || 1)) * 100 : null;
                                 const sDelta = c ? ((p.sessions - c.sessions) / Math.abs(c.sessions || 1)) * 100 : null;
@@ -2684,15 +2766,15 @@ export default function App() {
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 z-10 bg-white shadow-sm">
                               <tr>
-                                <th className="pb-2 text-left text-gray-400 font-semibold pr-3 uppercase tracking-wide text-[10px]">Source</th>
-                                <th className="pb-2 text-left text-gray-400 font-semibold pr-3 uppercase tracking-wide text-[10px]">Sessions</th>
+                                <SortableTh label="Source" sortKey="label" sort={aiSourcesSort.sort} onToggle={aiSourcesSort.toggle} className="pb-2 text-left text-gray-400 font-semibold pr-3 uppercase tracking-wide text-[10px]" />
+                                <SortableTh label="Sessions" sortKey="sessions" sort={aiSourcesSort.sort} onToggle={aiSourcesSort.toggle} className="pb-2 text-left text-gray-400 font-semibold pr-3 uppercase tracking-wide text-[10px]" />
                                 {hasCmp && <th className="pb-2 text-left text-gray-400 font-semibold pr-3 uppercase tracking-wide text-[10px]">Prev</th>}
                                 {hasCmp && <th className="pb-2 text-left text-gray-400 font-semibold pr-3 uppercase tracking-wide text-[10px]">Chg</th>}
-                                <th className="pb-2 text-left text-gray-400 font-semibold uppercase tracking-wide text-[10px]">Users</th>
+                                <SortableTh label="Users" sortKey="users" sort={aiSourcesSort.sort} onToggle={aiSourcesSort.toggle} className="pb-2 text-left text-gray-400 font-semibold uppercase tracking-wide text-[10px]" />
                               </tr>
                             </thead>
                             <tbody>
-                              {ga4AiSources.map((s, i) => {
+                              {aiSourcesSort.sorted.map((s, i) => {
                                 const c     = hasCmp ? ga4AiSourcesCmp.find((x) => x.label === s.label) : null;
                                 const delta = c ? ((s.sessions - c.sessions) / Math.abs(c.sessions || 1)) * 100 : null;
                                 return (
@@ -2840,13 +2922,13 @@ export default function App() {
                                 <table className="w-full text-xs">
                                   <thead className="sticky top-0 z-10 bg-white">
                                     <tr className="border-b border-gray-100">
-                                      <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Page</th>
-                                      <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Clicks</th>
-                                      <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Impr.</th>
+                                      <SortableTh label="Page" sortKey="query" sort={crossPagesSort.sort} onToggle={crossPagesSort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
+                                      <SortableTh label="Clicks" sortKey="clicks" sort={crossPagesSort.sort} onToggle={crossPagesSort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
+                                      <SortableTh label="Impr." sortKey="impressions" sort={crossPagesSort.sort} onToggle={crossPagesSort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {gscCrossPages.map((row, i) => (
+                                    {crossPagesSort.sorted.map((row, i) => (
                                       <tr key={i} className="border-b border-gray-50 hover:bg-purple-50/50 cursor-pointer" onClick={() => { setPageDrillPath(row.query); setGscLinkQuery(null); setGscLinkPage(null); }}>
                                         <td className="py-2 pr-2 max-w-[200px] truncate" title={row.query}>{row.query}</td>
                                         <td className="py-2 pr-2 font-semibold">{row.clicks.toLocaleString()}</td>
@@ -2864,13 +2946,13 @@ export default function App() {
                                 <table className="w-full text-xs">
                                   <thead className="sticky top-0 z-10 bg-white">
                                     <tr className="border-b border-gray-100">
-                                      <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Query</th>
-                                      <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Clicks</th>
-                                      <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Impr.</th>
+                                      <SortableTh label="Query" sortKey="query" sort={crossQueriesSort.sort} onToggle={crossQueriesSort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
+                                      <SortableTh label="Clicks" sortKey="clicks" sort={crossQueriesSort.sort} onToggle={crossQueriesSort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
+                                      <SortableTh label="Impr." sortKey="impressions" sort={crossQueriesSort.sort} onToggle={crossQueriesSort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {gscCrossQueries.map((row, i) => (
+                                    {crossQueriesSort.sorted.map((row, i) => (
                                       <tr key={i} className="border-b border-gray-50 hover:bg-purple-50/50 cursor-pointer" onClick={() => { setGscLinkQuery(row.query); setGscLinkPage(null); }}>
                                         <td className="py-2 pr-2 max-w-[200px] truncate" title={row.query}>{row.query}</td>
                                         <td className="py-2 pr-2 font-semibold">{row.clicks.toLocaleString()}</td>
@@ -3026,13 +3108,13 @@ export default function App() {
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 z-10 bg-white shadow-sm">
                                 <tr className="border-b border-gray-100">
-                                  <th className="pb-2 text-left text-gray-400 font-semibold uppercase tracking-wide text-[10px] pr-3">Query</th>
-                                  <th className="pb-2 text-left text-gray-400 font-semibold uppercase tracking-wide text-[10px] pr-3">Clicks</th>
-                                  <th className="pb-2 text-left text-gray-400 font-semibold uppercase tracking-wide text-[10px]">Position</th>
+                                  <SortableTh label="Query" sortKey="query" sort={blendQueriesSort.sort} onToggle={blendQueriesSort.toggle} className="pb-2 text-left text-gray-400 font-semibold uppercase tracking-wide text-[10px] pr-3" />
+                                  <SortableTh label="Clicks" sortKey="clicks" sort={blendQueriesSort.sort} onToggle={blendQueriesSort.toggle} className="pb-2 text-left text-gray-400 font-semibold uppercase tracking-wide text-[10px] pr-3" />
+                                  <SortableTh label="Position" sortKey="position" sort={blendQueriesSort.sort} onToggle={blendQueriesSort.toggle} className="pb-2 text-left text-gray-400 font-semibold uppercase tracking-wide text-[10px]" />
                                 </tr>
                               </thead>
                               <tbody>
-                                {gscQueries.slice(0, 5).map((q, i) => (
+                                {blendQueriesSort.sorted.map((q, i) => (
                                   <tr key={i} className="border-b border-gray-50 last:border-0">
                                     <td className="py-2 pr-3 text-gray-700 max-w-[160px] truncate">{q.query}</td>
                                     <td className="py-2 pr-3 text-gray-900 font-semibold">{q.clicks.toLocaleString()}</td>
@@ -3214,17 +3296,17 @@ export default function App() {
                           <table className="w-full text-xs">
                             <thead className="sticky top-0 z-10 bg-white shadow-sm">
                               <tr className="border-b border-gray-100">
-                                <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Date</th>
-                                <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Count</th>
-                                {convDailyCmp.length > 0 && <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Compare</th>}
+                                <SortableTh label="Date" sortKey="date" sort={convDailySort.sort} onToggle={convDailySort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
+                                <SortableTh label="Count" sortKey="count" sort={convDailySort.sort} onToggle={convDailySort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
+                                {convDailyCmp.length > 0 && <SortableTh label="Compare" sortKey="compare" sort={convDailySort.sort} onToggle={convDailySort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />}
                               </tr>
                             </thead>
                             <tbody>
-                              {convDaily.map((r, i) => (
+                              {convDailySort.sorted.map((r) => (
                                 <tr key={r.date} className="border-b border-gray-50">
                                   <td className="py-2">{r.date}</td>
                                   <td className="py-2 font-semibold">{r.count.toLocaleString()}</td>
-                                  {convDailyCmp.length > 0 && <td className="py-2 text-gray-500">{(convDailyCmp[i]?.count ?? 0).toLocaleString()}</td>}
+                                  {convDailyCmp.length > 0 && <td className="py-2 text-gray-500">{(r.compare ?? 0).toLocaleString()}</td>}
                                 </tr>
                               ))}
                             </tbody>
@@ -3265,10 +3347,13 @@ export default function App() {
                         <ScrollTable>
                           <table className="w-full text-xs">
                             <thead className="sticky top-0 z-10 bg-white shadow-sm">
-                              <tr className="border-b border-gray-100"><th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Page</th><th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Sessions</th></tr>
+                              <tr className="border-b border-gray-100">
+                                <SortableTh label="Page" sortKey="page" sort={seoNoTrafficSort.sort} onToggle={seoNoTrafficSort.toggle} className="text-left py-2 text-[10px] text-gray-400 font-semibold" />
+                                <SortableTh label="Sessions" sortKey="sessions" sort={seoNoTrafficSort.sort} onToggle={seoNoTrafficSort.toggle} className="text-left py-2 text-[10px] text-gray-400 font-semibold" />
+                              </tr>
                             </thead>
                             <tbody>
-                              {seoNoTraffic.map((r, i) => (
+                              {seoNoTrafficSort.sorted.map((r, i) => (
                                 <tr key={i} className="border-b border-gray-50 cursor-pointer hover:bg-red-50/40" onClick={() => { setPageDrillPath(r.page); setGscLinkQuery(null); setGscLinkPage(null); }}>
                                   <td className="py-2 pr-2 max-w-[180px] truncate" title={r.page}>{r.page}</td>
                                   <td className="py-2 font-semibold">{r.sessions}</td>
@@ -3283,13 +3368,13 @@ export default function App() {
                           <table className="w-full text-xs">
                             <thead className="sticky top-0 z-10 bg-white shadow-sm">
                               <tr className="border-b border-gray-100">
-                                <th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Page</th>
-                                <th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Eng.</th>
-                                <th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Sess.</th>
+                                <SortableTh label="Page" sortKey="page" sort={seoLowEngSort.sort} onToggle={seoLowEngSort.toggle} className="text-left py-2 text-[10px] text-gray-400 font-semibold" />
+                                <SortableTh label="Eng." sortKey="engagementRate" sort={seoLowEngSort.sort} onToggle={seoLowEngSort.toggle} className="text-left py-2 text-[10px] text-gray-400 font-semibold" />
+                                <SortableTh label="Sess." sortKey="sessions" sort={seoLowEngSort.sort} onToggle={seoLowEngSort.toggle} className="text-left py-2 text-[10px] text-gray-400 font-semibold" />
                               </tr>
                             </thead>
                             <tbody>
-                              {seoLowEngagement.map((r, i) => (
+                              {seoLowEngSort.sorted.map((r, i) => (
                                 <tr key={i} className="border-b border-gray-50 cursor-pointer hover:bg-red-50/40" onClick={() => { setPageDrillPath(r.page); setGscLinkQuery(null); setGscLinkPage(null); }}>
                                   <td className="py-2 pr-2 max-w-[140px] truncate" title={r.page}>{r.page}</td>
                                   <td className="py-2">{(r.engagementRate * 100).toFixed(1)}%</td>
@@ -3305,13 +3390,13 @@ export default function App() {
                           <table className="w-full text-xs">
                             <thead className="sticky top-0 z-10 bg-white shadow-sm">
                               <tr className="border-b border-gray-100">
-                                <th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Title</th>
-                                <th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Page</th>
-                                <th className="text-left py-2 text-[10px] text-gray-400 font-semibold">Sess.</th>
+                                <SortableTh label="Title" sortKey="title" sort={seo404Sort.sort} onToggle={seo404Sort.toggle} className="text-left py-2 text-[10px] text-gray-400 font-semibold" />
+                                <SortableTh label="Page" sortKey="page" sort={seo404Sort.sort} onToggle={seo404Sort.toggle} className="text-left py-2 text-[10px] text-gray-400 font-semibold" />
+                                <SortableTh label="Sess." sortKey="sessions" sort={seo404Sort.sort} onToggle={seo404Sort.toggle} className="text-left py-2 text-[10px] text-gray-400 font-semibold" />
                               </tr>
                             </thead>
                             <tbody>
-                              {seo404Titles.map((r, i) => (
+                              {seo404Sort.sorted.map((r, i) => (
                                 <tr key={i} className="border-b border-gray-50 cursor-pointer hover:bg-red-50/40" onClick={() => { setPageDrillPath(r.page); setGscLinkQuery(null); setGscLinkPage(null); }}>
                                   <td className="py-2 pr-2 max-w-[120px] truncate" title={r.title}>{r.title}</td>
                                   <td className="py-2 pr-2 max-w-[120px] truncate" title={r.page}>{r.page}</td>
@@ -3402,15 +3487,15 @@ export default function App() {
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 bg-white z-10">
                                 <tr className="text-left text-gray-400 border-b border-gray-100">
-                                  <th className="pb-2 pr-2 font-medium">URL</th>
-                                  <th className="pb-2 pr-2 font-medium text-right">Clicks</th>
-                                  <th className="pb-2 pr-2 font-medium text-right">Impr.</th>
-                                  <th className="pb-2 pr-2 font-medium text-right">Position</th>
-                                  <th className="pb-2 font-medium">Tier</th>
+                                  <SortableTh label="URL" sortKey="page" sort={perfPagesSort.sort} onToggle={perfPagesSort.toggle} className="pb-2 pr-2 font-medium" />
+                                  <SortableTh label="Clicks" sortKey="clicks" sort={perfPagesSort.sort} onToggle={perfPagesSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="Impr." sortKey="impressions" sort={perfPagesSort.sort} onToggle={perfPagesSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="Position" sortKey="position" sort={perfPagesSort.sort} onToggle={perfPagesSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="Tier" sortKey="tier" sort={perfPagesSort.sort} onToggle={perfPagesSort.toggle} className="pb-2 font-medium" />
                                 </tr>
                               </thead>
                               <tbody>
-                                {perfFilteredPages.map((p, i) => {
+                                {perfPagesSort.sorted.map((p, i) => {
                                   const tier = getUrlPerf(p.clicks);
                                   let displayUrl = p.page;
                                   try { displayUrl = new URL(p.page).pathname || "/"; } catch {}
@@ -3487,15 +3572,15 @@ export default function App() {
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 bg-white z-10">
                                 <tr className="text-left text-gray-400 border-b border-gray-100">
-                                  <th className="pb-2 pr-2 font-medium">Query</th>
-                                  <th className="pb-2 pr-2 font-medium text-right">Clicks</th>
-                                  <th className="pb-2 pr-2 font-medium text-right">Impr.</th>
-                                  <th className="pb-2 pr-2 font-medium text-right">Position</th>
-                                  <th className="pb-2 font-medium">Tier</th>
+                                  <SortableTh label="Query" sortKey="query" sort={perfQueriesSort.sort} onToggle={perfQueriesSort.toggle} className="pb-2 pr-2 font-medium" />
+                                  <SortableTh label="Clicks" sortKey="clicks" sort={perfQueriesSort.sort} onToggle={perfQueriesSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="Impr." sortKey="impressions" sort={perfQueriesSort.sort} onToggle={perfQueriesSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="Position" sortKey="position" sort={perfQueriesSort.sort} onToggle={perfQueriesSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="Tier" sortKey="tier" sort={perfQueriesSort.sort} onToggle={perfQueriesSort.toggle} className="pb-2 font-medium" />
                                 </tr>
                               </thead>
                               <tbody>
-                                {perfFilteredQueries.map((q, i) => {
+                                {perfQueriesSort.sorted.map((q, i) => {
                                   const tier = getPerf(q.position);
                                   return (
                                     <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
