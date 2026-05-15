@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   BarChart3,
+  BarChart2,
   Search,
   TrendingUp,
   TrendingDown,
@@ -134,7 +135,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "conversions" | "seoIssues";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "conversions" | "seoIssues" | "performance";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -193,6 +194,7 @@ interface DailyGSC {
 }
 interface ChannelRow  { channel: string; users: number; sessions: number }
 interface QueryRow    { query: string; clicks: number; impressions: number; ctr: number; position: number }
+interface PagePerfRow  { page: string; clicks: number; impressions: number; ctr: number; position: number }
 interface DeviceRow   { device: string; clicks: number; impressions: number }
 interface AiSourceRow { source: string; label: string; sessions: number; users: number }
 interface LandingPageRow { page: string; users: number; sessions: number; bounceRate: number }
@@ -1320,6 +1322,8 @@ export default function App() {
   const [refreshing, setRefreshing]     = useState(false);
   const [lastUpdated, setLastUpdated]   = useState<Date | null>(null);
   const [activeView, setActiveView]     = useState<ActiveView>(() => (localStorage.getItem(LS_ACTIVE_VIEW) as ActiveView) ?? "ga4");
+  const [perfPieFilter, setPerfPieFilter] = useState<"high"|"med"|"low"|null>(null);
+  const [perfSubFilter, setPerfSubFilter] = useState<string|null>(null);
 
   const [ga4Properties, setGa4Properties] = useState<{ value: string; label: string }[]>([]);
   const [selectedGA4, setSelectedGA4]     = useState(() => localStorage.getItem(LS_SELECTED_GA4) ?? "");
@@ -1350,6 +1354,7 @@ export default function App() {
   /** Always query dimension (up to API row cap) — used for SEO Opportunities, independent of GSC table dimension. */
   const [gscOpportunityQueries, setGscOpportunityQueries]     = useState<QueryRow[]>([]);
   const [gscOpportunityQueriesCmp, setGscOpportunityQueriesCmp] = useState<QueryRow[]>([]);
+  const [gscPages, setGscPages]             = useState<PagePerfRow[]>([]);
   const [oppSort, setOppSort] = useState<{ col: OppSortCol; dir: SortDir }>({ col: "impressions", dir: "desc" });
   const [gscDevices, setGscDevices]       = useState<DeviceRow[]>([]);
   const [gscCountries, setGscCountries]   = useState<string[]>([]);
@@ -1788,6 +1793,7 @@ export default function App() {
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: [queryDim], rowLimit: 500, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["query"], rowLimit: 25000, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["device"], rowLimit: 10, ...singleFilter }) }),
+      fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["page"], rowLimit: 1000, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["country"], rowLimit: 100, ...singleFilter }) }),
       ...(cmpRange ? [
         fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: ["date"], rowLimit: cmpDaySpan, ...singleFilter }) }),
@@ -1818,6 +1824,7 @@ export default function App() {
     const opportunityQueryData = jsons[idx++];
     const deviceData   = jsons[idx++];
     const countryData  = jsons[idx++];
+    const pageData     = jsons[idx++];
     const cmpDailyGsc   = cmpRange ? jsons[idx++] : null;
     const cmpQueryData  = cmpRange ? jsons[idx++] : null;
     const cmpOpportunityQueryData = cmpRange ? jsons[idx++] : null;
@@ -1868,6 +1875,7 @@ export default function App() {
       })) ?? [];
     setGscCountryRows(parseCountryRows(countryData));
     setGscCountryRowsCmp(cmpCountryData ? parseCountryRows(cmpCountryData) : []);
+    setGscPages((pageData?.rows as GSCApiRow[])?.map((r) => ({ page: r.keys[0], clicks: Math.round(r.clicks), impressions: Math.round(r.impressions), ctr: r.ctr, position: r.position })) ?? []);
 
     // Multi-series
     if (needsSeries) {
@@ -2248,6 +2256,47 @@ export default function App() {
     [ga4TrendMetricFocus, ga4Filters.metrics],
   );
 
+
+  // ── Performance Analysis derived data ─────────────────────────────────────
+  const getPerf = (clicks: number): "high"|"med"|"low" =>
+    clicks >= 20 ? "high" : clicks >= 5 ? "med" : "low";
+  const PERF_COLORS_MAP: Record<string, string> = { high: "#059669", med: "#d97706", low: "#dc2626" };
+  const PERF_LABELS: Record<string, string> = { high: "High (20+ clicks)", med: "Medium (5–19)", low: "Low (<5)" };
+  const PERF_BG: Record<string, string>     = { high: "bg-emerald-100 text-emerald-800", med: "bg-amber-100 text-amber-800", low: "bg-red-100 text-red-800" };
+
+  const perfPieData = useMemo(() => {
+    const counts: Record<string, number> = { high: 0, med: 0, low: 0 };
+    gscPages.forEach((p) => { counts[getPerf(p.clicks)]++; });
+    return (["high","med","low"] as const)
+      .map((k) => ({ name: PERF_LABELS[k], value: counts[k], key: k }))
+      .filter((d) => d.value > 0);
+  }, [gscPages]);
+
+  const perfFilteredPages = useMemo(() =>
+    perfPieFilter ? gscPages.filter((p) => getPerf(p.clicks) === perfPieFilter) : gscPages,
+    [gscPages, perfPieFilter]
+  );
+
+  const perfSubfolders = useMemo(() => {
+    const map = new Map<string, { clicks: number; impressions: number; urls: number }>();
+    gscPages.forEach((p) => {
+      let path = p.page;
+      try { path = new URL(p.page).pathname; } catch {}
+      const seg = path.split("/").filter(Boolean)[0] ?? "(root)";
+      const key = `/${seg}`;
+      const prev = map.get(key) ?? { clicks: 0, impressions: 0, urls: 0 };
+      map.set(key, { clicks: prev.clicks + p.clicks, impressions: prev.impressions + p.impressions, urls: prev.urls + 1 });
+    });
+    return Array.from(map.entries())
+      .map(([folder, d]) => ({ folder, ...d }))
+      .sort((a, b) => b.clicks - a.clicks);
+  }, [gscPages]);
+
+  const perfSubPieData = useMemo(() =>
+    perfSubfolders.slice(0, 8).map((s, i) => ({ name: s.folder, value: s.clicks, color: SERIES_COLORS[i % SERIES_COLORS.length] })),
+    [perfSubfolders]
+  );
+
   const isoDateStr = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
   const ga4BannerHint = useMemo(() => {
     if (ga4Filters.comparison === "none") return undefined;
@@ -2276,6 +2325,7 @@ export default function App() {
     { key: "opportunities", label: "SEO Opportunities", icon: Lightbulb },
     { key: "conversions", label: "Conversions", icon: ShoppingCart },
     { key: "seoIssues", label: "SEO Issues", icon: AlertTriangle },
+    { key: "performance", label: "Performance", icon: BarChart2 },
   ];
 
   // ─── Render ────────────────────────────────────────────────────────────────
@@ -3241,6 +3291,203 @@ export default function App() {
                         </ScrollTable>
                       </ChartCard>
                     </div>
+                  )}
+                </section>
+              </>
+            )}
+
+
+            {/* ── Performance Analysis ── */}
+            {activeView === "performance" && (
+              <>
+                <SectionDivider label="PERFORMANCE ANALYSIS" />
+                <section className="space-y-6">
+                  {!selectedGSC && (
+                    <div className="bg-white rounded-2xl p-8 text-center border border-gray-100">
+                      <p className="text-gray-400 text-sm">Select a GSC property to view performance data.</p>
+                    </div>
+                  )}
+                  {selectedGSC && gscLoading && <Spinner />}
+                  {selectedGSC && !gscLoading && gscPages.length === 0 && (
+                    <div className="bg-white rounded-2xl p-8 text-center border border-gray-100">
+                      <p className="text-gray-400 text-sm">No page data available for the selected date range.</p>
+                    </div>
+                  )}
+                  {selectedGSC && !gscLoading && gscPages.length > 0 && (
+                    <>
+                      {/* Element 1 — URL performance */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <ChartCard title="URL Performance by Clicks">
+                          <div className="flex gap-4 items-center">
+                            <ResponsiveContainer width="45%" height={210}>
+                              <PieChart>
+                                <Pie
+                                  data={perfPieData}
+                                  dataKey="value"
+                                  nameKey="name"
+                                  cx="50%" cy="50%"
+                                  outerRadius={80} innerRadius={44}
+                                  paddingAngle={3}
+                                  onClick={(d: any) => setPerfPieFilter((c) => c === d.key ? null : d.key)}
+                                  style={{ cursor: "pointer" }}
+                                >
+                                  {perfPieData.map((d) => (
+                                    <Cell
+                                      key={d.key}
+                                      fill={PERF_COLORS_MAP[d.key]}
+                                      opacity={perfPieFilter && perfPieFilter !== d.key ? 0.3 : 1}
+                                      stroke={perfPieFilter === d.key ? "#374151" : "none"}
+                                      strokeWidth={perfPieFilter === d.key ? 2 : 0}
+                                    />
+                                  ))}
+                                </Pie>
+                                <Tooltip {...chartTooltipStyle} formatter={(v: number, n: string) => [v.toLocaleString() + " URLs", n]} />
+                              </PieChart>
+                            </ResponsiveContainer>
+                            <div className="flex-1 space-y-2">
+                              {perfPieData.map((d) => (
+                                <button
+                                  key={d.key}
+                                  onClick={() => setPerfPieFilter((c) => c === d.key ? null : d.key)}
+                                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border transition-all text-left ${perfPieFilter === d.key ? "border-gray-400 shadow-sm" : "border-transparent hover:border-gray-200"}`}
+                                  style={{ backgroundColor: PERF_COLORS_MAP[d.key] + "18" }}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: PERF_COLORS_MAP[d.key] }} />
+                                    <span className="text-xs font-medium text-gray-700">{PERF_LABELS[d.key]}</span>
+                                  </div>
+                                  <span className="text-xs font-bold text-gray-900">{d.value.toLocaleString()} URLs</span>
+                                </button>
+                              ))}
+                              {perfPieFilter && (
+                                <button onClick={() => setPerfPieFilter(null)} className="w-full text-xs text-purple-600 hover:text-purple-800 pt-1 text-center">
+                                  ✕ Clear filter
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </ChartCard>
+
+                        <ChartCard title={`URLs — ${perfPieFilter ? PERF_LABELS[perfPieFilter] : "All"} (${perfFilteredPages.length.toLocaleString()})`}>
+                          <div className="overflow-y-auto" style={{ maxHeight: 230 }}>
+                            <table className="w-full text-xs">
+                              <thead className="sticky top-0 bg-white z-10">
+                                <tr className="text-left text-gray-400 border-b border-gray-100">
+                                  <th className="pb-2 pr-2 font-medium">URL</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">Clicks</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">Impr.</th>
+                                  <th className="pb-2 font-medium">Tier</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {perfFilteredPages.slice(0, 100).map((p, i) => {
+                                  const tier = getPerf(p.clicks);
+                                  let displayUrl = p.page;
+                                  try { displayUrl = new URL(p.page).pathname || "/"; } catch {}
+                                  return (
+                                    <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                                      <td className="py-1.5 pr-2" style={{ maxWidth: 0, width: "50%" }}>
+                                        <span className="block truncate text-gray-700" title={p.page}>{displayUrl}</span>
+                                      </td>
+                                      <td className="py-1.5 pr-2 text-right text-gray-900 font-semibold tabular-nums">{p.clicks.toLocaleString()}</td>
+                                      <td className="py-1.5 pr-2 text-right text-gray-500 tabular-nums">{p.impressions.toLocaleString()}</td>
+                                      <td className="py-1.5">
+                                        <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${PERF_BG[tier]}`}>
+                                          {tier}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </ChartCard>
+                      </div>
+
+                      {/* Element 2 — Subfolder performance */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <ChartCard title="Performance by Subfolder">
+                          <div className="flex gap-4 items-center">
+                            <ResponsiveContainer width="45%" height={210}>
+                              <PieChart>
+                                <Pie
+                                  data={perfSubPieData}
+                                  dataKey="value"
+                                  nameKey="name"
+                                  cx="50%" cy="50%"
+                                  outerRadius={80} innerRadius={44}
+                                  paddingAngle={3}
+                                  onClick={(d: any) => setPerfSubFilter((c) => c === d.name ? null : d.name)}
+                                  style={{ cursor: "pointer" }}
+                                >
+                                  {perfSubPieData.map((d) => (
+                                    <Cell
+                                      key={d.name}
+                                      fill={d.color}
+                                      opacity={perfSubFilter && perfSubFilter !== d.name ? 0.3 : 1}
+                                      stroke={perfSubFilter === d.name ? "#374151" : "none"}
+                                      strokeWidth={perfSubFilter === d.name ? 2 : 0}
+                                    />
+                                  ))}
+                                </Pie>
+                                <Tooltip {...chartTooltipStyle} formatter={(v: number, n: string) => [v.toLocaleString() + " clicks", n]} />
+                              </PieChart>
+                            </ResponsiveContainer>
+                            <div className="flex-1 space-y-1.5 overflow-y-auto" style={{ maxHeight: 210 }}>
+                              {perfSubPieData.map((d) => (
+                                <button
+                                  key={d.name}
+                                  onClick={() => setPerfSubFilter((c) => c === d.name ? null : d.name)}
+                                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all text-left ${perfSubFilter === d.name ? "border-gray-400 shadow-sm" : "border-transparent hover:border-gray-200"}`}
+                                  style={{ backgroundColor: d.color + "18" }}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: d.color }} />
+                                    <span className="text-xs font-medium text-gray-700 truncate">{d.name}</span>
+                                  </div>
+                                  <span className="text-xs font-bold text-gray-900 shrink-0 ml-2">{d.value.toLocaleString()}</span>
+                                </button>
+                              ))}
+                              {perfSubFilter && (
+                                <button onClick={() => setPerfSubFilter(null)} className="w-full text-xs text-purple-600 hover:text-purple-800 pt-1 text-center">
+                                  ✕ Clear filter
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </ChartCard>
+
+                        <ChartCard title={`Subfolders${perfSubFilter ? ` — ${perfSubFilter}` : ""} (${(perfSubFilter ? perfSubfolders.filter((s) => s.folder === perfSubFilter) : perfSubfolders).length} total)`}>
+                          <div className="overflow-y-auto" style={{ maxHeight: 230 }}>
+                            <table className="w-full text-xs">
+                              <thead className="sticky top-0 bg-white z-10">
+                                <tr className="text-left text-gray-400 border-b border-gray-100">
+                                  <th className="pb-2 pr-3 font-medium">Subfolder</th>
+                                  <th className="pb-2 pr-3 font-medium text-right">URLs</th>
+                                  <th className="pb-2 pr-3 font-medium text-right">Clicks</th>
+                                  <th className="pb-2 font-medium text-right">Impr.</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(perfSubFilter ? perfSubfolders.filter((s) => s.folder === perfSubFilter) : perfSubfolders).map((s, i) => (
+                                  <tr
+                                    key={i}
+                                    className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer"
+                                    onClick={() => setPerfSubFilter((c) => c === s.folder ? null : s.folder)}
+                                  >
+                                    <td className="py-1.5 pr-3 font-medium text-gray-800">{s.folder}</td>
+                                    <td className="py-1.5 pr-3 text-right text-gray-500 tabular-nums">{s.urls.toLocaleString()}</td>
+                                    <td className="py-1.5 pr-3 text-right text-gray-900 font-semibold tabular-nums">{s.clicks.toLocaleString()}</td>
+                                    <td className="py-1.5 text-right text-gray-500 tabular-nums">{s.impressions.toLocaleString()}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </ChartCard>
+                      </div>
+                    </>
                   )}
                 </section>
               </>
