@@ -2183,23 +2183,26 @@ export default function App() {
   };
 
   const isSingleSeries = ga4SeriesKeys.length === 0 || !!ga4TrendMetricFocus;
+  const ALL_METRIC_KEYS: MetricKey[] = ["users", "sessions", "pageviews", "bounceRate"];
   const chartGA4Data = useMemo(() => {
     if (!isSingleSeries) return ga4Series;
     const cmpMap = new Map(ga4DailyCmp.map((r, i) => [i, r]));
+    // Always include all 4 metric keys so clicking any scorecard has data to display,
+    // regardless of which metrics are currently selected in ga4Filters.metrics.
     return ga4Daily.map((r, i) => {
       const row: SeriesRow = { date: r.date };
-      ga4Filters.metrics.forEach((m) => {
+      ALL_METRIC_KEYS.forEach((m) => {
         row[m] = m === "bounceRate" ? +(r.bounceRate * 100).toFixed(1) : r[m];
       });
       const cmpRow = cmpMap.get(i);
       if (cmpRow) {
-        ga4Filters.metrics.forEach((m) => {
+        ALL_METRIC_KEYS.forEach((m) => {
           row[`${m}_cmp`] = m === "bounceRate" ? +(cmpRow.bounceRate * 100).toFixed(1) : cmpRow[m];
         });
       }
       return row;
     });
-  }, [ga4Daily, ga4DailyCmp, ga4Series, ga4Filters.metrics, isSingleSeries]);
+  }, [ga4Daily, ga4DailyCmp, ga4Series, isSingleSeries]);
 
   const chartGSCData = useMemo(() => {
     if (gscSeriesKeys.length > 0) return gscSeries;
