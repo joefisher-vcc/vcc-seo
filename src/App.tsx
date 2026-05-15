@@ -2282,15 +2282,15 @@ export default function App() {
   // Query performance
   const perfQueryPieData = useMemo(() => {
     const counts = { high: 0, med: 0, low: 0 };
-    gscQueries.forEach((q) => { counts[getPerf(q.clicks)]++; });
+    gscOpportunityQueries.forEach((q) => { counts[getPerf(q.clicks)]++; });
     return (["high","med","low"] as const)
       .map((k) => ({ name: PERF_LABELS[k], value: counts[k], key: k }))
       .filter((d) => d.value > 0);
   }, [gscQueries]);
 
   const perfFilteredQueries = useMemo(() =>
-    perfSubFilter ? gscQueries.filter((q) => getPerf(q.clicks) === perfSubFilter as "high"|"med"|"low") : gscQueries,
-    [gscQueries, perfSubFilter]
+    perfSubFilter ? gscOpportunityQueries.filter((q) => getPerf(q.clicks) === perfSubFilter as "high"|"med"|"low") : gscOpportunityQueries,
+    [gscOpportunityQueries, perfSubFilter]
   );
 
   const isoDateStr = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
@@ -3373,7 +3373,7 @@ export default function App() {
                                 </tr>
                               </thead>
                               <tbody>
-                                {perfFilteredPages.slice(0, 100).map((p, i) => {
+                                {perfFilteredPages.map((p, i) => {
                                   const tier = getPerf(p.clicks);
                                   let displayUrl = p.page;
                                   try { displayUrl = new URL(p.page).pathname || "/"; } catch {}
@@ -3457,7 +3457,7 @@ export default function App() {
                                 </tr>
                               </thead>
                               <tbody>
-                                {perfFilteredQueries.slice(0, 100).map((q, i) => {
+                                {perfFilteredQueries.map((q, i) => {
                                   const tier = getPerf(q.clicks);
                                   return (
                                     <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
