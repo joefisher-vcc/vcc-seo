@@ -2182,7 +2182,7 @@ export default function App() {
     users: "Active Users", sessions: "Sessions", pageviews: "Pageviews", bounceRate: "Bounce Rate",
   };
 
-  const isSingleSeries = ga4SeriesKeys.length === 0;
+  const isSingleSeries = ga4SeriesKeys.length === 0 || !!ga4TrendMetricFocus;
   const chartGA4Data = useMemo(() => {
     if (!isSingleSeries) return ga4Series;
     const cmpMap = new Map(ga4DailyCmp.map((r, i) => [i, r]));
