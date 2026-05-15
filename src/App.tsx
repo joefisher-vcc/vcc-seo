@@ -1324,8 +1324,6 @@ export default function App() {
   const [activeView, setActiveView]     = useState<ActiveView>(() => (localStorage.getItem(LS_ACTIVE_VIEW) as ActiveView) ?? "ga4");
   const [perfPieFilter, setPerfPieFilter] = useState<"high"|"med"|"low"|null>(null);
   const [perfSubFilter, setPerfSubFilter] = useState<string|null>(null);
-  const [perfPageSort, setPerfPageSort] = useState<{ col: "url"|"clicks"|"impressions"|"position"|"tier"; dir: "asc"|"desc" }>({ col: "clicks", dir: "desc" });
-  const [perfQuerySort, setPerfQuerySort] = useState<{ col: "query"|"clicks"|"impressions"|"position"|"tier"; dir: "asc"|"desc" }>({ col: "clicks", dir: "desc" });
 
   const [ga4Properties, setGa4Properties] = useState<{ value: string; label: string }[]>([]);
   const [selectedGA4, setSelectedGA4]     = useState(() => localStorage.getItem(LS_SELECTED_GA4) ?? "");
@@ -2152,14 +2150,6 @@ export default function App() {
     });
   }
 
-  function handlePerfPageSort(col: "url"|"clicks"|"impressions"|"position"|"tier") {
-    setPerfPageSort((s) => (s.col !== col ? { col, dir: "desc" } : { col, dir: s.dir === "desc" ? "asc" : "desc" }));
-  }
-
-  function handlePerfQuerySort(col: "query"|"clicks"|"impressions"|"position"|"tier") {
-    setPerfQuerySort((s) => (s.col !== col ? { col, dir: "desc" } : { col, dir: s.dir === "desc" ? "asc" : "desc" }));
-  }
-
   // ── Landing pages filtered ─────────────────────────────────────────────────
   const filteredLandingPages = useMemo(() => {
     if (!landingPageFilter) return ga4LandingPages;
@@ -2320,33 +2310,9 @@ export default function App() {
       .filter((d) => d.value > 0);
   }, [gscPages]);
 
-  const perfFilteredPages = useMemo(() => {
-    const rows = perfPieFilter ? gscPages.filter((p) => getUrlPerf(p.clicks) === perfPieFilter) : gscPages;
-
-    return [...rows].sort((a, b) => {
-      const aTier = getUrlPerf(a.clicks);
-      const bTier = getUrlPerf(b.clicks);
-
-      const comparison = (() => {
-        switch (perfPageSort.col) {
-          case "url":
-            return a.page.localeCompare(b.page);
-          case "clicks":
-            return a.clicks - b.clicks;
-          case "impressions":
-            return a.impressions - b.impressions;
-          case "position":
-            return a.position - b.position;
-          case "tier":
-            return aTier.localeCompare(bTier);
-          default:
-            return 0;
-        }
-      })();
-
-      return perfPageSort.dir === "asc" ? comparison : -comparison;
-    });
-  }, [gscPages, perfPieFilter, perfPageSort]
+  const perfFilteredPages = useMemo(() =>
+    perfPieFilter ? gscPages.filter((p) => getUrlPerf(p.clicks) === perfPieFilter) : gscPages,
+    [gscPages, perfPieFilter]
   );
 
   // Query performance (bucketed by position)
@@ -2358,33 +2324,9 @@ export default function App() {
       .filter((d) => d.value > 0);
   }, [gscOpportunityQueries]);
 
-  const perfFilteredQueries = useMemo(() => {
-    const rows = perfSubFilter ? gscOpportunityQueries.filter((q) => getQueryPerf(q.position) === perfSubFilter as "high"|"med"|"low"|"opportunity") : gscOpportunityQueries;
-
-    return [...rows].sort((a, b) => {
-      const aTier = getPerf(a.position);
-      const bTier = getPerf(b.position);
-
-      const comparison = (() => {
-        switch (perfQuerySort.col) {
-          case "query":
-            return a.query.localeCompare(b.query);
-          case "clicks":
-            return a.clicks - b.clicks;
-          case "impressions":
-            return a.impressions - b.impressions;
-          case "position":
-            return a.position - b.position;
-          case "tier":
-            return aTier.localeCompare(bTier);
-          default:
-            return 0;
-        }
-      })();
-
-      return perfQuerySort.dir === "asc" ? comparison : -comparison;
-    });
-  }, [gscOpportunityQueries, perfSubFilter, perfQuerySort]
+  const perfFilteredQueries = useMemo(() =>
+    perfSubFilter ? gscOpportunityQueries.filter((q) => getQueryPerf(q.position) === perfSubFilter as "high"|"med"|"low"|"opportunity") : gscOpportunityQueries,
+    [gscOpportunityQueries, perfSubFilter]
   );
 
   const isoDateStr = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
@@ -3460,11 +3402,11 @@ export default function App() {
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 bg-white z-10">
                                 <tr className="text-left text-gray-400 border-b border-gray-100">
-                                  <th onClick={() => handlePerfPageSort("url")} className="pb-2 pr-2 font-medium cursor-pointer">URL {perfPageSort.col === "url" ? (perfPageSort.dir === "asc" ? "↑" : "↓") : ""}</th>
-                                  <th onClick={() => handlePerfPageSort("clicks")} className="pb-2 pr-2 font-medium text-right cursor-pointer">Clicks {perfPageSort.col === "clicks" ? (perfPageSort.dir === "asc" ? "↑" : "↓") : ""}</th>
-                                  <th onClick={() => handlePerfPageSort("impressions")} className="pb-2 pr-2 font-medium text-right cursor-pointer">Impr. {perfPageSort.col === "impressions" ? (perfPageSort.dir === "asc" ? "↑" : "↓") : ""}</th>
-                                  <th onClick={() => handlePerfPageSort("position")} className="pb-2 pr-2 font-medium text-right cursor-pointer">Position {perfPageSort.col === "position" ? (perfPageSort.dir === "asc" ? "↑" : "↓") : ""}</th>
-                                  <th onClick={() => handlePerfPageSort("tier")} className="pb-2 font-medium cursor-pointer">Tier {perfPageSort.col === "tier" ? (perfPageSort.dir === "asc" ? "↑" : "↓") : ""}</th>
+                                  <th className="pb-2 pr-2 font-medium">URL</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">Clicks</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">Impr.</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">Position</th>
+                                  <th className="pb-2 font-medium">Tier</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -3479,7 +3421,6 @@ export default function App() {
                                       </td>
                                       <td className="py-1.5 pr-2 text-right text-gray-900 font-semibold tabular-nums">{p.clicks.toLocaleString()}</td>
                                       <td className="py-1.5 pr-2 text-right text-gray-500 tabular-nums">{p.impressions.toLocaleString()}</td>
-                                      <td className="py-1.5 pr-2 text-right text-gray-700 tabular-nums">{p.position.toFixed(1)}</td>
                                       <td className="py-1.5">
                                         <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${PERF_BG[tier]}`}>{tier}</span>
                                       </td>
@@ -3546,11 +3487,11 @@ export default function App() {
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 bg-white z-10">
                                 <tr className="text-left text-gray-400 border-b border-gray-100">
-                                  <th onClick={() => handlePerfQuerySort("query")} className="pb-2 pr-2 font-medium cursor-pointer">Query {perfQuerySort.col === "query" ? (perfQuerySort.dir === "asc" ? "↑" : "↓") : ""}</th>
-                                  <th onClick={() => handlePerfQuerySort("clicks")} className="pb-2 pr-2 font-medium text-right cursor-pointer">Clicks {perfQuerySort.col === "clicks" ? (perfQuerySort.dir === "asc" ? "↑" : "↓") : ""}</th>
-                                  <th onClick={() => handlePerfQuerySort("impressions")} className="pb-2 pr-2 font-medium text-right cursor-pointer">Impr. {perfQuerySort.col === "impressions" ? (perfQuerySort.dir === "asc" ? "↑" : "↓") : ""}</th>
-                                  <th onClick={() => handlePerfQuerySort("position")} className="pb-2 pr-2 font-medium text-right cursor-pointer">Position {perfQuerySort.col === "position" ? (perfQuerySort.dir === "asc" ? "↑" : "↓") : ""}</th>
-                                  <th onClick={() => handlePerfQuerySort("tier")} className="pb-2 font-medium cursor-pointer">Tier {perfQuerySort.col === "tier" ? (perfQuerySort.dir === "asc" ? "↑" : "↓") : ""}</th>
+                                  <th className="pb-2 pr-2 font-medium">Query</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">Clicks</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">Impr.</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">Position</th>
+                                  <th className="pb-2 font-medium">Tier</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -3564,7 +3505,6 @@ export default function App() {
                                       <td className="py-1.5 pr-2 text-right text-gray-900 font-semibold tabular-nums">{q.clicks.toLocaleString()}</td>
                                       <td className="py-1.5 pr-2 text-right text-gray-500 tabular-nums">{q.impressions.toLocaleString()}</td>
                                       <td className="py-1.5 pr-2 text-right text-gray-700 tabular-nums">{q.position.toFixed(1)}</td>
-                                      <td className="py-1.5 pr-2 text-right text-gray-700 tabular-nums">{p.position.toFixed(1)}</td>
                                       <td className="py-1.5">
                                         <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${PERF_BG[tier]}`}>{tier}</span>
                                       </td>
