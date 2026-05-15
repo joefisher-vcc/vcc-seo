@@ -2279,7 +2279,7 @@ export default function App() {
               <BarChart3 size={18} className="text-white" />
             </div>
             <div>
-              <h1 className="text-base font-bold text-gray-900 leading-none">Connect Your SEO Data</h1>
+              <h1 className="text-base font-bold text-gray-900 leading-none">SEO/AIO Dashboard</h1>
               <p className="text-xs text-purple-500 mt-0.5">GA4 · Search Console · AI Channels</p>
             </div>
           </div>
@@ -2325,7 +2325,7 @@ export default function App() {
             <div className="mx-auto w-16 h-16 bg-purple-100 rounded-2xl flex items-center justify-center mb-5">
               <Globe size={28} className="text-purple-700" />
             </div>
-            <h2 className="text-xl font-bold text-gray-900 mb-2">Connect Your SEO Data</h2>
+            <h2 className="text-xl font-bold text-gray-900 mb-2">SEO/AIO Dashboard</h2>
             <p className="text-gray-500 text-sm max-w-sm mx-auto mb-6">
               Sign in with Google to access GA4 analytics, Search Console, and AI traffic channels — all in one place.
             </p>
@@ -3252,7 +3252,7 @@ export default function App() {
       </main>
 
       <footer className="max-w-7xl mx-auto px-6 py-6 border-t border-gray-100 mt-8">
-        <p className="text-xs text-gray-300 text-center">Connect Your SEO Data · GA4 · Search Console · AI Channels</p>
+        <p className="text-xs text-gray-300 text-center">SEO/AIO Dashboard · GA4 · Search Console · AI Channels</p>
       </footer>
     </div>
   );
