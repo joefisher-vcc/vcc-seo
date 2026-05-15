@@ -1319,7 +1319,7 @@ export default function App() {
   const [googleReady, setGoogleReady]   = useState(false);
   const [refreshing, setRefreshing]     = useState(false);
   const [lastUpdated, setLastUpdated]   = useState<Date | null>(null);
-  const [activeView, setActiveView]     = useState<ActiveView>("ga4");
+  const [activeView, setActiveView]     = useState<ActiveView>(() => (localStorage.getItem(LS_ACTIVE_VIEW) as ActiveView) ?? "ga4");
 
   const [ga4Properties, setGa4Properties] = useState<{ value: string; label: string }[]>([]);
   const [selectedGA4, setSelectedGA4]     = useState(() => localStorage.getItem(LS_SELECTED_GA4) ?? "");
