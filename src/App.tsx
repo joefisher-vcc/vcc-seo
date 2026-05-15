@@ -2535,6 +2535,69 @@ export default function App() {
   const seoNoTrafficSort = useTableSort(seoNoTraffic, { key: "sessions", dir: "asc" });
   const seoLowEngSort = useTableSort(seoLowEngagement, { key: "engagementRate", dir: "asc" });
   const seo404Sort = useTableSort(seo404Titles, { key: "sessions", dir: "desc" });
+
+  // ── SEO Issues: GSC-derived opportunity sets ──
+  const strikingDistanceQueries = useMemo(
+    () =>
+      gscOpportunityQueries
+        .filter((q) => q.position >= 11 && q.position <= 20 && q.impressions >= 30)
+        .sort((a, b) => b.impressions - a.impressions)
+        .slice(0, 100),
+    [gscOpportunityQueries]
+  );
+  const lowCtrHighImpressions = useMemo(
+    () =>
+      gscOpportunityQueries
+        .filter((q) => q.impressions >= 100 && q.position <= 20 && q.ctr < 0.02)
+        .sort((a, b) => b.impressions - a.impressions)
+        .slice(0, 100),
+    [gscOpportunityQueries]
+  );
+  const orphanGscPages = useMemo(() => {
+    // Pages getting impressions in GSC but minimal clicks — discoverability/CTR problem
+    return gscPages
+      .filter((p) => p.impressions >= 100 && p.clicks <= 2)
+      .sort((a, b) => b.impressions - a.impressions)
+      .slice(0, 100);
+  }, [gscPages]);
+  const queryHealthBuckets = useMemo(() => {
+    const b = { top3: 0, top10: 0, striking: 0, deep: 0 };
+    gscOpportunityQueries.forEach((q) => {
+      if (q.position <= 3) b.top3++;
+      else if (q.position <= 10) b.top10++;
+      else if (q.position <= 20) b.striking++;
+      else b.deep++;
+    });
+    return b;
+  }, [gscOpportunityQueries]);
+  const issueBreakdown = useMemo(
+    () => [
+      { key: "noTraffic", name: "No GA4 traffic", value: seoNoTraffic.length, color: "#ef4444" },
+      { key: "lowEng", name: "Low engagement", value: seoLowEngagement.length, color: "#f97316" },
+      { key: "title404", name: "404 in title", value: seo404Titles.length, color: "#dc2626" },
+      { key: "lowCtr", name: "Low CTR (GSC)", value: lowCtrHighImpressions.length, color: "#a855f7" },
+      { key: "striking", name: "Striking distance", value: strikingDistanceQueries.length, color: "#3b82f6" },
+      { key: "orphan", name: "Orphan pages", value: orphanGscPages.length, color: "#0ea5e9" },
+    ],
+    [seoNoTraffic, seoLowEngagement, seo404Titles, lowCtrHighImpressions, strikingDistanceQueries, orphanGscPages]
+  );
+  const totalSeoIssues = useMemo(
+    () => issueBreakdown.reduce((s, x) => s + x.value, 0),
+    [issueBreakdown]
+  );
+  const queryHealthPie = useMemo(
+    () => [
+      { key: "top3", name: "Top 3", value: queryHealthBuckets.top3, color: "#10b981" },
+      { key: "top10", name: "Top 10", value: queryHealthBuckets.top10, color: "#84cc16" },
+      { key: "striking", name: "11–20 (striking)", value: queryHealthBuckets.striking, color: "#3b82f6" },
+      { key: "deep", name: "21+ (deep)", value: queryHealthBuckets.deep, color: "#94a3b8" },
+    ],
+    [queryHealthBuckets]
+  );
+  const strikingSort = useTableSort(strikingDistanceQueries, { key: "impressions", dir: "desc" });
+  const lowCtrSort = useTableSort(lowCtrHighImpressions, { key: "impressions", dir: "desc" });
+  const orphanPagesSort = useTableSort(orphanGscPages, { key: "impressions", dir: "desc" });
+
   const perfPagesSort = useTableSort(
     perfFilteredPages,
     { key: "clicks", dir: "desc" },
@@ -3467,16 +3530,179 @@ export default function App() {
                       <div className="bg-red-50 border border-red-100 rounded-xl p-2"><AlertTriangle size={16} className="text-red-600" /></div>
                       <div>
                         <h2 className="text-sm font-bold text-gray-900">SEO issues</h2>
-                        <p className="text-xs text-gray-400">GA4 signals: low traffic, low engagement, &amp; pages whose title contains &quot;404&quot;.</p>
+                        <p className="text-xs text-gray-400">GA4 + GSC signals — surface what to fix, optimize, and rescue.</p>
                       </div>
                     </div>
-                    <div className="max-w-[220px] w-full min-w-[180px]">
-                      <Select value={selectedGA4} onChange={setSelectedGA4} options={ga4Properties} placeholder="Select GA4 Property" disabled={ga4Properties.length === 0} />
+                    <div className="flex gap-2 flex-wrap">
+                      <div className="max-w-[220px] w-full min-w-[180px]">
+                        <Select value={selectedGA4} onChange={setSelectedGA4} options={ga4Properties} placeholder="Select GA4 Property" disabled={ga4Properties.length === 0} />
+                      </div>
+                      <div className="max-w-[220px] w-full min-w-[180px]">
+                        <Select value={selectedGSC} onChange={setSelectedGSC} options={gscProperties} placeholder="Select GSC Property" disabled={gscProperties.length === 0} />
+                      </div>
                     </div>
                   </div>
                   <GA4FilterPanel filters={ga4Filters} setFilters={setGa4Filters} channelOptions={channelOptions} />
-                  {seoIssuesLoading && <Spinner />}
-                  {!seoIssuesLoading && (
+                  {(seoIssuesLoading || gscLoading) && <Spinner />}
+                  {!seoIssuesLoading && !gscLoading && (
+                    <>
+                    {/* Scorecards */}
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                      <KpiCard label="Total issues" value={totalSeoIssues.toLocaleString()} sub="across all signals" icon={AlertTriangle} />
+                      <KpiCard label="Striking distance" value={strikingDistanceQueries.length.toLocaleString()} sub="GSC pos 11–20" icon={TrendingUp} />
+                      <KpiCard label="Low CTR queries" value={lowCtrHighImpressions.length.toLocaleString()} sub="≥100 impr · CTR <2%" icon={MousePointerClick} />
+                      <KpiCard label="Orphan-ish pages" value={orphanGscPages.length.toLocaleString()} sub="impressions, no clicks" icon={Eye} />
+                      <KpiCard label="No GA4 traffic" value={seoNoTraffic.length.toLocaleString()} sub="pages with ~0 sessions" icon={Users} />
+                      <KpiCard label="404 in title" value={seo404Titles.length.toLocaleString()} sub="potential dead pages" icon={X} />
+                    </div>
+
+                    {/* Pies */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      <ChartCard title="Issue breakdown">
+                        <div className="flex gap-4 items-center">
+                          <ResponsiveContainer width="45%" height={210}>
+                            <PieChart>
+                              <Pie data={issueBreakdown} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} innerRadius={44} paddingAngle={3}>
+                                {issueBreakdown.map((d) => <Cell key={d.key} fill={d.color} />)}
+                              </Pie>
+                              <Tooltip {...chartTooltipStyle} />
+                            </PieChart>
+                          </ResponsiveContainer>
+                          <div className="flex-1 space-y-1.5">
+                            {issueBreakdown.map((d) => (
+                              <div key={d.key} className="flex items-center justify-between px-2.5 py-1.5 rounded-lg" style={{ backgroundColor: d.color + "14" }}>
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: d.color }} />
+                                  <span className="text-xs font-medium text-gray-700">{d.name}</span>
+                                </div>
+                                <span className="text-xs font-bold text-gray-900">{d.value.toLocaleString()}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </ChartCard>
+                      <ChartCard title="Query position health (GSC)">
+                        <div className="flex gap-4 items-center">
+                          <ResponsiveContainer width="45%" height={210}>
+                            <PieChart>
+                              <Pie data={queryHealthPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} innerRadius={44} paddingAngle={3}>
+                                {queryHealthPie.map((d) => <Cell key={d.key} fill={d.color} />)}
+                              </Pie>
+                              <Tooltip {...chartTooltipStyle} formatter={(v: number, n: string) => [v.toLocaleString() + " queries", n]} />
+                            </PieChart>
+                          </ResponsiveContainer>
+                          <div className="flex-1 space-y-1.5">
+                            {queryHealthPie.map((d) => (
+                              <div key={d.key} className="flex items-center justify-between px-2.5 py-1.5 rounded-lg" style={{ backgroundColor: d.color + "14" }}>
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: d.color }} />
+                                  <span className="text-xs font-medium text-gray-700">{d.name}</span>
+                                </div>
+                                <span className="text-xs font-bold text-gray-900">{d.value.toLocaleString()}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </ChartCard>
+                    </div>
+
+                    {/* GSC opportunity tables */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      <ChartCard title="Striking distance queries (pos 11–20)">
+                        <p className="text-[10px] text-gray-400 mb-2">Push these onto page 1 — small ranking gains, big traffic upside.</p>
+                        <ScrollTable>
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 z-10 bg-white shadow-sm">
+                              <tr className="border-b border-gray-100">
+                                <SortableTh label="Query" sortKey="query" sort={strikingSort.sort} onToggle={strikingSort.toggle} className="text-left py-2 text-[10px] text-gray-400 font-semibold" />
+                                <SortableTh label="Pos" sortKey="position" sort={strikingSort.sort} onToggle={strikingSort.toggle} className="text-right py-2 text-[10px] text-gray-400 font-semibold" />
+                                <SortableTh label="Impr." sortKey="impressions" sort={strikingSort.sort} onToggle={strikingSort.toggle} className="text-right py-2 text-[10px] text-gray-400 font-semibold" />
+                                <SortableTh label="Clicks" sortKey="clicks" sort={strikingSort.sort} onToggle={strikingSort.toggle} className="text-right py-2 text-[10px] text-gray-400 font-semibold" />
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {strikingSort.sorted.map((q, i) => (
+                                <tr key={i} className="border-b border-gray-50 hover:bg-blue-50/40">
+                                  <td className="py-1.5 pr-2 max-w-[220px] truncate text-gray-700" title={q.query}>{q.query}</td>
+                                  <td className="py-1.5 text-right"><PosBadge pos={q.position} /></td>
+                                  <td className="py-1.5 text-right tabular-nums text-gray-500">{q.impressions.toLocaleString()}</td>
+                                  <td className="py-1.5 text-right tabular-nums font-semibold text-gray-900">{q.clicks.toLocaleString()}</td>
+                                </tr>
+                              ))}
+                              {strikingSort.sorted.length === 0 && (
+                                <tr><td colSpan={4} className="py-3 text-center text-gray-400">No striking-distance queries — connect GSC or widen the date range.</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </ScrollTable>
+                      </ChartCard>
+                      <ChartCard title="High impressions, low CTR (rewrite titles & meta)">
+                        <p className="text-[10px] text-gray-400 mb-2">Ranking but not getting clicks — improve titles, meta, and rich results.</p>
+                        <ScrollTable>
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 z-10 bg-white shadow-sm">
+                              <tr className="border-b border-gray-100">
+                                <SortableTh label="Query" sortKey="query" sort={lowCtrSort.sort} onToggle={lowCtrSort.toggle} className="text-left py-2 text-[10px] text-gray-400 font-semibold" />
+                                <SortableTh label="Impr." sortKey="impressions" sort={lowCtrSort.sort} onToggle={lowCtrSort.toggle} className="text-right py-2 text-[10px] text-gray-400 font-semibold" />
+                                <SortableTh label="CTR" sortKey="ctr" sort={lowCtrSort.sort} onToggle={lowCtrSort.toggle} className="text-right py-2 text-[10px] text-gray-400 font-semibold" />
+                                <SortableTh label="Pos" sortKey="position" sort={lowCtrSort.sort} onToggle={lowCtrSort.toggle} className="text-right py-2 text-[10px] text-gray-400 font-semibold" />
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {lowCtrSort.sorted.map((q, i) => (
+                                <tr key={i} className="border-b border-gray-50 hover:bg-purple-50/40">
+                                  <td className="py-1.5 pr-2 max-w-[220px] truncate text-gray-700" title={q.query}>{q.query}</td>
+                                  <td className="py-1.5 text-right tabular-nums text-gray-900 font-semibold">{q.impressions.toLocaleString()}</td>
+                                  <td className="py-1.5 text-right tabular-nums text-purple-700 font-semibold">{(q.ctr * 100).toFixed(2)}%</td>
+                                  <td className="py-1.5 text-right"><PosBadge pos={q.position} /></td>
+                                </tr>
+                              ))}
+                              {lowCtrSort.sorted.length === 0 && (
+                                <tr><td colSpan={4} className="py-3 text-center text-gray-400">Nothing here — your CTR looks healthy.</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </ScrollTable>
+                      </ChartCard>
+                    </div>
+
+                    {/* Orphan pages (GSC) */}
+                    <ChartCard title="Pages with impressions but almost no clicks (GSC)">
+                      <p className="text-[10px] text-gray-400 mb-2">Visible in search but invisible to users — likely a ranking, snippet, or intent mismatch.</p>
+                      <ScrollTable>
+                        <table className="w-full text-xs">
+                          <thead className="sticky top-0 z-10 bg-white shadow-sm">
+                            <tr className="border-b border-gray-100">
+                              <SortableTh label="Page" sortKey="page" sort={orphanPagesSort.sort} onToggle={orphanPagesSort.toggle} className="text-left py-2 text-[10px] text-gray-400 font-semibold" />
+                              <SortableTh label="Impr." sortKey="impressions" sort={orphanPagesSort.sort} onToggle={orphanPagesSort.toggle} className="text-right py-2 text-[10px] text-gray-400 font-semibold" />
+                              <SortableTh label="Clicks" sortKey="clicks" sort={orphanPagesSort.sort} onToggle={orphanPagesSort.toggle} className="text-right py-2 text-[10px] text-gray-400 font-semibold" />
+                              <SortableTh label="CTR" sortKey="ctr" sort={orphanPagesSort.sort} onToggle={orphanPagesSort.toggle} className="text-right py-2 text-[10px] text-gray-400 font-semibold" />
+                              <SortableTh label="Avg Pos" sortKey="position" sort={orphanPagesSort.sort} onToggle={orphanPagesSort.toggle} className="text-right py-2 text-[10px] text-gray-400 font-semibold" />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {orphanPagesSort.sorted.map((p, i) => {
+                              let displayUrl = p.page;
+                              try { displayUrl = new URL(p.page).pathname || "/"; } catch {}
+                              return (
+                                <tr key={i} className="border-b border-gray-50 hover:bg-sky-50/40">
+                                  <td className="py-1.5 pr-2 max-w-[300px] truncate text-gray-700" title={p.page}>{displayUrl}</td>
+                                  <td className="py-1.5 text-right tabular-nums text-gray-900 font-semibold">{p.impressions.toLocaleString()}</td>
+                                  <td className="py-1.5 text-right tabular-nums text-gray-500">{p.clicks.toLocaleString()}</td>
+                                  <td className="py-1.5 text-right tabular-nums text-gray-500">{(p.ctr * 100).toFixed(2)}%</td>
+                                  <td className="py-1.5 text-right"><PosBadge pos={p.position} /></td>
+                                </tr>
+                              );
+                            })}
+                            {orphanPagesSort.sorted.length === 0 && (
+                              <tr><td colSpan={5} className="py-3 text-center text-gray-400">No orphan-style pages found in the selected window.</td></tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </ScrollTable>
+                    </ChartCard>
+
+                    {/* GA4 issue tables */}
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                       <ChartCard title="Pages with almost no sessions">
                         <ScrollTable>
@@ -3543,6 +3769,7 @@ export default function App() {
                         </ScrollTable>
                       </ChartCard>
                     </div>
+                    </>
                   )}
                 </section>
               </>
@@ -3625,7 +3852,6 @@ export default function App() {
                                   <SortableTh label="URL" sortKey="page" sort={perfPagesSort.sort} onToggle={perfPagesSort.toggle} className="pb-2 pr-2 font-medium" />
                                   <SortableTh label="Clicks" sortKey="clicks" sort={perfPagesSort.sort} onToggle={perfPagesSort.toggle} className="pb-2 pr-2 font-medium text-right" />
                                   <SortableTh label="Impr." sortKey="impressions" sort={perfPagesSort.sort} onToggle={perfPagesSort.toggle} className="pb-2 pr-2 font-medium text-right" />
-                                  <SortableTh label="Position" sortKey="position" sort={perfPagesSort.sort} onToggle={perfPagesSort.toggle} className="pb-2 pr-2 font-medium text-right" />
                                   <SortableTh label="Tier" sortKey="tier" sort={perfPagesSort.sort} onToggle={perfPagesSort.toggle} className="pb-2 font-medium" />
                                 </tr>
                               </thead>
