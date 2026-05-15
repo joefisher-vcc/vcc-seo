@@ -2259,24 +2259,41 @@ export default function App() {
 
 
   // ── Performance Analysis ───────────────────────────────────────────────────
-  const getPerf = (position: number): "high"|"med"|"low"|"opportunity" => {
-    if (position <= 5) return "high";
-    if (position <= 20) return "med";
-    if (position <= 80) return "low";
+  // URL performance bucketed by clicks
+  const getUrlPerf = (clicks: number): "high"|"med"|"low"|"opportunity" => {
+    if (clicks >= 20) return "high";
+    if (clicks >= 5) return "med";
+    if (clicks >= 1) return "low";
     return "opportunity";
   };
+  // Query performance bucketed by position
+  const getQueryPerf = (position: number): "high"|"med"|"low"|"opportunity" => {
+    if (position <= 5) return "high";
+    if (position <= 10) return "med";
+    if (position <= 20) return "low";
+    return "opportunity";
+  };
+  // Keep getPerf as alias (used in table tier badges)
+  const getPerf = getQueryPerf;
   const PERF_COLORS_MAP: Record<string, string> = {
     high: "#059669",
     med: "#d97706",
     low: "#dc2626",
     opportunity: "#2563eb"
   };
-  const PERF_LABELS: Record<string, string> = {
-    high: "High (Pos. 1–5)",
-    med: "Medium (Pos. 6–20)",
-    low: "Low (Pos. 21–80)",
-    opportunity: "Opportunity (Pos. 81–100)"
+  const URL_PERF_LABELS: Record<string, string> = {
+    high: "High (20+ clicks)",
+    med: "Medium (5–19 clicks)",
+    low: "Low (1–4 clicks)",
+    opportunity: "Opportunity (0 clicks)"
   };
+  const QUERY_PERF_LABELS: Record<string, string> = {
+    high: "High (Pos. 1–5)",
+    med: "Medium (Pos. 6–10)",
+    low: "Low (Pos. 11–20)",
+    opportunity: "Opportunity (Pos. 21–100)"
+  };
+  const PERF_LABELS = QUERY_PERF_LABELS;
   const PERF_BG: Record<string, string> = {
     high: "bg-emerald-100 text-emerald-800",
     med: "bg-amber-100 text-amber-800",
@@ -2284,31 +2301,31 @@ export default function App() {
     opportunity: "bg-blue-100 text-blue-800"
   };
 
-  // URL performance
+  // URL performance (bucketed by clicks)
   const perfUrlPieData = useMemo(() => {
     const counts = { high: 0, med: 0, low: 0, opportunity: 0 };
-    gscPages.forEach((p) => { counts[getPerf(p.position)]++; });
-    return (["high","med","low"] as const)
-      .map((k) => ({ name: PERF_LABELS[k], value: counts[k], key: k }))
+    gscPages.forEach((p) => { counts[getUrlPerf(p.clicks)]++; });
+    return (["high","med","low","opportunity"] as const)
+      .map((k) => ({ name: URL_PERF_LABELS[k], value: counts[k], key: k }))
       .filter((d) => d.value > 0);
   }, [gscPages]);
 
   const perfFilteredPages = useMemo(() =>
-    perfPieFilter ? gscPages.filter((p) => getPerf(p.position) === perfPieFilter) : gscPages,
+    perfPieFilter ? gscPages.filter((p) => getUrlPerf(p.clicks) === perfPieFilter) : gscPages,
     [gscPages, perfPieFilter]
   );
 
-  // Query performance
+  // Query performance (bucketed by position)
   const perfQueryPieData = useMemo(() => {
     const counts = { high: 0, med: 0, low: 0, opportunity: 0 };
-    gscOpportunityQueries.forEach((q) => { counts[getPerf(q.position)]++; });
-    return (["high","med","low"] as const)
-      .map((k) => ({ name: PERF_LABELS[k], value: counts[k], key: k }))
+    gscOpportunityQueries.forEach((q) => { counts[getQueryPerf(q.position)]++; });
+    return (["high","med","low","opportunity"] as const)
+      .map((k) => ({ name: QUERY_PERF_LABELS[k], value: counts[k], key: k }))
       .filter((d) => d.value > 0);
-  }, [gscQueries]);
+  }, [gscOpportunityQueries]);
 
   const perfFilteredQueries = useMemo(() =>
-    perfSubFilter ? gscOpportunityQueries.filter((q) => getPerf(q.position) === perfSubFilter as "high"|"med"|"low"|"opportunity") : gscOpportunityQueries,
+    perfSubFilter ? gscOpportunityQueries.filter((q) => getQueryPerf(q.position) === perfSubFilter as "high"|"med"|"low"|"opportunity") : gscOpportunityQueries,
     [gscOpportunityQueries, perfSubFilter]
   );
 
@@ -3368,7 +3385,7 @@ export default function App() {
                                 >
                                   <div className="flex items-center gap-2">
                                     <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: PERF_COLORS_MAP[d.key] }} />
-                                    <span className="text-xs font-medium text-gray-700">{PERF_LABELS[d.key]}</span>
+                                    <span className="text-xs font-medium text-gray-700">{URL_PERF_LABELS[d.key]}</span>
                                   </div>
                                   <span className="text-xs font-bold text-gray-900">{d.value.toLocaleString()} URLs</span>
                                 </button>
@@ -3380,7 +3397,7 @@ export default function App() {
                           </div>
                         </ChartCard>
 
-                        <ChartCard title={`URLs — ${perfPieFilter ? PERF_LABELS[perfPieFilter] : "All"} (${perfFilteredPages.length.toLocaleString()})`}>
+                        <ChartCard title={`URLs — ${perfPieFilter ? URL_PERF_LABELS[perfPieFilter] : "All"} (${perfFilteredPages.length.toLocaleString()})`}>
                           <div className="overflow-y-auto" style={{ maxHeight: 230 }}>
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 bg-white z-10">
@@ -3394,7 +3411,7 @@ export default function App() {
                               </thead>
                               <tbody>
                                 {perfFilteredPages.map((p, i) => {
-                                  const tier = getPerf(p.clicks);
+                                  const tier = getUrlPerf(p.clicks);
                                   let displayUrl = p.page;
                                   try { displayUrl = new URL(p.page).pathname || "/"; } catch {}
                                   return (
