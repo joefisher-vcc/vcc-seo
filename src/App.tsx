@@ -2259,37 +2259,56 @@ export default function App() {
 
 
   // ── Performance Analysis ───────────────────────────────────────────────────
-  const getPerf = (clicks: number): "high"|"med"|"low" =>
-    clicks >= 20 ? "high" : clicks >= 5 ? "med" : "low";
-  const PERF_COLORS_MAP: Record<string, string> = { high: "#059669", med: "#d97706", low: "#dc2626" };
-  const PERF_LABELS: Record<string, string> = { high: "High (20+ clicks)", med: "Medium (5–19)", low: "Low (<5)" };
-  const PERF_BG: Record<string, string> = { high: "bg-emerald-100 text-emerald-800", med: "bg-amber-100 text-amber-800", low: "bg-red-100 text-red-800" };
+  const getPerf = (position: number): "high"|"med"|"low"|"opportunity" => {
+    if (position <= 5) return "high";
+    if (position <= 20) return "med";
+    if (position <= 80) return "low";
+    return "opportunity";
+  };
+  const PERF_COLORS_MAP: Record<string, string> = {
+    high: "#059669",
+    med: "#d97706",
+    low: "#dc2626",
+    opportunity: "#2563eb"
+  };
+  const PERF_LABELS: Record<string, string> = {
+    high: "High (Pos. 1–5)",
+    med: "Medium (Pos. 6–20)",
+    low: "Low (Pos. 21–80)",
+    opportunity: "Opportunity (Pos. 81–100)"
+  };
+  const PERF_BG: Record<string, string> = {
+    high: "bg-emerald-100 text-emerald-800",
+    med: "bg-amber-100 text-amber-800",
+    low: "bg-red-100 text-red-800",
+    opportunity: "bg-blue-100 text-blue-800"
+  };
 
   // URL performance
   const perfUrlPieData = useMemo(() => {
-    const counts = { high: 0, med: 0, low: 0 };
-    gscPages.forEach((p) => { counts[getPerf(p.clicks)]++; });
+    const counts = { high: 0, med: 0, low: 0, opportunity: 0 };
+    gscPages.forEach((p) => { counts[getPerf(p.position)]++; });
     return (["high","med","low"] as const)
       .map((k) => ({ name: PERF_LABELS[k], value: counts[k], key: k }))
       .filter((d) => d.value > 0);
   }, [gscPages]);
 
   const perfFilteredPages = useMemo(() =>
-    perfPieFilter ? gscPages.filter((p) => getPerf(p.clicks) === perfPieFilter) : gscPages,
+    perfPieFilter ? gscPages.filter((p) => getPerf(p.position) === perfPieFilter) : gscPages,
     [gscPages, perfPieFilter]
   );
 
   // Query performance
   const perfQueryPieData = useMemo(() => {
-    const counts = { high: 0, med: 0, low: 0 };
-    gscOpportunityQueries.forEach((q) => { counts[getPerf(q.clicks)]++; });
+    const counts = { high: 0, med: 0, low: 0, opportunity: 0 };
+    gscOpportunityQueries.forEach((q) => { counts[getPerf(q.position)]++; });
     return (["high","med","low"] as const)
       .map((k) => ({ name: PERF_LABELS[k], value: counts[k], key: k }))
       .filter((d) => d.value > 0);
   }, [gscQueries]);
 
   const perfFilteredQueries = useMemo(() =>
-    perfSubFilter ? gscOpportunityQueries.filter((q) => getPerf(q.clicks) === perfSubFilter as "high"|"med"|"low") : gscOpportunityQueries,
+    perfSubFilter ? gscOpportunityQueries.filter((q) => getPerf(q.position) === perfSubFilter as "high"|"med"|"low"|"opportunity") : gscOpportunityQueries,
     [gscOpportunityQueries, perfSubFilter]
   );
 
@@ -3369,6 +3388,7 @@ export default function App() {
                                   <th className="pb-2 pr-2 font-medium">URL</th>
                                   <th className="pb-2 pr-2 font-medium text-right">Clicks</th>
                                   <th className="pb-2 pr-2 font-medium text-right">Impr.</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">Position</th>
                                   <th className="pb-2 font-medium">Tier</th>
                                 </tr>
                               </thead>
@@ -3398,7 +3418,7 @@ export default function App() {
 
                       {/* ── Element 2: Query performance ── */}
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        <ChartCard title="Query Performance by Clicks">
+                        <ChartCard title="Query Performance by Position">
                           <div className="flex gap-4 items-center">
                             <ResponsiveContainer width="45%" height={210}>
                               <PieChart>
@@ -3453,12 +3473,13 @@ export default function App() {
                                   <th className="pb-2 pr-2 font-medium">Query</th>
                                   <th className="pb-2 pr-2 font-medium text-right">Clicks</th>
                                   <th className="pb-2 pr-2 font-medium text-right">Impr.</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">Position</th>
                                   <th className="pb-2 font-medium">Tier</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {perfFilteredQueries.map((q, i) => {
-                                  const tier = getPerf(q.clicks);
+                                  const tier = getPerf(q.position);
                                   return (
                                     <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
                                       <td className="py-1.5 pr-2" style={{ maxWidth: 0, width: "52%" }}>
@@ -3466,6 +3487,7 @@ export default function App() {
                                       </td>
                                       <td className="py-1.5 pr-2 text-right text-gray-900 font-semibold tabular-nums">{q.clicks.toLocaleString()}</td>
                                       <td className="py-1.5 pr-2 text-right text-gray-500 tabular-nums">{q.impressions.toLocaleString()}</td>
+                                      <td className="py-1.5 pr-2 text-right text-gray-700 tabular-nums">{q.position.toFixed(1)}</td>
                                       <td className="py-1.5">
                                         <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${PERF_BG[tier]}`}>{tier}</span>
                                       </td>
