@@ -418,9 +418,9 @@ function ChartCard({ title, children, className = "" }: { title: string; childre
 }
 
 /** Scrollable table body area (~10 table rows visible). */
-function ScrollTable({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+function ScrollTable({ children, className = "", maxH }: { children: React.ReactNode; className?: string; maxH?: string }) {
   return (
-    <div className={`max-h-[17.5rem] overflow-x-auto overflow-y-auto rounded-xl border border-gray-50 ${className}`}>
+    <div className={`overflow-x-auto overflow-y-auto rounded-xl border border-gray-50 ${className}`} style={{ maxHeight: maxH ?? "17.5rem" }}>
       {children}
     </div>
   );
@@ -1579,8 +1579,16 @@ export default function App() {
   const [pageDrillPath, setPageDrillPath] = useState("");
   const [ga4TrendMetricFocus, setGa4TrendMetricFocus] = useState<MetricKey | null>(null);
   const [convEventName, setConvEventName] = useState("purchase");
+  const [convEventList, setConvEventList] = useState<string[]>([]);
+  const [convEventsLoading, setConvEventsLoading] = useState(false);
   const [convDaily, setConvDaily] = useState<{ date: string; count: number }[]>([]);
   const [convDailyCmp, setConvDailyCmp] = useState<{ date: string; count: number }[]>([]);
+  const [convByPage, setConvByPage] = useState<{ page: string; count: number; users: number }[]>([]);
+  const [convByDevice, setConvByDevice] = useState<{ device: string; count: number }[]>([]);
+  const [convByChannel, setConvByChannel] = useState<{ channel: string; count: number }[]>([]);
+  const [convByDayOfWeek, setConvByDayOfWeek] = useState<{ day: string; count: number }[]>([]);
+  const [convLowPages, setConvLowPages] = useState<{ page: string; sessions: number; eventCount: number; rate: number }[]>([]);
+  const [convAllEvents, setConvAllEvents] = useState<{ name: string; count: number }[]>([]);
   const [seoNoTraffic, setSeoNoTraffic] = useState<{ page: string; sessions: number }[]>([]);
   const [seoLowEngagement, setSeoLowEngagement] = useState<{ page: string; engagementRate: number; sessions: number }[]>([]);
   const [seo404Titles, setSeo404Titles] = useState<{ title: string; page: string; sessions: number }[]>([]);
@@ -2102,6 +2110,35 @@ export default function App() {
   const convEventNameRef = useRef(convEventName);
   convEventNameRef.current = convEventName;
 
+  const fetchConvEventList = useCallback(async () => {
+    if (!selectedGA4 || !accessToken) return;
+    setConvEventsLoading(true);
+    const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+    const base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
+    const { current: curWin } = ga4DateWindows(ga4FetchFilters);
+    try {
+      const res = await fetch(base, { method: "POST", headers, body: JSON.stringify({
+        dateRanges: [{ startDate: curWin.startDate, endDate: curWin.endDate }],
+        dimensions: [{ name: "eventName" }],
+        metrics: [{ name: "eventCount" }],
+        orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
+        limit: 100,
+      }) }).then((r) => r.json());
+      const rows: GA4ApiRow[] = res.rows ?? [];
+      const events = rows.map((r) => r.dimensionValues[0].value);
+      const allEvts = rows.map((r) => ({ name: r.dimensionValues[0].value, count: parseInt(r.metricValues[0].value, 10) }));
+      setConvEventList(events);
+      setConvAllEvents(allEvts);
+      if (events.length > 0 && !events.includes(convEventNameRef.current)) {
+        // auto-select first purchase-like event if present
+        const preferred = events.find((e) => e === "purchase" || e === "generate_lead" || e === "conversion");
+        if (preferred) setConvEventName(preferred);
+        else if (!convEventNameRef.current) setConvEventName(events[0]);
+      }
+    } catch {}
+    setConvEventsLoading(false);
+  }, [selectedGA4, accessToken, ga4FetchFilters]);
+
   const fetchConversions = useCallback(async () => {
     if (!selectedGA4 || !accessToken) return;
     setConvLoading(true);
@@ -2131,6 +2168,94 @@ export default function App() {
       const cmp = await fetch(base, { method: "POST", headers, body: JSON.stringify(cmpBody) }).then((r) => r.json());
       setConvDailyCmp(parse(cmp));
     } else setConvDailyCmp([]);
+
+    // Fetch supplemental data in parallel
+    try {
+      const [pageRes, deviceRes, channelRes, dowRes, lowRes] = await Promise.all([
+        // Pages with this event
+        fetch(base, { method: "POST", headers, body: JSON.stringify({
+          dateRanges: [{ startDate: curWin.startDate, endDate: curWin.endDate }],
+          dimensions: [{ name: "pagePathPlusQueryString" }],
+          metrics: [{ name: "eventCount" }, { name: "totalUsers" }],
+          ...eventFilter,
+          orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
+          limit: 50,
+        }) }).then((r) => r.json()),
+        // Device breakdown
+        fetch(base, { method: "POST", headers, body: JSON.stringify({
+          dateRanges: [{ startDate: curWin.startDate, endDate: curWin.endDate }],
+          dimensions: [{ name: "deviceCategory" }],
+          metrics: [{ name: "eventCount" }],
+          ...eventFilter,
+          limit: 10,
+        }) }).then((r) => r.json()),
+        // Channel breakdown
+        fetch(base, { method: "POST", headers, body: JSON.stringify({
+          dateRanges: [{ startDate: curWin.startDate, endDate: curWin.endDate }],
+          dimensions: [{ name: "sessionDefaultChannelGrouping" }],
+          metrics: [{ name: "eventCount" }],
+          ...eventFilter,
+          orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
+          limit: 10,
+        }) }).then((r) => r.json()),
+        // Day of week breakdown
+        fetch(base, { method: "POST", headers, body: JSON.stringify({
+          dateRanges: [{ startDate: curWin.startDate, endDate: curWin.endDate }],
+          dimensions: [{ name: "dayOfWeek" }],
+          metrics: [{ name: "eventCount" }],
+          ...eventFilter,
+          limit: 7,
+        }) }).then((r) => r.json()),
+        // Low conversion rate pages (sessions vs event count)
+        fetch(base, { method: "POST", headers, body: JSON.stringify({
+          dateRanges: [{ startDate: curWin.startDate, endDate: curWin.endDate }],
+          dimensions: [{ name: "pagePathPlusQueryString" }],
+          metrics: [{ name: "sessions" }, { name: "eventCount" }],
+          ...eventFilter,
+          orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+          limit: 100,
+        }) }).then((r) => r.json()),
+      ]);
+
+      setConvByPage(
+        ((pageRes.rows as GA4ApiRow[]) ?? []).map((r) => ({
+          page: r.dimensionValues[0].value,
+          count: parseInt(r.metricValues[0].value, 10),
+          users: parseInt(r.metricValues[1].value, 10),
+        })),
+      );
+      setConvByDevice(
+        ((deviceRes.rows as GA4ApiRow[]) ?? []).map((r) => ({
+          device: r.dimensionValues[0].value,
+          count: parseInt(r.metricValues[0].value, 10),
+        })),
+      );
+      setConvByChannel(
+        ((channelRes.rows as GA4ApiRow[]) ?? []).map((r) => ({
+          channel: r.dimensionValues[0].value,
+          count: parseInt(r.metricValues[0].value, 10),
+        })),
+      );
+      const DOW_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      setConvByDayOfWeek(
+        ((dowRes.rows as GA4ApiRow[]) ?? [])
+          .map((r) => ({ day: DOW_NAMES[parseInt(r.dimensionValues[0].value, 10)] ?? r.dimensionValues[0].value, count: parseInt(r.metricValues[0].value, 10), _idx: parseInt(r.dimensionValues[0].value, 10) }))
+          .sort((a, b) => a._idx - b._idx),
+      );
+      setConvLowPages(
+        ((lowRes.rows as GA4ApiRow[]) ?? [])
+          .map((r) => ({
+            page: r.dimensionValues[0].value,
+            sessions: parseInt(r.metricValues[0].value, 10),
+            eventCount: parseInt(r.metricValues[1].value, 10),
+            rate: parseInt(r.metricValues[0].value, 10) > 0 ? parseInt(r.metricValues[1].value, 10) / parseInt(r.metricValues[0].value, 10) : 0,
+          }))
+          .filter((r) => r.sessions >= 20)
+          .sort((a, b) => a.rate - b.rate)
+          .slice(0, 20),
+      );
+    } catch {}
+
     setConvLoading(false);
   }, [selectedGA4, accessToken, ga4FetchFilters]);
 
@@ -2190,7 +2315,7 @@ export default function App() {
     setSeoIssuesLoading(false);
   }, [selectedGA4, accessToken, ga4FetchFilters]);
 
-  useEffect(() => { if (activeView === "conversions" && selectedGA4 && accessToken) void fetchConversions(); }, [activeView, selectedGA4, accessToken, fetchConversions]);
+  useEffect(() => { if (activeView === "conversions" && selectedGA4 && accessToken) { void fetchConvEventList(); void fetchConversions(); } }, [activeView, selectedGA4, accessToken, fetchConversions, fetchConvEventList]);
 
   useEffect(() => {
     if (activeView !== "conversions" || !selectedGA4 || !accessToken) return;
@@ -3461,17 +3586,83 @@ export default function App() {
                   </div>
                   <GA4FilterPanel filters={ga4Filters} setFilters={setGa4Filters} channelOptions={channelOptions} />
                   <div className="flex flex-wrap items-end gap-3">
-                    <div className="min-w-[200px]">
-                      <label className="block text-xs text-gray-500 mb-1 font-medium">Event name</label>
-                      <TextInput value={convEventName} onChange={setConvEventName} placeholder="e.g. purchase, generate_lead" />
+                    <div className="min-w-[260px]">
+                      <label className="block text-xs text-gray-500 mb-1 font-medium">Event name {convEventsLoading && <span className="text-gray-300 ml-1">loading…</span>}</label>
+                      {convEventList.length > 0 ? (
+                        <Select
+                          value={convEventName}
+                          onChange={(v) => { setConvEventName(v); }}
+                          options={convEventList.map((e) => ({ value: e, label: e }))}
+                          placeholder="Select an event"
+                        />
+                      ) : (
+                        <TextInput value={convEventName} onChange={setConvEventName} placeholder="e.g. purchase, generate_lead" />
+                      )}
                     </div>
                     <button type="button" onClick={() => void fetchConversions()} className="px-4 py-2 rounded-xl bg-purple-700 text-white text-sm font-semibold hover:bg-purple-800">Update</button>
                   </div>
+
+                  {/* All events comparison table */}
+                  {convAllEvents.length > 0 && (
+                    <ChartCard title="All events overview — pick one to analyse">
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+                        <ScrollTable maxH="220px">
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 z-10 bg-white shadow-sm">
+                              <tr className="border-b border-gray-100">
+                                <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Event</th>
+                                <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Count</th>
+                                <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Share</th>
+                                <th className="text-left py-2 text-gray-400 font-semibold text-[10px]"></th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {convAllEvents.slice(0, 15).map((e) => {
+                                const total = convAllEvents.reduce((s, x) => s + x.count, 0);
+                                const pct = total > 0 ? (e.count / total * 100).toFixed(1) : "0.0";
+                                return (
+                                  <tr key={e.name} className={`border-b border-gray-50 cursor-pointer hover:bg-emerald-50 transition-colors ${convEventName === e.name ? "bg-emerald-50" : ""}`}
+                                    onClick={() => { setConvEventName(e.name); void fetchConversions(); }}>
+                                    <td className="py-1.5 font-medium text-gray-700 max-w-[160px] truncate">{e.name}</td>
+                                    <td className="py-1.5 font-semibold">{e.count.toLocaleString()}</td>
+                                    <td className="py-1.5 text-gray-400">{pct}%</td>
+                                    <td className="py-1.5"><div className="h-1.5 rounded-full bg-emerald-100 w-20 overflow-hidden"><div className="h-full bg-emerald-500 rounded-full" style={{ width: `${pct}%` }} /></div></td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </ScrollTable>
+                        <ResponsiveContainer width="100%" height={210}>
+                          <PieChart>
+                            <Pie data={convAllEvents.slice(0, 8).map((e, i) => ({ name: e.name, value: e.count, fill: ["#059669","#0ea5e9","#8b5cf6","#f59e0b","#ef4444","#10b981","#6366f1","#f97316"][i] }))}
+                              dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={85} innerRadius={40} paddingAngle={2}>
+                              {convAllEvents.slice(0, 8).map((_, i) => (
+                                <Cell key={i} fill={["#059669","#0ea5e9","#8b5cf6","#f59e0b","#ef4444","#10b981","#6366f1","#f97316"][i]} />
+                              ))}
+                            </Pie>
+                            <Tooltip {...chartTooltipStyle} />
+                            <Legend wrapperStyle={{ fontSize: 10 }} />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </ChartCard>
+                  )}
+
                   {convLoading && convDaily.length === 0 && <Spinner />}
                   {convDaily.length > 0 && (
                     <div className={`space-y-4 ${convLoading ? "opacity-60" : ""}`}>
                       <ComparisonBanner days={parseInt(ga4FetchFilters.dateRange, 10) || 28} mode={ga4Filters.comparison} rangeHint={ga4BannerHint} />
-                      <ChartCard title={`Event: ${convEventName.trim() || "purchase"}`}>
+
+                      {/* KPI summary row */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <KpiCard label="Total events" value={convDaily.reduce((s, r) => s + r.count, 0).toLocaleString()} sub={`${convEventName || "purchase"}`} icon={ShoppingCart} />
+                        <KpiCard label="Daily avg" value={convDaily.length > 0 ? Math.round(convDaily.reduce((s, r) => s + r.count, 0) / convDaily.length).toLocaleString() : "—"} sub="events/day" icon={TrendingUp} />
+                        <KpiCard label="Best day" value={convDaily.length > 0 ? convDaily.reduce((best, r) => r.count > best.count ? r : best).count.toLocaleString() : "—"} sub={convDaily.length > 0 ? convDaily.reduce((best, r) => r.count > best.count ? r : best).date : ""} icon={TrendingUp} />
+                        <KpiCard label="Pages tracked" value={convByPage.length.toLocaleString()} sub="pages with event" icon={Eye} />
+                      </div>
+
+                      <ChartCard title={`Event trend: ${convEventName.trim() || "purchase"}`}>
                         <ResponsiveContainer width="100%" height={260}>
                           <LineChart data={convDaily.map((r, i) => {
                             const row: Record<string, string | number> = { date: r.date, count: r.count };
@@ -3489,6 +3680,149 @@ export default function App() {
                           </LineChart>
                         </ResponsiveContainer>
                       </ChartCard>
+
+                      {/* Device + Channel pies */}
+                      {(convByDevice.length > 0 || convByChannel.length > 0) && (
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                          {convByDevice.length > 0 && (
+                            <ChartCard title="Events by device">
+                              <div className="flex gap-4 items-center">
+                                <ResponsiveContainer width="50%" height={180}>
+                                  <PieChart>
+                                    <Pie data={convByDevice.map((d, i) => ({ name: d.device, value: d.count, fill: ["#059669","#0ea5e9","#8b5cf6"][i] }))}
+                                      dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} innerRadius={35} paddingAngle={3}>
+                                      {convByDevice.map((_, i) => <Cell key={i} fill={["#059669","#0ea5e9","#8b5cf6"][i]} />)}
+                                    </Pie>
+                                    <Tooltip {...chartTooltipStyle} />
+                                  </PieChart>
+                                </ResponsiveContainer>
+                                <div className="flex-1 space-y-1.5">
+                                  {convByDevice.map((d, i) => {
+                                    const total = convByDevice.reduce((s, x) => s + x.count, 0);
+                                    return (
+                                      <div key={d.device} className="flex items-center justify-between px-2.5 py-1.5 rounded-lg" style={{ backgroundColor: ["#05966914","#0ea5e914","#8b5cf614"][i] }}>
+                                        <div className="flex items-center gap-2">
+                                          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: ["#059669","#0ea5e9","#8b5cf6"][i] }} />
+                                          <span className="text-xs font-medium text-gray-700 capitalize">{d.device}</span>
+                                        </div>
+                                        <span className="text-xs font-bold">{total > 0 ? (d.count/total*100).toFixed(1) : 0}%</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </ChartCard>
+                          )}
+                          {convByChannel.length > 0 && (
+                            <ChartCard title="Events by channel">
+                              <ResponsiveContainer width="100%" height={180}>
+                                <BarChart data={convByChannel} layout="vertical" margin={{ left: 8, right: 16, top: 4, bottom: 4 }}>
+                                  <XAxis type="number" tick={{ fontSize: 9, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
+                                  <YAxis type="category" dataKey="channel" tick={{ fontSize: 9, fill: "#6b7280" }} axisLine={false} tickLine={false} width={90} />
+                                  <Tooltip {...chartTooltipStyle} />
+                                  <Bar dataKey="count" name="Events" radius={[0,4,4,0]}>
+                                    {convByChannel.map((_, i) => <Cell key={i} fill={`hsl(${160 + i * 25}, 65%, ${45 + i * 3}%)`} />)}
+                                  </Bar>
+                                </BarChart>
+                              </ResponsiveContainer>
+                            </ChartCard>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Day of week heatmap */}
+                      {convByDayOfWeek.length > 0 && (
+                        <ChartCard title="Events by day of week">
+                          <ResponsiveContainer width="100%" height={160}>
+                            <BarChart data={convByDayOfWeek} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#ecfdf5" vertical={false} />
+                              <XAxis dataKey="day" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
+                              <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={40} />
+                              <Tooltip {...chartTooltipStyle} />
+                              <Bar dataKey="count" name="Events" radius={[4,4,0,0]}>
+                                {convByDayOfWeek.map((d, i) => {
+                                  const max = Math.max(...convByDayOfWeek.map((x) => x.count));
+                                  const intensity = max > 0 ? d.count / max : 0;
+                                  return <Cell key={i} fill={`rgba(5, 150, 105, ${0.25 + intensity * 0.75})`} />;
+                                })}
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </ChartCard>
+                      )}
+
+                      {/* Top pages with event */}
+                      {convByPage.length > 0 && (
+                        <ChartCard title={`Top pages firing "${convEventName || "purchase"}"`}>
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            <ScrollTable maxH="260px">
+                              <table className="w-full text-xs">
+                                <thead className="sticky top-0 z-10 bg-white shadow-sm">
+                                  <tr className="border-b border-gray-100">
+                                    <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Page</th>
+                                    <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Events</th>
+                                    <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Users</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {convByPage.slice(0, 20).map((r) => (
+                                    <tr key={r.page} className="border-b border-gray-50">
+                                      <td className="py-1.5 max-w-[180px] truncate text-gray-600" title={r.page}>{r.page}</td>
+                                      <td className="py-1.5 font-semibold text-emerald-700">{r.count.toLocaleString()}</td>
+                                      <td className="py-1.5 text-gray-400">{r.users.toLocaleString()}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </ScrollTable>
+                            <ResponsiveContainer width="100%" height={260}>
+                              <BarChart data={convByPage.slice(0, 10)} layout="vertical" margin={{ left: 8, right: 16, top: 4, bottom: 4 }}>
+                                <XAxis type="number" tick={{ fontSize: 9, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
+                                <YAxis type="category" dataKey="page" tick={{ fontSize: 8, fill: "#6b7280" }} axisLine={false} tickLine={false} width={100}
+                                  tickFormatter={(v: string) => v.length > 18 ? v.slice(0, 18) + "…" : v} />
+                                <Tooltip {...chartTooltipStyle} />
+                                <Bar dataKey="count" name="Events" fill="#059669" radius={[0,4,4,0]} />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </ChartCard>
+                      )}
+
+                      {/* Pages with low conversion rate — opportunity table */}
+                      {convLowPages.length > 0 && (
+                        <ChartCard title={`⚠️ Pages with low "${convEventName || "purchase"}" rate — fix opportunities`}>
+                          <p className="text-xs text-gray-400 mb-3">Pages with ≥20 sessions but low event-to-session rate. These are your biggest conversion leakage points.</p>
+                          <ScrollTable maxH="240px">
+                            <table className="w-full text-xs">
+                              <thead className="sticky top-0 z-10 bg-white shadow-sm">
+                                <tr className="border-b border-gray-100">
+                                  <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Page</th>
+                                  <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Sessions</th>
+                                  <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Events</th>
+                                  <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Rate</th>
+                                  <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Signal</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {convLowPages.map((r) => (
+                                  <tr key={r.page} className="border-b border-gray-50">
+                                    <td className="py-1.5 max-w-[200px] truncate text-gray-600" title={r.page}>{r.page}</td>
+                                    <td className="py-1.5">{r.sessions.toLocaleString()}</td>
+                                    <td className="py-1.5">{r.eventCount.toLocaleString()}</td>
+                                    <td className="py-1.5 font-semibold text-red-600">{(r.rate * 100).toFixed(2)}%</td>
+                                    <td className="py-1.5">
+                                      <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${r.rate < 0.01 ? "bg-red-50 text-red-600" : r.rate < 0.03 ? "bg-amber-50 text-amber-600" : "bg-yellow-50 text-yellow-600"}`}>
+                                        {r.rate < 0.01 ? "Critical" : r.rate < 0.03 ? "Low" : "Below avg"}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </ScrollTable>
+                        </ChartCard>
+                      )}
+
                       <ChartCard title="Daily counts (table)">
                         <ScrollTable>
                           <table className="w-full text-xs">
