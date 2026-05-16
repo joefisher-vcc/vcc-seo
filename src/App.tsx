@@ -1545,6 +1545,7 @@ export default function App() {
   const [gscOpportunityQueries, setGscOpportunityQueries]     = useState<QueryRow[]>([]);
   const [gscOpportunityQueriesCmp, setGscOpportunityQueriesCmp] = useState<QueryRow[]>([]);
   const [gscPages, setGscPages]             = useState<PagePerfRow[]>([]);
+  const [gscBuriedPageQueries, setGscBuriedPageQueries] = useState<{ page: string; query: string; impressions: number; clicks: number; position: number }[]>([]);
   const [oppSort, setOppSort] = useState<{ col: OppSortCol; dir: SortDir }>({ col: "impressions", dir: "desc" });
   const [gscDevices, setGscDevices]       = useState<DeviceRow[]>([]);
   const [gscCountries, setGscCountries]   = useState<string[]>([]);
@@ -1993,6 +1994,7 @@ export default function App() {
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["device"], rowLimit: 10, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["country"], rowLimit: 100, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["page"], rowLimit: 1000, ...singleFilter }) }),
+      fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["page", "query"], rowLimit: 5000, ...singleFilter }) }),
       ...(cmpRange ? [
         fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: ["date"], rowLimit: cmpDaySpan, ...singleFilter }) }),
         fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: [queryDim], rowLimit: 500, ...singleFilter }) }),
@@ -2023,6 +2025,7 @@ export default function App() {
     const deviceData   = jsons[idx++];
     const countryData  = jsons[idx++];
     const pageData     = jsons[idx++];
+    const buriedPageQueryData = jsons[idx++];
     const cmpDailyGsc   = cmpRange ? jsons[idx++] : null;
     const cmpQueryData  = cmpRange ? jsons[idx++] : null;
     const cmpOpportunityQueryData = cmpRange ? jsons[idx++] : null;
@@ -2074,6 +2077,21 @@ export default function App() {
     setGscCountryRows(parseCountryRows(countryData));
     setGscCountryRowsCmp(cmpCountryData ? parseCountryRows(cmpCountryData) : []);
     setGscPages((pageData?.rows as GSCApiRow[])?.map((r) => ({ page: r.keys[0], clicks: Math.round(r.clicks), impressions: Math.round(r.impressions), ctr: r.ctr, position: r.position })) ?? []);
+
+    // Buried: URLs with 0 clicks paired with queries at position 50+
+    setGscBuriedPageQueries(
+      ((buriedPageQueryData?.rows as GSCApiRow[]) ?? [])
+        .filter((r) => Math.round(r.clicks) === 0 && r.position >= 50 && Math.round(r.impressions) >= 1)
+        .map((r) => ({
+          page:        r.keys[0],
+          query:       r.keys[1],
+          impressions: Math.round(r.impressions),
+          clicks:      Math.round(r.clicks),
+          position:    r.position,
+        }))
+        .sort((a, b) => b.impressions - a.impressions)
+        .slice(0, 500),
+    );
 
     // Multi-series
     if (needsSeries) {
@@ -2685,6 +2703,31 @@ export default function App() {
       .sort((a, b) => b.impressions - a.impressions)
       .slice(0, 100);
   }, [gscPages]);
+
+  // Buried URLs: group page+query rows by page so we can show queries inline
+  const [buriedSortCol, setBuriedSortCol] = useState<"impressions" | "queries" | "position">("impressions");
+  const [buriedSortDir, setBuriedSortDir] = useState<"asc" | "desc">("desc");
+  const [buriedExpandedPage, setBuriedExpandedPage] = useState<string | null>(null);
+  const buriedByPage = useMemo(() => {
+    const map = new Map<string, { page: string; totalImpressions: number; queries: { query: string; impressions: number; position: number }[] }>();
+    gscBuriedPageQueries.forEach((r) => {
+      if (!map.has(r.page)) map.set(r.page, { page: r.page, totalImpressions: 0, queries: [] });
+      const entry = map.get(r.page)!;
+      entry.totalImpressions += r.impressions;
+      entry.queries.push({ query: r.query, impressions: r.impressions, position: r.position });
+    });
+    const rows = [...map.values()].map((e) => ({
+      ...e,
+      avgPosition: e.queries.reduce((s, q) => s + q.position, 0) / (e.queries.length || 1),
+      queries: e.queries.sort((a, b) => b.impressions - a.impressions),
+    }));
+    return rows.sort((a, b) => {
+      const dir = buriedSortDir === "desc" ? -1 : 1;
+      if (buriedSortCol === "impressions") return dir * (a.totalImpressions - b.totalImpressions);
+      if (buriedSortCol === "queries") return dir * (a.queries.length - b.queries.length);
+      return dir * (a.avgPosition - b.avgPosition);
+    });
+  }, [gscBuriedPageQueries, buriedSortCol, buriedSortDir]);
   const queryHealthBuckets = useMemo(() => {
     const b = { top3: 0, top10: 0, striking: 0, deep: 0 };
     gscOpportunityQueries.forEach((q) => {
@@ -3562,6 +3605,89 @@ export default function App() {
 
                   {!gscLoading && selectedGSC && gscOpportunityQueries.length === 0 && (
                     <p className="text-sm text-gray-400 py-4">No query data for this property / filter combination.</p>
+                  )}
+
+                  {/* ── Buried URLs: 0 clicks + position 50+ queries ── */}
+                  {(buriedByPage.length > 0 || gscLoading) && (
+                    <div className={`space-y-3 transition-opacity duration-200 ${gscLoading ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
+                      <ChartCard title="Buried pages — 0 clicks with queries stuck at position 50+">
+                        <p className="text-xs text-gray-400 mb-3">
+                          URLs getting impressions but <strong>zero clicks</strong> from queries ranked at position 50 or deeper. Click a row to expand its queries. These pages exist in Google's index but are effectively invisible — consolidate, improve, or redirect.
+                        </p>
+                        <div className="flex items-center gap-3 mb-3 text-xs text-gray-500">
+                          <span className="font-medium">{buriedByPage.length} URLs</span>
+                          <span>·</span>
+                          <span>{gscBuriedPageQueries.length} buried query signals</span>
+                          <span className="ml-auto flex items-center gap-1.5">
+                            Sort:
+                            {(["impressions", "queries", "position"] as const).map((col) => (
+                              <button key={col} type="button"
+                                onClick={() => { if (buriedSortCol === col) setBuriedSortDir((d) => d === "desc" ? "asc" : "desc"); else { setBuriedSortCol(col); setBuriedSortDir("desc"); } }}
+                                className={`px-2 py-0.5 rounded-lg capitalize transition-colors ${buriedSortCol === col ? "bg-amber-100 text-amber-700 font-semibold" : "bg-gray-50 text-gray-400 hover:bg-gray-100"}`}>
+                                {col} {buriedSortCol === col ? (buriedSortDir === "desc" ? "↓" : "↑") : ""}
+                              </button>
+                            ))}
+                          </span>
+                        </div>
+                        <ScrollTable maxH="360px">
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 z-10 bg-white shadow-sm">
+                              <tr className="border-b border-gray-100">
+                                <th className="text-left py-2 text-gray-400 font-semibold text-[10px] pr-3">URL</th>
+                                <th className="text-left py-2 text-gray-400 font-semibold text-[10px] pr-3">Buried queries</th>
+                                <th className="text-left py-2 text-gray-400 font-semibold text-[10px] pr-3">Total impr.</th>
+                                <th className="text-left py-2 text-gray-400 font-semibold text-[10px] pr-3">Avg pos.</th>
+                                <th className="text-left py-2 text-gray-400 font-semibold text-[10px]">Signal</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {buriedByPage.slice(0, 100).map((row) => {
+                                const isExpanded = buriedExpandedPage === row.page;
+                                return (
+                                  <>
+                                    <tr key={row.page}
+                                      className="border-b border-gray-50 cursor-pointer hover:bg-amber-50/40 transition-colors"
+                                      onClick={() => setBuriedExpandedPage(isExpanded ? null : row.page)}>
+                                      <td className="py-2 pr-3">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className={`text-[10px] transition-transform ${isExpanded ? "rotate-90" : ""}`}>▶</span>
+                                          <span className="max-w-[220px] truncate text-gray-700 font-medium" title={row.page}>{row.page}</span>
+                                        </div>
+                                      </td>
+                                      <td className="py-2 pr-3">
+                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 font-semibold">{row.queries.length}</span>
+                                      </td>
+                                      <td className="py-2 pr-3 font-medium">{row.totalImpressions.toLocaleString()}</td>
+                                      <td className="py-2 pr-3">
+                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-50 text-red-600 font-semibold text-[10px]">
+                                          {row.avgPosition.toFixed(0)}
+                                        </span>
+                                      </td>
+                                      <td className="py-2">
+                                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${row.totalImpressions >= 100 ? "bg-red-50 text-red-600" : row.totalImpressions >= 20 ? "bg-amber-50 text-amber-600" : "bg-gray-50 text-gray-400"}`}>
+                                          {row.totalImpressions >= 100 ? "High waste" : row.totalImpressions >= 20 ? "Moderate" : "Low"}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                    {isExpanded && row.queries.map((q) => (
+                                      <tr key={`${row.page}__${q.query}`} className="border-b border-gray-50 bg-amber-50/20">
+                                        <td className="py-1.5 pl-6 pr-3 text-gray-400 italic max-w-[220px] truncate" title={q.query}>↳ {q.query}</td>
+                                        <td className="py-1.5 pr-3 text-gray-300">—</td>
+                                        <td className="py-1.5 pr-3 text-gray-500">{q.impressions.toLocaleString()}</td>
+                                        <td className="py-1.5 pr-3">
+                                          <span className="text-[10px] text-red-400 font-medium">{q.position.toFixed(0)}</span>
+                                        </td>
+                                        <td className="py-1.5" />
+                                      </tr>
+                                    ))}
+                                  </>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </ScrollTable>
+                      </ChartCard>
+                    </div>
                   )}
                 </section>
               </>
