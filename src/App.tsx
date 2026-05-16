@@ -1994,7 +1994,7 @@ export default function App() {
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["device"], rowLimit: 10, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["country"], rowLimit: 100, ...singleFilter }) }),
       fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["page"], rowLimit: 1000, ...singleFilter }) }),
-      fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["page", "query"], rowLimit: 5000, ...singleFilter }) }),
+      fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate, endDate, dimensions: ["page", "query"], rowLimit: 25000, ...singleFilter }) }),
       ...(cmpRange ? [
         fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: ["date"], rowLimit: cmpDaySpan, ...singleFilter }) }),
         fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: [queryDim], rowLimit: 500, ...singleFilter }) }),
@@ -2076,13 +2076,44 @@ export default function App() {
       })) ?? [];
     setGscCountryRows(parseCountryRows(countryData));
     setGscCountryRowsCmp(cmpCountryData ? parseCountryRows(cmpCountryData) : []);
-    setGscPages((pageData?.rows as GSCApiRow[])?.map((r) => ({ page: r.keys[0], clicks: Math.round(r.clicks), impressions: Math.round(r.impressions), ctr: r.ctr, position: r.position })) ?? []);
+    // Build a page click lookup from pageData
+    const pageClickMap = new Map<string, number>();
+    ((pageData?.rows as GSCApiRow[]) ?? []).forEach((r) => pageClickMap.set(r.keys[0], Math.round(r.clicks)));
+    setGscPages(((pageData?.rows as GSCApiRow[]) ?? []).map((r) => ({ page: r.keys[0], clicks: Math.round(r.clicks), impressions: Math.round(r.impressions), ctr: r.ctr, position: r.position })));
 
-    // Buried: URLs with 0 clicks paired with queries at position 50+
+    // Buried: pages with <5 total clicks — pull their queries from the page+query fetch, filter pos 50+
+    // The page+query fetch (25k rows) is sorted by impressions desc by GSC, so high-traffic pages dominate.
+    // We use it where available, then do targeted per-page fetches for any low-click pages still missing.
+    const lowClickPages = ((pageData?.rows as GSCApiRow[]) ?? [])
+      .filter((r) => Math.round(r.clicks) < 5)
+      .map((r) => r.keys[0])
+      .slice(0, 100); // cap at 100 pages
+
+    // First pass: extract from the bulk page+query fetch
+    const bulkRows: GSCApiRow[] = buriedPageQueryData?.rows ?? [];
+    const coveredPages = new Set(bulkRows.map((r: GSCApiRow) => r.keys[0]));
+    const missingPages = lowClickPages.filter((p) => !coveredPages.has(p)).slice(0, 40);
+
+    // Second pass: fetch queries for pages not represented in bulk data
+    let extraRows: GSCApiRow[] = [];
+    if (missingPages.length > 0) {
+      const extraFetches = missingPages.map((page) =>
+        fetch(base, { method: "POST", headers, body: JSON.stringify({
+          startDate, endDate,
+          dimensions: ["page", "query"],
+          rowLimit: 200,
+          dimensionFilterGroups: [{ filters: [{ dimension: "page", operator: "equals", expression: page }] }],
+        }) }).then((r) => r.json()).catch(() => ({ rows: [] }))
+      );
+      const extraJsons = await Promise.all(extraFetches);
+      extraRows = extraJsons.flatMap((j) => j.rows ?? []);
+    }
+
+    const allPageQueryRows: GSCApiRow[] = [...bulkRows, ...extraRows];
     setGscBuriedPageQueries(
-      ((buriedPageQueryData?.rows as GSCApiRow[]) ?? [])
-        .filter((r) => Math.round(r.clicks) === 0 && r.position >= 50 && Math.round(r.impressions) >= 1)
-        .map((r) => ({
+      allPageQueryRows
+        .filter((r: GSCApiRow) => r.position >= 50 && Math.round(r.impressions) >= 1 && (pageClickMap.get(r.keys[0]) ?? 0) < 5)
+        .map((r: GSCApiRow) => ({
           page:        r.keys[0],
           query:       r.keys[1],
           impressions: Math.round(r.impressions),
@@ -2090,7 +2121,7 @@ export default function App() {
           position:    r.position,
         }))
         .sort((a, b) => b.impressions - a.impressions)
-        .slice(0, 500),
+        .slice(0, 5000),
     );
 
     // Multi-series
@@ -3612,7 +3643,7 @@ export default function App() {
                     <div className={`space-y-3 transition-opacity duration-200 ${gscLoading ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
                       <ChartCard title="Buried pages — 0 clicks with queries stuck at position 50+">
                         <p className="text-xs text-gray-400 mb-3">
-                          URLs getting impressions but <strong>zero clicks</strong> from queries ranked at position 50 or deeper. Click a row to expand its queries. These pages exist in Google's index but are effectively invisible — consolidate, improve, or redirect.
+                          URLs with <strong>fewer than 5 total clicks</strong> that have queries ranked at position 50 or deeper. Click any row to expand its queries. These pages exist in Google's index but are effectively invisible — consolidate, improve, or redirect.
                         </p>
                         <div className="flex items-center gap-3 mb-3 text-xs text-gray-500">
                           <span className="font-medium">{buriedByPage.length} URLs</span>
