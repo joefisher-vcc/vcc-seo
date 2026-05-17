@@ -1556,24 +1556,24 @@ export default function App() {
   const [gscLoading, setGscLoading]       = useState(false);
 
   const [ga4Filters, setGa4Filters] = useState<GA4Filters>({
-    dateRange: "28", metrics: ["users"], channelFilter: [], deviceFilter: [], comparison: "none",
+    dateRange: "28", metrics: ["users"], channelFilter: [], deviceFilter: [], comparison: "prevYear",
   });
   const [gscFilters, setGscFilters] = useState<GSCFilters>({
     dateRange: "28", dimension: "query", queryFilter: "", queryFilterMode: "contains",
     countryFilter: [], deviceFilter: [],
     minClicks: "", minImpressions: "", minCtr: "", minPosition: "", maxPosition: "",
-    sortBy: "clicks", sortDir: "desc", comparison: "none",
+    sortBy: "clicks", sortDir: "desc", comparison: "prevYear",
   });
 
   // Debounced versions of filters that actually trigger API fetches
   const [ga4FetchFilters, setGa4FetchFilters] = useState<GA4Filters>({
-    dateRange: "28", metrics: ["users"], channelFilter: [], deviceFilter: [], comparison: "none",
+    dateRange: "28", metrics: ["users"], channelFilter: [], deviceFilter: [], comparison: "prevYear",
   });
   const [gscFetchFilters, setGscFetchFilters] = useState<GSCFilters>({
     dateRange: "28", dimension: "query", queryFilter: "", queryFilterMode: "contains",
     countryFilter: [], deviceFilter: [],
     minClicks: "", minImpressions: "", minCtr: "", minPosition: "", maxPosition: "",
-    sortBy: "clicks", sortDir: "desc", comparison: "none",
+    sortBy: "clicks", sortDir: "desc", comparison: "prevYear",
   });
 
   /** When set, GA4 + GSC requests are scoped to this page path (contains match). */
@@ -1653,6 +1653,9 @@ export default function App() {
     setGscLinkPage(null);
   }, []);
 
+  const VCC_GA4_LABEL = "Vintage Cash Cow - GA4";
+  const VCC_GSC_URL   = "https://www.vintagecashcow.co.uk/";
+
   const loadProperties = useCallback(async (token: string) => {
     const [a, b] = await Promise.all([
       fetch("https://analyticsadmin.googleapis.com/v1beta/accountSummaries", { headers: { Authorization: `Bearer ${token}` } }),
@@ -1663,8 +1666,21 @@ export default function App() {
     (ga4Data.accountSummaries as AccountSummary[])?.forEach((acc) =>
       acc.propertySummaries?.forEach((p) => props.push({ value: p.property.split("/")[1], label: p.displayName }))
     );
+    const gscProps = (gscData.siteEntry as SiteEntry[])?.map((s) => ({ value: s.siteUrl, label: s.siteUrl })) ?? [];
     setGa4Properties(props);
-    setGscProperties((gscData.siteEntry as SiteEntry[])?.map((s) => ({ value: s.siteUrl, label: s.siteUrl })) ?? []);
+    setGscProperties(gscProps);
+
+    // Auto-select VCC properties if nothing is already saved
+    setSelectedGA4((prev) => {
+      if (prev) return prev;
+      const vcc = props.find((p) => p.label === VCC_GA4_LABEL);
+      return vcc ? vcc.value : (props[0]?.value ?? "");
+    });
+    setSelectedGSC((prev) => {
+      if (prev) return prev;
+      const vcc = gscProps.find((p) => p.value === VCC_GSC_URL || p.value === VCC_GSC_URL.replace(/\/$/, ""));
+      return vcc ? vcc.value : (gscProps[0]?.value ?? "");
+    });
   }, []);
 
   useEffect(() => { if (accessToken) loadProperties(accessToken); }, [accessToken, loadProperties]);
