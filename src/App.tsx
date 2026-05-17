@@ -1445,6 +1445,54 @@ ${el.outerHTML}
   }
 }
 
+function printAllSectionsAsPdf() {
+  const sections = Array.from(document.querySelectorAll<HTMLElement>("main section"));
+  if (sections.length === 0) return;
+  const w = window.open("", "_blank", "width=1200,height=900");
+  if (!w) return;
+  const styleNodes = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+    .map((n) => n.outerHTML).join("\n");
+  const combinedHtml = sections.map((sec) => {
+    const h2 = sec.querySelector("h2");
+    const title = (h2?.textContent || "").trim();
+    return `<div class="section-block"><div class="section-title">${title.replace(/[<>]/g,"")}</div>${sec.outerHTML}</div>`;
+  }).join('\n<div class="page-break"></div>\n');
+  w.document.open();
+  w.document.write(`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>SEO Dashboard — Full Report</title>
+${styleNodes}
+<style>
+  @page { size: A4; margin: 12mm; }
+  body { padding: 16px; font-family: system-ui, -apple-system, sans-serif; background: #fff; color: #111; }
+  [data-deco-ui], button { display: none !important; }
+  table { page-break-inside: auto; width: 100%; }
+  tr { page-break-inside: avoid; page-break-after: auto; }
+  thead { display: table-header-group; }
+  .page-break { page-break-after: always; height: 0; }
+  .section-block { margin-bottom: 32px; }
+  .section-title { font-size: 13px; font-weight: 700; color: #7c3aed; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .print-header { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 2px solid #7c3aed; padding-bottom: 10px; margin-bottom: 20px; }
+  .print-header h1 { font-size: 18px; font-weight: 800; color: #111; margin: 0; }
+  .print-header span { font-size: 11px; color: #666; }
+</style>
+</head>
+<body>
+<div class="print-header">
+  <h1>SEO/AIO Dashboard — Full Report</h1>
+  <span>Generated ${new Date().toLocaleString()}</span>
+</div>
+${combinedHtml}
+</body>
+</html>`);
+  w.document.close();
+  const trigger = () => { try { w.focus(); w.print(); } catch { /* ignore */ } };
+  if (w.document.readyState === "complete") setTimeout(trigger, 500);
+  else w.addEventListener("load", () => setTimeout(trigger, 500));
+}
+
 export default function App() {
   const [accessToken, setAccessToken]   = useState("");
   const [isLoggingIn, setIsLoggingIn]   = useState(false);
@@ -2876,6 +2924,15 @@ export default function App() {
             {isLoggedIn && (
               <>
                 {lastUpdated && <span className="text-xs text-gray-400 hidden sm:block">{lastUpdated.toLocaleTimeString()}</span>}
+                <button
+                  type="button"
+                  onClick={printAllSectionsAsPdf}
+                  className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-purple-700 px-2.5 py-1.5 rounded-lg border border-gray-200 hover:border-purple-300 bg-white transition-colors"
+                  title="Download every visible section as a single PDF"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Download all PDF
+                </button>
                 <button onClick={handleRefresh} disabled={refreshing || ga4Loading || gscLoading || convLoading || seoIssuesLoading}
                   className="p-2 rounded-xl bg-gray-50 border border-gray-200 text-gray-400 hover:text-purple-700 hover:border-purple-300 disabled:opacity-40 transition-all">
                   <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
@@ -4289,6 +4346,17 @@ export default function App() {
               <>
                 <SectionDivider label="PERFORMANCE ANALYSIS" />
                 <section className="space-y-6">
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => { const sec = document.querySelector<HTMLElement>("[data-perf-section]"); if (sec) printElementAsPdf(sec, "Performance Analysis"); }}
+                      className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-purple-700 px-3 py-1.5 rounded-lg border border-gray-200 hover:border-purple-300 bg-white transition-colors"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                      Download as PDF
+                    </button>
+                  </div>
+                  <div data-perf-section="1" className="space-y-6">
                   {!selectedGSC && (
                     <div className="bg-white rounded-2xl p-8 text-center border border-gray-100">
                       <p className="text-gray-400 text-sm">Select a GSC property to view performance data.</p>
@@ -4471,6 +4539,7 @@ export default function App() {
                       </div>
                     </>
                   )}
+                  </div>{/* end data-perf-section */}
                 </section>
               </>
             )}
