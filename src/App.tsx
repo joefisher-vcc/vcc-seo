@@ -2902,17 +2902,21 @@ export default function App() {
   const isoDateStr = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
   const ga4BannerHint = useMemo(() => {
     if (ga4Filters.comparison === "none") return undefined;
-    if (ga4FetchFilters.dateRange !== "custom" || !ga4FetchFilters.customStart || !ga4FetchFilters.customEnd) return undefined;
     const w = ga4DateWindows(ga4FetchFilters);
-    if (!w.comparison || !isoDateStr(w.current.startDate) || !isoDateStr(w.current.endDate)) return undefined;
-    if (!isoDateStr(w.comparison.startDate) || !isoDateStr(w.comparison.endDate)) return undefined;
-    const fmt = (a: string, b: string) => `${formatDisplayDate(a)} – ${formatDisplayDate(b)}`;
+    if (!w.comparison) return undefined;
+    // Resolve any NdaysAgo strings to absolute dates for display
+    const resolveAbsolute = (s: string) => {
+      const m = s.match(/^(\d+)daysAgo$/);
+      if (m) return nDaysAgo(parseInt(m[1], 10));
+      if (s === "today") return toISODate(new Date());
+      return s;
+    };
+    const fmt = (a: string, b: string) => `${formatDisplayDate(resolveAbsolute(a))} – ${formatDisplayDate(resolveAbsolute(b))}`;
     return `${fmt(w.current.startDate, w.current.endDate)} vs ${fmt(w.comparison.startDate, w.comparison.endDate)}`;
   }, [ga4Filters.comparison, ga4FetchFilters]);
 
   const gscBannerHint = useMemo(() => {
     if (gscFilters.comparison === "none") return undefined;
-    if (gscFetchFilters.dateRange !== "custom" || !gscFetchFilters.customStart || !gscFetchFilters.customEnd) return undefined;
     const w = gscDateWindows(gscFetchFilters);
     if (!w.comparison) return undefined;
     const fmt = (a: string, b: string) => `${formatDisplayDate(a)} – ${formatDisplayDate(b)}`;
