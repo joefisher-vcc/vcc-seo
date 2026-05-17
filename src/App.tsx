@@ -1659,6 +1659,10 @@ export default function App() {
   const [gscOpportunityQueriesCmp, setGscOpportunityQueriesCmp] = useState<QueryRow[]>([]);
   const [gscPages, setGscPages]             = useState<PagePerfRow[]>([]);
   const [gscBuriedPageQueries, setGscBuriedPageQueries] = useState<{ page: string; query: string; impressions: number; clicks: number; position: number }[]>([]);
+  const [queryCopyResults, setQueryCopyResults] = useState<Map<string, { text: string; queryHits: Map<string, boolean> }>>(new Map());
+  const [queryCopyLoading, setQueryCopyLoading] = useState<Set<string>>(new Set());
+  const [queryCopyPage, setQueryCopyPage] = useState<string>(""); // URL typed/selected by user
+  const [queryCopyExpanded, setQueryCopyExpanded] = useState<string | null>(null);
   const [oppSort, setOppSort] = useState<{ col: OppSortCol; dir: SortDir }>({ col: "impressions", dir: "desc" });
   const [gscDevices, setGscDevices]       = useState<DeviceRow[]>([]);
   const [gscCountries, setGscCountries]   = useState<string[]>([]);
@@ -2287,6 +2291,33 @@ export default function App() {
 
   const convEventNameRef = useRef(convEventName);
   convEventNameRef.current = convEventName;
+
+  const fetchPageCopy = useCallback(async (pageUrl: string, queries: string[]) => {
+    if (!pageUrl || queries.length === 0) return;
+    setQueryCopyLoading((s) => new Set([...s, pageUrl]));
+    try {
+      // Use allorigins to bypass CORS
+      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(pageUrl)}`;
+      const res = await fetch(proxyUrl);
+      const json = await res.json() as { contents?: string };
+      const html = json.contents ?? "";
+      // Strip HTML tags and decode entities to get plain text
+      const tmp = document.createElement("div");
+      tmp.innerHTML = html
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<[^>]+>/g, " ");
+      const text = (tmp.textContent || tmp.innerText || "").toLowerCase().replace(/\s+/g, " ");
+      const queryHits = new Map<string, boolean>();
+      queries.forEach((q) => {
+        queryHits.set(q, text.includes(q.toLowerCase()));
+      });
+      setQueryCopyResults((prev) => new Map(prev).set(pageUrl, { text: text.slice(0, 5000), queryHits }));
+    } catch {
+      setQueryCopyResults((prev) => new Map(prev).set(pageUrl, { text: "", queryHits: new Map(queries.map((q) => [q, false])) }));
+    }
+    setQueryCopyLoading((s) => { const n = new Set(s); n.delete(pageUrl); return n; });
+  }, []);
 
   const fetchConvEventList = useCallback(async () => {
     if (!selectedGA4 || !accessToken) return;
@@ -3842,6 +3873,112 @@ ${combinedHtml}
                       )}
                     </div>
                   )}
+
+                  {/* ── Query-in-copy analysis ── */}
+                  <ChartCard title="Query in copy — do your pages mention the queries they rank for?">
+                    <p className="text-xs text-gray-400 mb-3">
+                      Select a page to fetch its live content and check which GSC queries actually appear in the copy. Queries <strong>missing from the page text</strong> are prime candidates to add naturally.
+                    </p>
+
+                    {/* Page picker */}
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      <div className="flex-1 min-w-[280px]">
+                        <Select
+                          value={queryCopyPage}
+                          onChange={setQueryCopyPage}
+                          options={[...new Map(gscBuriedPageQueries.map((r) => [r.page, r.page])).keys()].slice(0, 200).map((p) => ({ value: p, label: p }))}
+                          placeholder="Pick a page to analyse…"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        disabled={!queryCopyPage || queryCopyLoading.has(queryCopyPage)}
+                        onClick={() => {
+                          const queries = gscBuriedPageQueries.filter((r) => r.page === queryCopyPage).map((r) => r.query);
+                          void fetchPageCopy(queryCopyPage, queries);
+                        }}
+                        className="px-4 py-2 rounded-xl bg-purple-700 text-white text-sm font-semibold hover:bg-purple-800 disabled:opacity-40"
+                      >
+                        {queryCopyLoading.has(queryCopyPage) ? "Fetching…" : "Check copy"}
+                      </button>
+                    </div>
+
+                    {/* Results table */}
+                    {queryCopyResults.size > 0 && (
+                      <div className="space-y-4">
+                        {[...queryCopyResults.entries()].map(([page, result]) => {
+                          const rows = gscBuriedPageQueries.filter((r) => r.page === page);
+                          const inCopy   = rows.filter((r) => result.queryHits.get(r.query) === true);
+                          const missing  = rows.filter((r) => result.queryHits.get(r.query) === false);
+                          const isOpen   = queryCopyExpanded === page;
+                          return (
+                            <div key={page} className="rounded-xl border border-gray-100 overflow-hidden">
+                              {/* Page header row */}
+                              <div
+                                className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 cursor-pointer hover:bg-gray-100 transition-colors"
+                                onClick={() => setQueryCopyExpanded(isOpen ? null : page)}
+                              >
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className={`text-[10px] transition-transform ${isOpen ? "rotate-90" : ""}`}>▶</span>
+                                  <span className="text-xs font-medium text-gray-700 truncate">{page}</span>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-semibold">
+                                    ✓ {inCopy.length} in copy
+                                  </span>
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-50 text-red-600 text-[10px] font-semibold">
+                                    ✗ {missing.length} missing
+                                  </span>
+                                  {result.text === "" && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 text-[10px] font-semibold">fetch failed</span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {isOpen && (
+                                <ScrollTable maxH="300px">
+                                  <table className="w-full text-xs">
+                                    <thead className="sticky top-0 z-10 bg-white shadow-sm">
+                                      <tr className="border-b border-gray-100">
+                                        <th className="text-left py-2 px-3 text-gray-400 font-semibold text-[10px]">Query</th>
+                                        <th className="text-left py-2 px-3 text-gray-400 font-semibold text-[10px]">Impr.</th>
+                                        <th className="text-left py-2 px-3 text-gray-400 font-semibold text-[10px]">Position</th>
+                                        <th className="text-left py-2 px-3 text-gray-400 font-semibold text-[10px]">In copy?</th>
+                                        <th className="text-left py-2 px-3 text-gray-400 font-semibold text-[10px]">Action</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {/* Missing first — most actionable */}
+                                      {[...missing, ...inCopy].map((r) => {
+                                        const hit = result.queryHits.get(r.query);
+                                        return (
+                                          <tr key={r.query} className={`border-b border-gray-50 ${hit ? "" : "bg-red-50/30"}`}>
+                                            <td className="py-2 px-3 font-medium text-gray-800">{r.query}</td>
+                                            <td className="py-2 px-3 text-gray-500">{r.impressions.toLocaleString()}</td>
+                                            <td className="py-2 px-3">
+                                              <span className="text-[10px] font-semibold text-red-400">{r.position.toFixed(0)}</span>
+                                            </td>
+                                            <td className="py-2 px-3">
+                                              {hit === true  && <span className="inline-block px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[10px] font-semibold">✓ Yes</span>}
+                                              {hit === false && <span className="inline-block px-1.5 py-0.5 rounded bg-red-50 text-red-600 text-[10px] font-semibold">✗ No</span>}
+                                              {hit === undefined && <span className="text-gray-300 text-[10px]">—</span>}
+                                            </td>
+                                            <td className="py-2 px-3 text-[10px] text-gray-400">
+                                              {hit === false ? "Add to copy" : hit === true ? "Optimise placement" : ""}
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </ScrollTable>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </ChartCard>
 
                   {!gscLoading && selectedGSC && gscOpportunityQueries.length === 0 && (
                     <p className="text-sm text-gray-400 py-4">No query data for this property / filter combination.</p>
