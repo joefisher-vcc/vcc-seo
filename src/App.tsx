@@ -340,33 +340,69 @@ function getComparisonRange(days: number, mode: "prevPeriod" | "prevYear") {
   return { startDate: nDaysAgo(days - 1 + 365), endDate: nDaysAgo(365) };
 }
 
+/**
+ * Given a resolved current window (YYYY-MM-DD) and comparison mode, return the
+ * correct comparison window — shifting back exactly one year for prevYear, or by
+ * the exact period length for prevPeriod.
+ */
+function comparisonWindowFor(
+  startDate: string,
+  endDate: string,
+  mode: "prevPeriod" | "prevYear",
+): { startDate: string; endDate: string } {
+  if (mode === "prevYear") {
+    const shiftYear = (iso: string, delta: number) => {
+      const d = new Date(iso + "T00:00:00");
+      d.setFullYear(d.getFullYear() + delta);
+      return toISODate(d);
+    };
+    return { startDate: shiftYear(startDate, -1), endDate: shiftYear(endDate, -1) };
+  }
+  // prevPeriod: shift back by the exact number of days in the current window
+  const msPerDay = 86400000;
+  const start = new Date(startDate + "T00:00:00");
+  const end   = new Date(endDate + "T00:00:00");
+  const span  = Math.round((end.getTime() - start.getTime()) / msPerDay) + 1;
+  const cmpEnd   = new Date(start.getTime() - msPerDay);
+  const cmpStart = new Date(cmpEnd.getTime() - (span - 1) * msPerDay);
+  return { startDate: toISODate(cmpStart), endDate: toISODate(cmpEnd) };
+}
+
 type Ga4DateWin = { startDate: string; endDate: string };
 
 function ga4DateWindows(f: GA4Filters): { current: Ga4DateWin; comparison: Ga4DateWin | null } {
-  let current: Ga4DateWin;
+  // Always resolve to absolute YYYY-MM-DD first
+  let absStart: string;
+  let absEnd: string;
   if (f.dateRange === "custom" && f.customStart && f.customEnd) {
-    current = { startDate: f.customStart, endDate: f.customEnd };
+    absStart = f.customStart;
+    absEnd   = f.customEnd;
   } else {
     const r = resolveDateRange(f.dateRange);
-    // GA4 API accepts either YYYY-MM-DD or NdaysAgo — use absolute dates for named ranges, relative for numeric
-    const isNumeric = /^\d+$/.test(f.dateRange);
-    if (isNumeric) {
-      const d = Math.max(1, parseInt(f.dateRange, 10) || 28);
-      current = { startDate: `${d - 1}daysAgo`, endDate: "today" };
-    } else {
-      current = r;
-    }
+    absStart = r.startDate;
+    absEnd   = r.endDate;
   }
+
+  // GA4 API can take NdaysAgo for pure numeric rolling ranges — keep that for numeric only
+  let current: Ga4DateWin;
+  if (/^\d+$/.test(f.dateRange) && f.dateRange !== "custom") {
+    const d = Math.max(1, parseInt(f.dateRange, 10) || 28);
+    current = { startDate: `${d - 1}daysAgo`, endDate: "today" };
+  } else {
+    current = { startDate: absStart, endDate: absEnd };
+  }
+
   if (f.comparison === "none") return { current, comparison: null };
+
   if (f.dateRange === "custom" && f.customStart && f.customEnd) {
     if (f.customCompareStart && f.customCompareEnd) {
       return { current, comparison: { startDate: f.customCompareStart, endDate: f.customCompareEnd } };
     }
     return { current, comparison: comparisonWindowBefore(f.customStart, f.customEnd) };
   }
-  const days = dateRangeDays(f.dateRange);
-  const cmp = getComparisonRange(days, f.comparison as "prevPeriod" | "prevYear");
-  return { current, comparison: { startDate: cmp.startDate, endDate: cmp.endDate } };
+
+  const cmp = comparisonWindowFor(absStart, absEnd, f.comparison as "prevPeriod" | "prevYear");
+  return { current, comparison: cmp };
 }
 
 function gscDateWindows(f: GSCFilters): { startDate: string; endDate: string; comparison: { startDate: string; endDate: string } | null } {
@@ -374,22 +410,24 @@ function gscDateWindows(f: GSCFilters): { startDate: string; endDate: string; co
   let endDate: string;
   if (f.dateRange === "custom" && f.customStart && f.customEnd) {
     startDate = f.customStart;
-    endDate = f.customEnd;
+    endDate   = f.customEnd;
   } else {
     const r = resolveDateRange(f.dateRange);
     startDate = r.startDate;
-    endDate = r.endDate;
+    endDate   = r.endDate;
   }
+
   if (f.comparison === "none") return { startDate, endDate, comparison: null };
+
   if (f.dateRange === "custom" && f.customStart && f.customEnd) {
     if (f.customCompareStart && f.customCompareEnd) {
       return { startDate, endDate, comparison: { startDate: f.customCompareStart, endDate: f.customCompareEnd } };
     }
     return { startDate, endDate, comparison: comparisonWindowBefore(f.customStart, f.customEnd) };
   }
-  const days = dateRangeDays(f.dateRange);
-  const cmp = getComparisonRange(days, f.comparison as "prevPeriod" | "prevYear");
-  return { startDate, endDate, comparison: { startDate: cmp.startDate, endDate: cmp.endDate } };
+
+  const cmp = comparisonWindowFor(startDate, endDate, f.comparison as "prevPeriod" | "prevYear");
+  return { startDate, endDate, comparison: cmp };
 }
 
 // ─── UI Primitives ────────────────────────────────────────────────────────────
