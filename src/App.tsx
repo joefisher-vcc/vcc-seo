@@ -1445,53 +1445,6 @@ ${el.outerHTML}
   }
 }
 
-function printAllSectionsAsPdf() {
-  const sections = Array.from(document.querySelectorAll<HTMLElement>("main section"));
-  if (sections.length === 0) return;
-  const w = window.open("", "_blank", "width=1200,height=900");
-  if (!w) return;
-  const styleNodes = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
-    .map((n) => n.outerHTML).join("\n");
-  const combinedHtml = sections.map((sec) => {
-    const h2 = sec.querySelector("h2");
-    const title = (h2?.textContent || "").trim();
-    return `<div class="section-block"><div class="section-title">${title.replace(/[<>]/g,"")}</div>${sec.outerHTML}</div>`;
-  }).join('\n<div class="page-break"></div>\n');
-  w.document.open();
-  w.document.write(`<!doctype html>
-<html>
-<head>
-<meta charset="utf-8" />
-<title>SEO Dashboard — Full Report</title>
-${styleNodes}
-<style>
-  @page { size: A4; margin: 12mm; }
-  body { padding: 16px; font-family: system-ui, -apple-system, sans-serif; background: #fff; color: #111; }
-  [data-deco-ui], button { display: none !important; }
-  table { page-break-inside: auto; width: 100%; }
-  tr { page-break-inside: avoid; page-break-after: auto; }
-  thead { display: table-header-group; }
-  .page-break { page-break-after: always; height: 0; }
-  .section-block { margin-bottom: 32px; }
-  .section-title { font-size: 13px; font-weight: 700; color: #7c3aed; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
-  .print-header { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 2px solid #7c3aed; padding-bottom: 10px; margin-bottom: 20px; }
-  .print-header h1 { font-size: 18px; font-weight: 800; color: #111; margin: 0; }
-  .print-header span { font-size: 11px; color: #666; }
-</style>
-</head>
-<body>
-<div class="print-header">
-  <h1>SEO/AIO Dashboard — Full Report</h1>
-  <span>Generated ${new Date().toLocaleString()}</span>
-</div>
-${combinedHtml}
-</body>
-</html>`);
-  w.document.close();
-  const trigger = () => { try { w.focus(); w.print(); } catch { /* ignore */ } };
-  if (w.document.readyState === "complete") setTimeout(trigger, 500);
-  else w.addEventListener("load", () => setTimeout(trigger, 500));
-}
 
 export default function App() {
   const [accessToken, setAccessToken]   = useState("");
@@ -2903,6 +2856,72 @@ export default function App() {
     { key: "performance", label: "Performance", icon: BarChart2 },
   ];
 
+  const [isPdfBuilding, setIsPdfBuilding] = useState(false);
+
+  const downloadAllAsPdf = useCallback(async () => {
+    setIsPdfBuilding(true);
+    const originalView = activeView;
+    const styleNodes = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+      .map((n) => n.outerHTML).join("\n");
+    const sections: { label: string; html: string }[] = [];
+    const wait = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
+
+    for (const view of VIEWS) {
+      setActiveView(view.key);
+      // Wait for React to render the new tab
+      await wait(400);
+      const sec = document.querySelector<HTMLElement>("main section");
+      if (sec) sections.push({ label: view.label, html: sec.outerHTML });
+    }
+
+    // Restore original tab
+    setActiveView(originalView);
+    setIsPdfBuilding(false);
+
+    if (sections.length === 0) return;
+    const w = window.open("", "_blank", "width=1200,height=900");
+    if (!w) return;
+
+    const combinedHtml = sections.map((s) =>
+      `<div class="section-block"><div class="section-title">${s.label.replace(/[<>]/g,"")}</div>${s.html}</div>`
+    ).join('\n<div class="page-break"></div>\n');
+
+    w.document.open();
+    w.document.write(`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>SEO Dashboard — Full Report</title>
+${styleNodes}
+<style>
+  @page { size: A4; margin: 12mm; }
+  body { padding: 16px; font-family: system-ui,-apple-system,sans-serif; background:#fff; color:#111; }
+  [data-deco-ui], button { display:none !important; }
+  table { page-break-inside:auto; width:100%; }
+  tr { page-break-inside:avoid; page-break-after:auto; }
+  thead { display:table-header-group; }
+  .page-break { page-break-after:always; height:0; }
+  .section-block { margin-bottom:32px; }
+  .section-title { font-size:14px; font-weight:700; color:#7c3aed; margin-bottom:10px; text-transform:uppercase; letter-spacing:.05em; border-bottom:1px solid #e9d5ff; padding-bottom:6px; }
+  .print-header { display:flex; justify-content:space-between; align-items:baseline; border-bottom:2px solid #7c3aed; padding-bottom:10px; margin-bottom:24px; }
+  .print-header h1 { font-size:18px; font-weight:800; color:#111; margin:0; }
+  .print-header span { font-size:11px; color:#666; }
+</style>
+</head>
+<body>
+<div class="print-header">
+  <h1>SEO/AIO Dashboard — Full Report</h1>
+  <span>Generated ${new Date().toLocaleString()}</span>
+</div>
+${combinedHtml}
+</body>
+</html>`);
+    w.document.close();
+    const trigger = () => { try { w.focus(); w.print(); } catch { /* ignore */ } };
+    if (w.document.readyState === "complete") setTimeout(trigger, 600);
+    else w.addEventListener("load", () => setTimeout(trigger, 600));
+  }, [activeView, VIEWS]);
+
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -2926,12 +2945,13 @@ export default function App() {
                 {lastUpdated && <span className="text-xs text-gray-400 hidden sm:block">{lastUpdated.toLocaleTimeString()}</span>}
                 <button
                   type="button"
-                  onClick={printAllSectionsAsPdf}
-                  className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-purple-700 px-2.5 py-1.5 rounded-lg border border-gray-200 hover:border-purple-300 bg-white transition-colors"
-                  title="Download every visible section as a single PDF"
+                  onClick={() => void downloadAllAsPdf()}
+                  disabled={isPdfBuilding}
+                  className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-purple-700 disabled:opacity-50 disabled:cursor-wait px-2.5 py-1.5 rounded-lg border border-gray-200 hover:border-purple-300 bg-white transition-colors"
+                  title="Download every section as a single PDF"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                  Download all PDF
+                  {isPdfBuilding ? "Building PDF…" : "Download all PDF"}
                 </button>
                 <button onClick={handleRefresh} disabled={refreshing || ga4Loading || gscLoading || convLoading || seoIssuesLoading}
                   className="p-2 rounded-xl bg-gray-50 border border-gray-200 text-gray-400 hover:text-purple-700 hover:border-purple-300 disabled:opacity-40 transition-all">
