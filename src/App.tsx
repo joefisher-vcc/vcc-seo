@@ -70,12 +70,80 @@ const AI_MASTER_PATTERN =
   /(chat\.openai\.com|chatgpt\.com|perplexity\.ai|claude\.ai|bard\.google\.com|gemini\.google\.com|copilot\.microsoft\.com|bing\.com|you\.com|poe\.com|phind\.com|komo\.ai|reka\.ai|pi\.ai|character\.ai|huggingface\.co)/i;
 
 const DATE_RANGES = [
-  { value: "7", label: "Last 7 days" },
-  { value: "14", label: "Last 14 days" },
-  { value: "28", label: "Last 28 days" },
-  { value: "90", label: "Last 90 days" },
+  { value: "7",         label: "Last 7 days" },
+  { value: "14",        label: "Last 14 days" },
+  { value: "28",        label: "Last 28 days" },
+  { value: "lastWeek",  label: "Last week (Mon–Sun)" },
+  { value: "lastMonth", label: "Last month" },
+  { value: "last3m",    label: "Last 3 months" },
+  { value: "90",        label: "Last 90 days" },
+  { value: "last6m",    label: "Last 6 months" },
+  { value: "lastYear",  label: "Last year (Jan–Dec)" },
+  { value: "365",       label: "Last 365 days" },
+  { value: "ytd",       label: "Year to date" },
 ];
 const DATE_RANGES_WITH_CUSTOM = [...DATE_RANGES, { value: "custom", label: "Custom range" }];
+
+/** Resolve a dateRange value to an absolute { startDate, endDate } in YYYY-MM-DD */
+function resolveDateRange(value: string): { startDate: string; endDate: string } {
+  const today = new Date();
+  const fmt = (d: Date) => toISODate(d);
+  const ago = (n: number) => { const d = new Date(today); d.setDate(d.getDate() - n); return d; };
+
+  if (value === "lastWeek") {
+    // Monday–Sunday of last week
+    const day = today.getDay(); // 0=Sun
+    const lastSun = ago(day === 0 ? 7 : day);
+    const lastMon = ago(day === 0 ? 13 : day + 6);
+    return { startDate: fmt(lastMon), endDate: fmt(lastSun) };
+  }
+  if (value === "lastMonth") {
+    const y = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
+    const m = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+    const start = new Date(y, m, 1);
+    const end   = new Date(y, m + 1, 0);
+    return { startDate: fmt(start), endDate: fmt(end) };
+  }
+  if (value === "last3m") {
+    const start = new Date(today); start.setMonth(start.getMonth() - 3); start.setDate(start.getDate() + 1);
+    return { startDate: fmt(start), endDate: fmt(ago(1)) };
+  }
+  if (value === "last6m") {
+    const start = new Date(today); start.setMonth(start.getMonth() - 6); start.setDate(start.getDate() + 1);
+    return { startDate: fmt(start), endDate: fmt(ago(1)) };
+  }
+  if (value === "lastYear") {
+    const y = today.getFullYear() - 1;
+    return { startDate: `${y}-01-01`, endDate: `${y}-12-31` };
+  }
+  if (value === "ytd") {
+    return { startDate: `${today.getFullYear()}-01-01`, endDate: fmt(ago(1)) };
+  }
+  // Plain number of days (7, 14, 28, 90, 365, …)
+  const d = Math.max(1, parseInt(value, 10) || 28);
+  return { startDate: fmt(ago(d - 1)), endDate: fmt(today) };
+}
+
+/** How many days a dateRange spans (approximate, for comparison window sizing) */
+function dateRangeDays(value: string): number {
+  if (value === "lastWeek")  return 7;
+  if (value === "lastMonth") return 30;
+  if (value === "last3m")    return 91;
+  if (value === "last6m")    return 182;
+  if (value === "lastYear")  return 365;
+  if (value === "ytd") {
+    const today = new Date();
+    return Math.ceil((today.getTime() - new Date(today.getFullYear(), 0, 1).getTime()) / 86400000) + 1;
+  }
+  return Math.max(1, parseInt(value, 10) || 28);
+}
+
+function dateRangeLabel(value: string): string {
+  if (value === "custom") return "custom";
+  const found = DATE_RANGES.find((r) => r.value === value);
+  if (found) return found.label;
+  return `${value}d`;
+}
 
 const LS_GOOGLE_TOKEN = "vcc_google_access_token";
 const LS_GOOGLE_TOKEN_EXP = "vcc_google_token_expires_at";
@@ -279,8 +347,15 @@ function ga4DateWindows(f: GA4Filters): { current: Ga4DateWin; comparison: Ga4Da
   if (f.dateRange === "custom" && f.customStart && f.customEnd) {
     current = { startDate: f.customStart, endDate: f.customEnd };
   } else {
-    const d = Math.max(1, parseInt(f.dateRange, 10) || 28);
-    current = { startDate: `${d - 1}daysAgo`, endDate: "today" };
+    const r = resolveDateRange(f.dateRange);
+    // GA4 API accepts either YYYY-MM-DD or NdaysAgo — use absolute dates for named ranges, relative for numeric
+    const isNumeric = /^\d+$/.test(f.dateRange);
+    if (isNumeric) {
+      const d = Math.max(1, parseInt(f.dateRange, 10) || 28);
+      current = { startDate: `${d - 1}daysAgo`, endDate: "today" };
+    } else {
+      current = r;
+    }
   }
   if (f.comparison === "none") return { current, comparison: null };
   if (f.dateRange === "custom" && f.customStart && f.customEnd) {
@@ -289,22 +364,21 @@ function ga4DateWindows(f: GA4Filters): { current: Ga4DateWin; comparison: Ga4Da
     }
     return { current, comparison: comparisonWindowBefore(f.customStart, f.customEnd) };
   }
-  const days = Math.max(1, parseInt(f.dateRange, 10) || 28);
+  const days = dateRangeDays(f.dateRange);
   const cmp = getComparisonRange(days, f.comparison as "prevPeriod" | "prevYear");
   return { current, comparison: { startDate: cmp.startDate, endDate: cmp.endDate } };
 }
 
 function gscDateWindows(f: GSCFilters): { startDate: string; endDate: string; comparison: { startDate: string; endDate: string } | null } {
-  const today = toISODate(new Date());
   let startDate: string;
   let endDate: string;
   if (f.dateRange === "custom" && f.customStart && f.customEnd) {
     startDate = f.customStart;
     endDate = f.customEnd;
   } else {
-    const d = Math.max(1, parseInt(f.dateRange, 10) || 28);
-    startDate = nDaysAgo(d - 1);
-    endDate = today;
+    const r = resolveDateRange(f.dateRange);
+    startDate = r.startDate;
+    endDate = r.endDate;
   }
   if (f.comparison === "none") return { startDate, endDate, comparison: null };
   if (f.dateRange === "custom" && f.customStart && f.customEnd) {
@@ -313,7 +387,7 @@ function gscDateWindows(f: GSCFilters): { startDate: string; endDate: string; co
     }
     return { startDate, endDate, comparison: comparisonWindowBefore(f.customStart, f.customEnd) };
   }
-  const days = Math.max(1, parseInt(f.dateRange, 10) || 28);
+  const days = dateRangeDays(f.dateRange);
   const cmp = getComparisonRange(days, f.comparison as "prevPeriod" | "prevYear");
   return { startDate, endDate, comparison: { startDate: cmp.startDate, endDate: cmp.endDate } };
 }
@@ -1712,7 +1786,7 @@ export default function App() {
     const daySpan =
       f.dateRange === "custom" && f.customStart && f.customEnd
         ? Math.min(400, daysInclusive(f.customStart, f.customEnd))
-        : Math.max(1, parseInt(f.dateRange, 10) || 28);
+        : dateRangeDays(f.dateRange);
 
     const startDate = curWin.startDate;
     const endDate   = curWin.endDate;
@@ -1972,7 +2046,7 @@ export default function App() {
     const gscDaySpan =
       gf.dateRange === "custom" && gf.customStart && gf.customEnd
         ? Math.min(400, daysInclusive(gf.customStart, gf.customEnd))
-        : Math.max(1, parseInt(gf.dateRange, 10) || 28);
+        : dateRangeDays(gf.dateRange);
     const cmpDaySpan =
       cmpRange && gf.dateRange === "custom" && gf.customCompareStart && gf.customCompareEnd
         ? Math.min(400, daysInclusive(gf.customCompareStart, gf.customCompareEnd))
@@ -3039,12 +3113,12 @@ ${combinedHtml}
 
                 {ga4Daily.length > 0 && activeView !== "blend" && (
                   <div className={`space-y-4 transition-opacity duration-200 ${ga4Loading ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
-                    <ComparisonBanner days={parseInt(ga4FetchFilters.dateRange, 10) || 28} mode={ga4Filters.comparison} rangeHint={ga4BannerHint} />
+                    <ComparisonBanner days={dateRangeDays(ga4FetchFilters.dateRange)} mode={ga4Filters.comparison} rangeHint={ga4BannerHint} />
                     {/* KPIs */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <KpiCard label="Active Users"  value={ga4TotalUsers.toLocaleString()}    sub={ga4Filters.dateRange === "custom" ? "custom" : `${ga4Filters.dateRange}d`} icon={Users}       cmpValue={hasCmp ? ga4CmpUsers    : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "users" ? null : "users"))} active={ga4TrendMetricFocus === "users"} />
-                      <KpiCard label="Sessions"      value={ga4TotalSessions.toLocaleString()} sub={ga4Filters.dateRange === "custom" ? "custom" : `${ga4Filters.dateRange}d`} icon={Activity}    cmpValue={hasCmp ? ga4CmpSessions : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "sessions" ? null : "sessions"))} active={ga4TrendMetricFocus === "sessions"} />
-                      <KpiCard label="Pageviews"     value={ga4TotalPV.toLocaleString()}        sub={ga4Filters.dateRange === "custom" ? "custom" : `${ga4Filters.dateRange}d`} icon={Eye}          cmpValue={hasCmp ? ga4CmpPV       : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "pageviews" ? null : "pageviews"))} active={ga4TrendMetricFocus === "pageviews"} />
+                      <KpiCard label="Active Users"  value={ga4TotalUsers.toLocaleString()}    sub={dateRangeLabel(ga4Filters.dateRange)} icon={Users}       cmpValue={hasCmp ? ga4CmpUsers    : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "users" ? null : "users"))} active={ga4TrendMetricFocus === "users"} />
+                      <KpiCard label="Sessions"      value={ga4TotalSessions.toLocaleString()} sub={dateRangeLabel(ga4Filters.dateRange)} icon={Activity}    cmpValue={hasCmp ? ga4CmpSessions : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "sessions" ? null : "sessions"))} active={ga4TrendMetricFocus === "sessions"} />
+                      <KpiCard label="Pageviews"     value={ga4TotalPV.toLocaleString()}        sub={dateRangeLabel(ga4Filters.dateRange)} icon={Eye}          cmpValue={hasCmp ? ga4CmpPV       : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "pageviews" ? null : "pageviews"))} active={ga4TrendMetricFocus === "pageviews"} />
                       <KpiCard label="Avg Bounce"    value={`${ga4AvgBounce}%`}                 icon={TrendingUp}                                    cmpValue={hasCmp ? ga4CmpBounce   : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "bounceRate" ? null : "bounceRate"))} active={ga4TrendMetricFocus === "bounceRate"} />
                     </div>
                     {ga4TrendMetricFocus && (
@@ -3318,10 +3392,10 @@ ${combinedHtml}
 
                   {gscDaily.length > 0 && activeView !== "blend" && (
                     <div className={`space-y-4 transition-opacity duration-200 ${gscLoading ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
-                      <ComparisonBanner days={parseInt(gscFetchFilters.dateRange, 10) || 28} mode={gscFilters.comparison} rangeHint={gscBannerHint} />
+                      <ComparisonBanner days={dateRangeDays(gscFetchFilters.dateRange)} mode={gscFilters.comparison} rangeHint={gscBannerHint} />
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        <KpiCard label="Total Clicks"  value={gscTotalClicks.toLocaleString()}      sub={gscFilters.dateRange === "custom" ? "custom" : `${gscFilters.dateRange}d`} icon={MousePointerClick} cmpValue={hasGscCmp ? gscCmpClicks      : undefined} cmpLabel={gscCmpLabel} />
-                        <KpiCard label="Impressions"   value={gscTotalImpressions.toLocaleString()} sub={gscFilters.dateRange === "custom" ? "custom" : `${gscFilters.dateRange}d`} icon={Eye}               cmpValue={hasGscCmp ? gscCmpImpressions : undefined} cmpLabel={gscCmpLabel} />
+                        <KpiCard label="Total Clicks"  value={gscTotalClicks.toLocaleString()}      sub={dateRangeLabel(gscFilters.dateRange)} icon={MousePointerClick} cmpValue={hasGscCmp ? gscCmpClicks      : undefined} cmpLabel={gscCmpLabel} />
+                        <KpiCard label="Impressions"   value={gscTotalImpressions.toLocaleString()} sub={dateRangeLabel(gscFilters.dateRange)} icon={Eye}               cmpValue={hasGscCmp ? gscCmpImpressions : undefined} cmpLabel={gscCmpLabel} />
                         <KpiCard label="Avg CTR"       value={`${gscAvgCTR}%`}                      icon={TrendingUp}                                          cmpValue={hasGscCmp ? gscCmpCTR         : undefined} cmpLabel={gscCmpLabel} />
                         <KpiCard label="Avg Position"  value={gscAvgPosition}                       icon={ArrowUpRight}                                        cmpValue={hasGscCmp ? gscCmpPosition    : undefined} cmpLabel={gscCmpLabel} />
                       </div>
@@ -3657,7 +3731,7 @@ ${combinedHtml}
 
                   {gscOpportunityQueries.length > 0 && (
                     <div className={`space-y-4 transition-opacity duration-200 ${gscLoading ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
-                      <ComparisonBanner days={parseInt(gscFetchFilters.dateRange, 10) || 28} mode={gscFilters.comparison} rangeHint={gscBannerHint} />
+                      <ComparisonBanner days={dateRangeDays(gscFetchFilters.dateRange)} mode={gscFilters.comparison} rangeHint={gscBannerHint} />
                       {gscOpportunityRows.length > 0 ? (
                         <ChartCard title={`Low clicks, high impressions${hasGscCmp ? ` — vs ${gscCmpLabel}` : ""}`}>
                           <p className="text-xs text-gray-500 mb-3">
@@ -3902,7 +3976,7 @@ ${combinedHtml}
                   {convLoading && convDaily.length === 0 && <Spinner />}
                   {convDaily.length > 0 && (
                     <div className={`space-y-4 ${convLoading ? "opacity-60" : ""}`}>
-                      <ComparisonBanner days={parseInt(ga4FetchFilters.dateRange, 10) || 28} mode={ga4Filters.comparison} rangeHint={ga4BannerHint} />
+                      <ComparisonBanner days={dateRangeDays(ga4FetchFilters.dateRange)} mode={ga4Filters.comparison} rangeHint={ga4BannerHint} />
 
                       {/* KPI summary row */}
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
