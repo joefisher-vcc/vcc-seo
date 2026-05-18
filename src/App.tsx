@@ -432,6 +432,44 @@ function gscDateWindows(f: GSCFilters): { startDate: string; endDate: string; co
 
 // ─── UI Primitives ────────────────────────────────────────────────────────────
 
+// ─── Hover Tooltip ────────────────────────────────────────────────────────────
+
+function HoverTooltip({ children, tip, className = "" }: { children: React.ReactNode; tip: string; className?: string }) {
+  const [visible, setVisible] = useState(false);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const ref = useRef<HTMLDivElement>(null);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return;
+    setPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+  }, []);
+
+  return (
+    <div
+      ref={ref}
+      className={`relative ${className}`}
+      onMouseEnter={() => setVisible(true)}
+      onMouseLeave={() => setVisible(false)}
+      onMouseMove={handleMouseMove}
+    >
+      {children}
+      {visible && (
+        <div
+          className="pointer-events-none absolute z-50 max-w-[220px] rounded-xl bg-gray-900/95 px-3 py-2 text-xs text-white shadow-xl backdrop-blur-sm border border-white/10 leading-relaxed"
+          style={{
+            left: pos.x + 12,
+            top: pos.y - 8,
+            transform: pos.x > 160 ? "translateX(-110%)" : undefined,
+          }}
+        >
+          {tip}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DeltaBadge({ current, previous, lowerIsBetter = false }: { current: number; previous: number; lowerIsBetter?: boolean }) {
   if (!previous || previous === 0) return null;
   const pct = ((current - previous) / Math.abs(previous)) * 100;
@@ -520,10 +558,16 @@ function FilterPill({ label, onRemove }: { label: string; onRemove: () => void }
   );
 }
 
-function ChartCard({ title, children, className = "" }: { title: string; children: React.ReactNode; className?: string }) {
+function ChartCard({ title, children, className = "", tip }: { title: string; children: React.ReactNode; className?: string; tip?: string }) {
   return (
     <div className={`bg-white border border-gray-100 rounded-2xl p-5 shadow-sm ${className}`}>
-      <h3 className="text-sm font-semibold text-gray-900 mb-4">{title}</h3>
+      {tip ? (
+        <HoverTooltip tip={tip} className="inline-block mb-4">
+          <h3 className="text-sm font-semibold text-gray-900 cursor-help border-b border-dashed border-gray-300 inline">{title}</h3>
+        </HoverTooltip>
+      ) : (
+        <h3 className="text-sm font-semibold text-gray-900 mb-4">{title}</h3>
+      )}
       {children}
     </div>
   );
@@ -720,11 +764,13 @@ function GA4FilterPanel({ filters, setFilters, channelOptions }: {
 
   return (
     <div className="bg-purple-50/60 border border-purple-100 rounded-2xl p-4 mb-5">
-      <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-2 text-sm font-semibold text-gray-700 w-full text-left">
-        <SlidersHorizontal size={14} className="text-purple-500" />
-        Filters & Controls
-        <ChevronDown size={13} className={`ml-auto text-gray-400 transition-transform ${open ? "rotate-180" : ""}`} />
-      </button>
+      <HoverTooltip tip="Expand to filter by date range, metrics, traffic channel, or device type. Active filters show as pills below.">
+        <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-2 text-sm font-semibold text-gray-700 w-full text-left">
+          <SlidersHorizontal size={14} className="text-purple-500" />
+          Filters & Controls
+          <ChevronDown size={13} className={`ml-auto text-gray-400 transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
+      </HoverTooltip>
 
       {open && (
         <div className="mt-4 space-y-3">
@@ -824,11 +870,13 @@ function GSCFilterPanel({ filters, setFilters, countryOptions }: {
 
   return (
     <div className="bg-purple-50/60 border border-purple-100 rounded-2xl p-4 mb-5">
-      <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-2 text-sm font-semibold text-gray-700 w-full text-left">
-        <Filter size={14} className="text-purple-500" />
-        Filters & Controls
-        <ChevronDown size={13} className={`ml-auto text-gray-400 transition-transform ${open ? "rotate-180" : ""}`} />
-      </button>
+      <HoverTooltip tip="Expand to filter Search Console data by date, query dimension (query/page/country/device), country, or device type.">
+        <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-2 text-sm font-semibold text-gray-700 w-full text-left">
+          <Filter size={14} className="text-purple-500" />
+          Filters & Controls
+          <ChevronDown size={13} className={`ml-auto text-gray-400 transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
+      </HoverTooltip>
 
       {open && (
         <div className="mt-4 space-y-3">
@@ -1266,7 +1314,7 @@ function IntlView({
           {tab === "overview" && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {gscTop10.length > 0 && (
-                <ChartCard title="Top 10 Countries by GSC Clicks">
+                <ChartCard title="Top 10 Countries by GSC Clicks" tip="Countries sending the most organic search clicks to your site. Use this to identify markets worth localising content for or running geo-targeted SEO campaigns in.">
                   <ResponsiveContainer width="100%" height={260}>
                     <BarChart data={gscTop10} layout="vertical" margin={{ top: 0, right: 16, bottom: 0, left: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f0fdfa" horizontal={false} />
@@ -1279,7 +1327,7 @@ function IntlView({
                 </ChartCard>
               )}
               {ga4Top10.length > 0 && (
-                <ChartCard title="Top 10 Countries by GA4 Users">
+                <ChartCard title="Top 10 Countries by GA4 Users" tip="Countries generating the most users in GA4. Compare this with GSC clicks to spot markets where you rank but don't convert — or rank well but have low brand awareness.">
                   <ResponsiveContainer width="100%" height={260}>
                     <BarChart data={ga4Top10} layout="vertical" margin={{ top: 0, right: 16, bottom: 0, left: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f0f9ff" horizontal={false} />
@@ -3003,6 +3051,17 @@ export default function App() {
     { key: "performance", label: "Performance", icon: BarChart2 },
   ];
 
+  const VIEW_TOOLTIPS: Record<ActiveView, string> = {
+    ga4: "Google Analytics 4 — view traffic, sessions, pageviews, and bounce rate for your property.",
+    gsc: "Google Search Console — track your search impressions, clicks, CTR, and average ranking position.",
+    blend: "Blend — overlay GA4 and GSC data side-by-side on a single timeline to spot correlations.",
+    intl: "International — see how your site performs across different countries in both GA4 and GSC.",
+    opportunities: "SEO Opportunities — queries with high impressions but low CTR that are ripe for optimisation.",
+    conversions: "Conversions — monitor key conversion events and goal completions tracked in GA4.",
+    seoIssues: "SEO Issues — surface technical and on-page problems that may be hurting your rankings.",
+    performance: "Performance — analyse Core Web Vitals and page speed signals from your Search Console data.",
+  };
+
   const [isPdfBuilding, setIsPdfBuilding] = useState(false);
 
   const downloadAllAsPdf = useCallback(async () => {
@@ -3090,27 +3149,35 @@ ${combinedHtml}
             {isLoggedIn && (
               <>
                 {lastUpdated && <span className="text-xs text-gray-400 hidden sm:block">{lastUpdated.toLocaleTimeString()}</span>}
-                <button
-                  type="button"
-                  onClick={() => void downloadAllAsPdf()}
-                  disabled={isPdfBuilding}
-                  className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-purple-700 disabled:opacity-50 disabled:cursor-wait px-2.5 py-1.5 rounded-lg border border-gray-200 hover:border-purple-300 bg-white transition-colors"
-                  title="Download every section as a single PDF"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                  {isPdfBuilding ? "Building PDF…" : "Download all PDF"}
-                </button>
-                <button onClick={handleRefresh} disabled={refreshing || ga4Loading || gscLoading || convLoading || seoIssuesLoading}
-                  className="p-2 rounded-xl bg-gray-50 border border-gray-200 text-gray-400 hover:text-purple-700 hover:border-purple-300 disabled:opacity-40 transition-all">
-                  <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
-                </button>
-                <button type="button" onClick={handleLogout}
-                  className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-red-600 px-2 py-1.5 rounded-lg border border-transparent hover:border-red-100 transition-colors">
-                  <LogOut size={12} /> Log out
-                </button>
-                <div className="flex items-center gap-2 bg-purple-50 text-purple-700 px-3 py-1.5 rounded-xl text-xs font-semibold border border-purple-200">
-                  <Activity size={12} /> Connected
-                </div>
+                <HoverTooltip tip="Export every dashboard section as a combined PDF report you can save or share.">
+                  <button
+                    type="button"
+                    onClick={() => void downloadAllAsPdf()}
+                    disabled={isPdfBuilding}
+                    className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-purple-700 disabled:opacity-50 disabled:cursor-wait px-2.5 py-1.5 rounded-lg border border-gray-200 hover:border-purple-300 bg-white transition-colors"
+                    title="Download every section as a single PDF"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    {isPdfBuilding ? "Building PDF…" : "Download all PDF"}
+                  </button>
+                </HoverTooltip>
+                <HoverTooltip tip="Refresh all data from GA4 and Search Console using the current filters.">
+                  <button onClick={handleRefresh} disabled={refreshing || ga4Loading || gscLoading || convLoading || seoIssuesLoading}
+                    className="p-2 rounded-xl bg-gray-50 border border-gray-200 text-gray-400 hover:text-purple-700 hover:border-purple-300 disabled:opacity-40 transition-all">
+                    <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
+                  </button>
+                </HoverTooltip>
+                <HoverTooltip tip="Disconnect your Google account and return to the login screen.">
+                  <button type="button" onClick={handleLogout}
+                    className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-red-600 px-2 py-1.5 rounded-lg border border-transparent hover:border-red-100 transition-colors">
+                    <LogOut size={12} /> Log out
+                  </button>
+                </HoverTooltip>
+                <HoverTooltip tip="Your Google account is connected and data is being fetched live.">
+                  <div className="flex items-center gap-2 bg-purple-50 text-purple-700 px-3 py-1.5 rounded-xl text-xs font-semibold border border-purple-200">
+                    <Activity size={12} /> Connected
+                  </div>
+                </HoverTooltip>
               </>
             )}
             {!isLoggedIn && (
@@ -3154,11 +3221,13 @@ ${combinedHtml}
             {/* ── View Switcher ── */}
             <div className="flex items-center gap-1.5 bg-white border border-gray-100 rounded-2xl p-1.5 shadow-sm w-fit flex-wrap max-w-full">
               {VIEWS.map(({ key, label, icon: Icon }) => (
-                <button key={key} onClick={() => setActiveView(key)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${activeView === key ? "bg-purple-700 text-white shadow-sm" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"}`}>
-                  <Icon size={14} />
-                  {label}
-                </button>
+                <HoverTooltip key={key} tip={VIEW_TOOLTIPS[key as ActiveView]}>
+                  <button onClick={() => setActiveView(key)}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${activeView === key ? "bg-purple-700 text-white shadow-sm" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"}`}>
+                    <Icon size={14} />
+                    {label}
+                  </button>
+                </HoverTooltip>
               ))}
             </div>
 
@@ -3189,10 +3258,10 @@ ${combinedHtml}
                     <ComparisonBanner days={dateRangeDays(ga4FetchFilters.dateRange)} mode={ga4Filters.comparison} rangeHint={ga4BannerHint} />
                     {/* KPIs */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <KpiCard label="Active Users"  value={ga4TotalUsers.toLocaleString()}    sub={dateRangeLabel(ga4Filters.dateRange)} icon={Users}       cmpValue={hasCmp ? ga4CmpUsers    : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "users" ? null : "users"))} active={ga4TrendMetricFocus === "users"} />
-                      <KpiCard label="Sessions"      value={ga4TotalSessions.toLocaleString()} sub={dateRangeLabel(ga4Filters.dateRange)} icon={Activity}    cmpValue={hasCmp ? ga4CmpSessions : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "sessions" ? null : "sessions"))} active={ga4TrendMetricFocus === "sessions"} />
-                      <KpiCard label="Pageviews"     value={ga4TotalPV.toLocaleString()}        sub={dateRangeLabel(ga4Filters.dateRange)} icon={Eye}          cmpValue={hasCmp ? ga4CmpPV       : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "pageviews" ? null : "pageviews"))} active={ga4TrendMetricFocus === "pageviews"} />
-                      <KpiCard label="Avg Bounce"    value={`${ga4AvgBounce}%`}                 icon={TrendingUp}                                    cmpValue={hasCmp ? ga4CmpBounce   : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "bounceRate" ? null : "bounceRate"))} active={ga4TrendMetricFocus === "bounceRate"} />
+                      <HoverTooltip tip="Total unique users who visited your site in the selected period. Click to isolate this metric on the trend chart."><KpiCard label="Active Users"  value={ga4TotalUsers.toLocaleString()}    sub={dateRangeLabel(ga4Filters.dateRange)} icon={Users}       cmpValue={hasCmp ? ga4CmpUsers    : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "users" ? null : "users"))} active={ga4TrendMetricFocus === "users"} /></HoverTooltip>
+                      <HoverTooltip tip="Number of sessions (visits) in the period. A single user can have multiple sessions. Click to chart this metric alone."><KpiCard label="Sessions"      value={ga4TotalSessions.toLocaleString()} sub={dateRangeLabel(ga4Filters.dateRange)} icon={Activity}    cmpValue={hasCmp ? ga4CmpSessions : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "sessions" ? null : "sessions"))} active={ga4TrendMetricFocus === "sessions"} /></HoverTooltip>
+                      <HoverTooltip tip="Total page views recorded. Counts every page load, including repeat views by the same user. Click to chart."><KpiCard label="Pageviews"     value={ga4TotalPV.toLocaleString()}        sub={dateRangeLabel(ga4Filters.dateRange)} icon={Eye}          cmpValue={hasCmp ? ga4CmpPV       : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "pageviews" ? null : "pageviews"))} active={ga4TrendMetricFocus === "pageviews"} /></HoverTooltip>
+                      <HoverTooltip tip="Average bounce rate across the period — the % of sessions where users left without interacting further. Lower is generally better."><KpiCard label="Avg Bounce"    value={`${ga4AvgBounce}%`}                 icon={TrendingUp}                                    cmpValue={hasCmp ? ga4CmpBounce   : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "bounceRate" ? null : "bounceRate"))} active={ga4TrendMetricFocus === "bounceRate"} /></HoverTooltip>
                     </div>
                     {ga4TrendMetricFocus && (
                       <p className="text-xs text-purple-600">Trend chart shows <strong>{metricLabel[ga4TrendMetricFocus]}</strong> only. Click the same KPI again to show all selected metrics.</p>
@@ -3200,7 +3269,7 @@ ${combinedHtml}
 
                     {/* Metric chart */}
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                      <ChartCard title={isSingleSeries ? `${ga4ChartMetrics.map((m) => metricLabel[m]).join(", ")} over time${ga4Filters.comparison !== "none" ? ` — ${ga4Filters.comparison === "prevPeriod" ? "vs Prev Period" : "vs Prev Year"}` : ""}` : `${ga4Filters.deviceFilter.length > 1 ? "Devices" : "Channels"} — ${ga4ChartMetrics.map((m) => metricLabel[m]).join(", ")}`} className="lg:col-span-2">
+                      <ChartCard title={isSingleSeries ? `${ga4ChartMetrics.map((m) => metricLabel[m]).join(", ")} over time${ga4Filters.comparison !== "none" ? ` — ${ga4Filters.comparison === "prevPeriod" ? "vs Prev Period" : "vs Prev Year"}` : ""}` : `${ga4Filters.deviceFilter.length > 1 ? "Devices" : "Channels"} — ${ga4ChartMetrics.map((m) => metricLabel[m]).join(", ")}`} className="lg:col-span-2" tip="Daily trend of your selected metrics. Click any KPI card above to isolate that metric. Use the Comparison toggle to overlay a previous period.">
                         <ResponsiveContainer width="100%" height={200}>
                           <LineChart data={chartGA4Data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                             <defs>
@@ -3234,7 +3303,7 @@ ${combinedHtml}
                       </ChartCard>
 
                       {ga4Channels.length > 0 && (
-                        <ChartCard title="Top Channels">
+                        <ChartCard title="Top Channels" tip="Breakdown of traffic sources — Organic Search, Direct, Social, Referral, etc. Bars show sessions relative to the top channel.">
                           <div className="space-y-2.5">
                             {ga4Channels.slice(0, 6).map((c, i) => {
                               const max    = ga4Channels[0].sessions;
@@ -3276,7 +3345,7 @@ ${combinedHtml}
 
                     {/* Landing Pages */}
                     {ga4LandingPages.length > 0 && (
-                      <ChartCard title="Top Landing Pages">
+                      <ChartCard title="Top Landing Pages" tip="Pages where users first entered your site. Click any row to drill into that page's GSC queries and GA4 data. Use the search box to filter by path.">
                         <div className="mb-3">
                           <TextInput value={landingPageFilter} onChange={setLandingPageFilter} placeholder="Filter by page path…" className="max-w-xs" />
                         </div>
@@ -3355,7 +3424,7 @@ ${combinedHtml}
 
                   {ga4AiSources.length > 0 && (
                     <div className={`grid grid-cols-1 lg:grid-cols-2 gap-4 transition-opacity duration-200 ${ga4Loading ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
-                      <ChartCard title="Sessions by AI Source">
+                      <ChartCard title="Sessions by AI Source" tip="Traffic originating from AI assistants like ChatGPT, Claude, Perplexity, and Gemini, detected via referral source/medium in GA4.">
                         <ResponsiveContainer width="100%" height={220}>
                           <BarChart data={ga4AiSources} layout="vertical" margin={{ top: 0, right: 16, bottom: 0, left: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#f3e8ff" horizontal={false} />
@@ -3369,7 +3438,7 @@ ${combinedHtml}
                         </ResponsiveContainer>
                       </ChartCard>
 
-                      <ChartCard title={`AI Share of Traffic${hasCmp ? ` — vs ${ga4CmpLabel}` : ""}`}>
+                      <ChartCard title={`AI Share of Traffic${hasCmp ? ` — vs ${ga4CmpLabel}` : ""}`} tip="Pie chart showing the proportion of your traffic arriving from each AI platform. Helps you understand which AI tools are driving the most referrals.">
                         <div className="flex gap-4 items-center">
                           <ResponsiveContainer width="50%" height={180}>
                             <PieChart>
@@ -3467,14 +3536,14 @@ ${combinedHtml}
                     <div className={`space-y-4 transition-opacity duration-200 ${gscLoading ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
                       <ComparisonBanner days={dateRangeDays(gscFetchFilters.dateRange)} mode={gscFilters.comparison} rangeHint={gscBannerHint} />
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        <KpiCard label="Total Clicks"  value={gscTotalClicks.toLocaleString()}      sub={dateRangeLabel(gscFilters.dateRange)} icon={MousePointerClick} cmpValue={hasGscCmp ? gscCmpClicks      : undefined} cmpLabel={gscCmpLabel} />
-                        <KpiCard label="Impressions"   value={gscTotalImpressions.toLocaleString()} sub={dateRangeLabel(gscFilters.dateRange)} icon={Eye}               cmpValue={hasGscCmp ? gscCmpImpressions : undefined} cmpLabel={gscCmpLabel} />
-                        <KpiCard label="Avg CTR"       value={`${gscAvgCTR}%`}                      icon={TrendingUp}                                          cmpValue={hasGscCmp ? gscCmpCTR         : undefined} cmpLabel={gscCmpLabel} />
-                        <KpiCard label="Avg Position"  value={gscAvgPosition}                       icon={ArrowUpRight}                                        cmpValue={hasGscCmp ? gscCmpPosition    : undefined} cmpLabel={gscCmpLabel} />
+                        <HoverTooltip tip="Times users clicked your site's links in Google Search results during this period."><KpiCard label="Total Clicks"  value={gscTotalClicks.toLocaleString()}      sub={dateRangeLabel(gscFilters.dateRange)} icon={MousePointerClick} cmpValue={hasGscCmp ? gscCmpClicks      : undefined} cmpLabel={gscCmpLabel} /></HoverTooltip>
+                        <HoverTooltip tip="How many times your pages appeared in Google Search results, regardless of whether they were clicked."><KpiCard label="Impressions"   value={gscTotalImpressions.toLocaleString()} sub={dateRangeLabel(gscFilters.dateRange)} icon={Eye}               cmpValue={hasGscCmp ? gscCmpImpressions : undefined} cmpLabel={gscCmpLabel} /></HoverTooltip>
+                        <HoverTooltip tip="Click-through rate — the percentage of impressions that resulted in a click. Higher CTR means your titles and meta descriptions are compelling."><KpiCard label="Avg CTR"       value={`${gscAvgCTR}%`}                      icon={TrendingUp}                                          cmpValue={hasGscCmp ? gscCmpCTR         : undefined} cmpLabel={gscCmpLabel} /></HoverTooltip>
+                        <HoverTooltip tip="Your average ranking position in Google Search. Position 1 is the top result. Lower numbers are better."><KpiCard label="Avg Position"  value={gscAvgPosition}                       icon={ArrowUpRight}                                        cmpValue={hasGscCmp ? gscCmpPosition    : undefined} cmpLabel={gscCmpLabel} /></HoverTooltip>
                       </div>
 
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        <ChartCard title={`Daily Clicks${gscSeriesKeys.length > 1 ? " by " + (gscFilters.countryFilter.length > 1 ? "Country" : "Device") : ""}${gscFilters.comparison !== "none" && gscSeriesKeys.length === 0 ? ` — ${gscFilters.comparison === "prevPeriod" ? "vs Prev Period" : "vs Prev Year"}` : ""}`}>
+                        <ChartCard title={`Daily Clicks${gscSeriesKeys.length > 1 ? " by " + (gscFilters.countryFilter.length > 1 ? "Country" : "Device") : ""}${gscFilters.comparison !== "none" && gscSeriesKeys.length === 0 ? ` — ${gscFilters.comparison === "prevPeriod" ? "vs Prev Period" : "vs Prev Year"}` : ""}`} tip="Day-by-day GSC click trend. Spikes or drops here often correlate with algorithm updates, content changes, or SERP feature appearances.">
                           <ResponsiveContainer width="100%" height={200}>
                             <LineChart data={chartGSCData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#f3e8ff" />
@@ -3503,7 +3572,7 @@ ${combinedHtml}
 
                         <div className="grid grid-rows-2 gap-4">
                           {gscDevices.length > 0 && (
-                            <ChartCard title="Clicks by Device">
+                            <ChartCard title="Clicks by Device" tip="How your search clicks are split across desktop, mobile, and tablet. Useful for prioritising mobile optimisation.">
                               <ResponsiveContainer width="100%" height={80}>
                                 <BarChart data={gscDevices} layout="vertical" margin={{ top: 0, right: 8, bottom: 0, left: 0 }}>
                                   <XAxis type="number" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
@@ -3517,7 +3586,7 @@ ${combinedHtml}
                             </ChartCard>
                           )}
 
-                          <ChartCard title="Daily CTR (%)">
+                          <ChartCard title="Daily CTR (%)" tip="Your click-through rate over time. A declining CTR despite stable impressions suggests title/meta description improvements are needed.">
                             <ResponsiveContainer width="100%" height={80}>
                               <AreaChart data={chartGSCData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                                 <defs>
@@ -3696,13 +3765,13 @@ ${combinedHtml}
                     <>
                       {/* Combined KPIs */}
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        <KpiCard label="GA4 Users"    value={ga4TotalUsers.toLocaleString()}      sub="GA4" icon={Users}            cmpValue={hasCmp    ? ga4CmpUsers    : undefined} cmpLabel={ga4CmpLabel} />
-                        <KpiCard label="GA4 Sessions" value={ga4TotalSessions.toLocaleString()}    sub="GA4" icon={Activity}         cmpValue={hasCmp    ? ga4CmpSessions : undefined} cmpLabel={ga4CmpLabel} />
-                        <KpiCard label="GSC Clicks"   value={gscTotalClicks.toLocaleString()}      sub="GSC" icon={MousePointerClick} cmpValue={hasGscCmp ? gscCmpClicks   : undefined} cmpLabel={gscCmpLabel} />
-                        <KpiCard label="GSC Impr."    value={gscTotalImpressions.toLocaleString()} sub="GSC" icon={Eye}               cmpValue={hasGscCmp ? gscCmpImpressions : undefined} cmpLabel={gscCmpLabel} />
+                        <HoverTooltip tip="GA4 active users from your Analytics property for the selected period."><KpiCard label="GA4 Users"    value={ga4TotalUsers.toLocaleString()}      sub="GA4" icon={Users}            cmpValue={hasCmp    ? ga4CmpUsers    : undefined} cmpLabel={ga4CmpLabel} /></HoverTooltip>
+                        <HoverTooltip tip="GA4 sessions — total visits to your site including repeat visits by the same user."><KpiCard label="GA4 Sessions" value={ga4TotalSessions.toLocaleString()}    sub="GA4" icon={Activity}         cmpValue={hasCmp    ? ga4CmpSessions : undefined} cmpLabel={ga4CmpLabel} /></HoverTooltip>
+                        <HoverTooltip tip="GSC clicks — times users clicked your site in Google Search results."><KpiCard label="GSC Clicks"   value={gscTotalClicks.toLocaleString()}      sub="GSC" icon={MousePointerClick} cmpValue={hasGscCmp ? gscCmpClicks   : undefined} cmpLabel={gscCmpLabel} /></HoverTooltip>
+                        <HoverTooltip tip="GSC impressions — how many times your pages appeared in Google search results."><KpiCard label="GSC Impr."    value={gscTotalImpressions.toLocaleString()} sub="GSC" icon={Eye}               cmpValue={hasGscCmp ? gscCmpImpressions : undefined} cmpLabel={gscCmpLabel} /></HoverTooltip>
                       </div>
 
-                      <ChartCard title="GA4 Users · GA4 Sessions · GSC Clicks — Blended Timeline">
+                      <ChartCard title="GA4 Users · GA4 Sessions · GSC Clicks — Blended Timeline" tip="Overlays GA4 and GSC metrics on one chart using dual Y-axes. Helps you spot whether drops in organic clicks match drops in GA4 sessions, or if the gap is widening.">
                         <ResponsiveContainer width="100%" height={280}>
                           <LineChart data={blendData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#f3e8ff" />
@@ -3720,7 +3789,7 @@ ${combinedHtml}
 
                       {/* Side-by-side mini KPI breakdown */}
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        <ChartCard title="Top GA4 Channels">
+                        <ChartCard title="Top GA4 Channels" tip="Your top traffic sources from GA4 — useful for cross-referencing against GSC organic data to understand how much search contributes vs other channels.">
                           <div className="space-y-2.5">
                             {ga4Channels.slice(0, 5).map((c, i) => {
                               const max = ga4Channels[0]?.sessions || 1;
@@ -3740,7 +3809,7 @@ ${combinedHtml}
                           </div>
                         </ChartCard>
 
-                        <ChartCard title="Top GSC Queries">
+                        <ChartCard title="Top GSC Queries" tip="The search queries driving the most clicks from Google. Use this alongside GA4 channel data to understand how your organic keywords translate into actual site traffic.">
                           <ScrollTable>
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 z-10 bg-white shadow-sm">
@@ -3806,7 +3875,7 @@ ${combinedHtml}
                     <div className={`space-y-4 transition-opacity duration-200 ${gscLoading ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
                       <ComparisonBanner days={dateRangeDays(gscFetchFilters.dateRange)} mode={gscFilters.comparison} rangeHint={gscBannerHint} />
                       {gscOpportunityRows.length > 0 ? (
-                        <ChartCard title={`Low clicks, high impressions${hasGscCmp ? ` — vs ${gscCmpLabel}` : ""}`}>
+                        <ChartCard title={`Low clicks, high impressions${hasGscCmp ? ` — vs ${gscCmpLabel}` : ""}`} tip="Queries with lots of Google impressions but very few clicks — prime candidates for better title tags and meta descriptions to boost CTR.">
                           <p className="text-xs text-gray-500 mb-3">
                             {gscOpportunityRows.length} quer{gscOpportunityRows.length === 1 ? "y" : "ies"} · from {gscOpportunityQueries.length.toLocaleString()} top queries in GSC (same filters)
                           </p>
@@ -3875,7 +3944,7 @@ ${combinedHtml}
                   )}
 
                   {/* ── Query-in-copy analysis ── */}
-                  <ChartCard title="Query in copy — do your pages mention the queries they rank for?">
+                  <ChartCard title="Query in copy — do your pages mention the queries they rank for?" tip="Checks whether your ranking queries actually appear in your page content. Pages missing their target query in the copy often have lower relevance signals.">
                     <p className="text-xs text-gray-400 mb-3">
                       Select a page to fetch its live content and check which GSC queries actually appear in the copy. Queries <strong>missing from the page text</strong> are prime candidates to add naturally.
                     </p>
@@ -3987,7 +4056,7 @@ ${combinedHtml}
                   {/* ── Buried URLs: 0 clicks + position 50+ queries ── */}
                   {(buriedByPage.length > 0 || gscLoading) && (
                     <div className={`space-y-3 transition-opacity duration-200 ${gscLoading ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
-                      <ChartCard title="Buried pages — 0 clicks with queries stuck at position 50+">
+                      <ChartCard title="Buried pages — 0 clicks with queries stuck at position 50+" tip="Pages that appear in search but rank so low they never get clicked. Consider consolidating, rewriting, or building links to these pages to rescue them from obscurity.">
                         <p className="text-xs text-gray-400 mb-3">
                           URLs with <strong>fewer than 5 total clicks</strong> that have queries ranked at position 50 or deeper. Click any row to expand its queries. These pages exist in Google's index but are effectively invisible — consolidate, improve, or redirect.
                         </p>
@@ -4107,7 +4176,7 @@ ${combinedHtml}
 
                   {/* All events comparison table */}
                   {convAllEvents.length > 0 && (
-                    <ChartCard title="All events overview — pick one to analyse">
+                    <ChartCard title="All events overview — pick one to analyse" tip="A summary of all GA4 conversion events tracked on your site. Click or type the name of an event below to drill into its daily trend, device split, and top converting pages.">
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
                         <ScrollTable maxH="220px">
                           <table className="w-full text-xs">
@@ -4159,13 +4228,13 @@ ${combinedHtml}
 
                       {/* KPI summary row */}
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                        <KpiCard label="Total events" value={convDaily.reduce((s, r) => s + r.count, 0).toLocaleString()} sub={`${convEventName || "purchase"}`} icon={ShoppingCart} />
-                        <KpiCard label="Daily avg" value={convDaily.length > 0 ? Math.round(convDaily.reduce((s, r) => s + r.count, 0) / convDaily.length).toLocaleString() : "—"} sub="events/day" icon={TrendingUp} />
-                        <KpiCard label="Best day" value={convDaily.length > 0 ? convDaily.reduce((best, r) => r.count > best.count ? r : best).count.toLocaleString() : "—"} sub={convDaily.length > 0 ? convDaily.reduce((best, r) => r.count > best.count ? r : best).date : ""} icon={TrendingUp} />
-                        <KpiCard label="Pages tracked" value={convByPage.length.toLocaleString()} sub="pages with event" icon={Eye} />
+                        <HoverTooltip tip="Total times the selected conversion event fired across all sessions in the date range."><KpiCard label="Total events" value={convDaily.reduce((s, r) => s + r.count, 0).toLocaleString()} sub={`${convEventName || "purchase"}`} icon={ShoppingCart} /></HoverTooltip>
+                        <HoverTooltip tip="Average number of conversion events per day — useful for spotting seasonal trends or the impact of campaigns."><KpiCard label="Daily avg" value={convDaily.length > 0 ? Math.round(convDaily.reduce((s, r) => s + r.count, 0) / convDaily.length).toLocaleString() : "—"} sub="events/day" icon={TrendingUp} /></HoverTooltip>
+                        <HoverTooltip tip="The single best-performing day for this event in the selected period — useful for identifying what drove a peak."><KpiCard label="Best day" value={convDaily.length > 0 ? convDaily.reduce((best, r) => r.count > best.count ? r : best).count.toLocaleString() : "—"} sub={convDaily.length > 0 ? convDaily.reduce((best, r) => r.count > best.count ? r : best).date : ""} icon={TrendingUp} /></HoverTooltip>
+                        <HoverTooltip tip="Number of distinct pages where this conversion event was recorded — helps identify your highest-converting landing pages."><KpiCard label="Pages tracked" value={convByPage.length.toLocaleString()} sub="pages with event" icon={Eye} /></HoverTooltip>
                       </div>
 
-                      <ChartCard title={`Event trend: ${convEventName.trim() || "purchase"}`}>
+                      <ChartCard title={`Event trend: ${convEventName.trim() || "purchase"}`} tip="Daily count of the selected conversion event. Look for drops after deploys or spikes after campaigns to validate tracking and impact.">
                         <ResponsiveContainer width="100%" height={260}>
                           <LineChart data={convDaily.map((r, i) => {
                             const row: Record<string, string | number> = { date: r.date, count: r.count };
@@ -4188,7 +4257,7 @@ ${combinedHtml}
                       {(convByDevice.length > 0 || convByChannel.length > 0) && (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                           {convByDevice.length > 0 && (
-                            <ChartCard title="Events by device">
+                            <ChartCard title="Events by device" tip="Conversion event breakdown by device type. If mobile conversions are low relative to traffic share, check your mobile UX and page load speed.">
                               <div className="flex gap-4 items-center">
                                 <ResponsiveContainer width="50%" height={180}>
                                   <PieChart>
@@ -4217,7 +4286,7 @@ ${combinedHtml}
                             </ChartCard>
                           )}
                           {convByChannel.length > 0 && (
-                            <ChartCard title="Events by channel">
+                            <ChartCard title="Events by channel" tip="Which traffic channels are driving the most conversion events. Organic Search conversions here confirm that your SEO is generating genuine business value.">
                               <ResponsiveContainer width="100%" height={180}>
                                 <BarChart data={convByChannel} layout="vertical" margin={{ left: 8, right: 16, top: 4, bottom: 4 }}>
                                   <XAxis type="number" tick={{ fontSize: 9, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
@@ -4235,7 +4304,7 @@ ${combinedHtml}
 
                       {/* Day of week heatmap */}
                       {convByDayOfWeek.length > 0 && (
-                        <ChartCard title="Events by day of week">
+                        <ChartCard title="Events by day of week" tip="Aggregated conversion events by weekday. Useful for scheduling campaigns, emails, or content drops on your highest-converting days.">
                           <ResponsiveContainer width="100%" height={160}>
                             <BarChart data={convByDayOfWeek} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#ecfdf5" vertical={false} />
@@ -4256,7 +4325,7 @@ ${combinedHtml}
 
                       {/* Top pages with event */}
                       {convByPage.length > 0 && (
-                        <ChartCard title={`Top pages firing "${convEventName || "purchase"}"`}>
+                        <ChartCard title={`Top pages firing "${convEventName || "purchase"}"`} tip="The pages generating the most conversion events. These are your highest-value pages — protect their rankings and ensure they load fast.">
                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                             <ScrollTable maxH="260px">
                               <table className="w-full text-xs">
@@ -4293,7 +4362,7 @@ ${combinedHtml}
 
                       {/* Pages with low conversion rate — opportunity table */}
                       {convLowPages.length > 0 && (
-                        <ChartCard title={`⚠️ Pages with low "${convEventName || "purchase"}" rate — fix opportunities`}>
+                        <ChartCard title={`⚠️ Pages with low "${convEventName || "purchase"}" rate — fix opportunities`} tip="Pages receiving decent traffic but generating few conversions. These are your biggest CRO opportunities — review the content, CTAs, and user journey on each.">
                           <p className="text-xs text-gray-400 mb-3">Pages with ≥20 sessions but low event-to-session rate. These are your biggest conversion leakage points.</p>
                           <ScrollTable maxH="240px">
                             <table className="w-full text-xs">
@@ -4385,12 +4454,12 @@ ${combinedHtml}
                     <>
                     {/* Scorecards */}
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                      <KpiCard label="Total issues" value={totalSeoIssues.toLocaleString()} sub="across all signals" icon={AlertTriangle} />
-                      <KpiCard label="Striking distance" value={strikingDistanceQueries.length.toLocaleString()} sub="GSC pos 11–20" icon={TrendingUp} />
-                      <KpiCard label="Low CTR queries" value={lowCtrHighImpressions.length.toLocaleString()} sub="≥100 impr · CTR <2%" icon={MousePointerClick} />
-                      <KpiCard label="Orphan-ish pages" value={orphanGscPages.length.toLocaleString()} sub="impressions, no clicks" icon={Eye} />
-                      <KpiCard label="No GA4 traffic" value={seoNoTraffic.length.toLocaleString()} sub="pages with ~0 sessions" icon={Users} />
-                      <KpiCard label="404 in title" value={seo404Titles.length.toLocaleString()} sub="potential dead pages" icon={X} />
+                      <HoverTooltip tip="Total number of SEO signals flagged across all issue categories — a combined health score for your site."><KpiCard label="Total issues" value={totalSeoIssues.toLocaleString()} sub="across all signals" icon={AlertTriangle} /></HoverTooltip>
+                      <HoverTooltip tip="Queries ranking at positions 11–20 — just off page one. Small optimisations here can unlock significant traffic gains."><KpiCard label="Striking distance" value={strikingDistanceQueries.length.toLocaleString()} sub="GSC pos 11–20" icon={TrendingUp} /></HoverTooltip>
+                      <HoverTooltip tip="Queries with ≥100 impressions but a CTR below 2% — your titles and meta descriptions aren't compelling enough to earn clicks."><KpiCard label="Low CTR queries" value={lowCtrHighImpressions.length.toLocaleString()} sub="≥100 impr · CTR <2%" icon={MousePointerClick} /></HoverTooltip>
+                      <HoverTooltip tip="Pages that appear in Google Search impressions but have never received a click — potentially under-promoted or poorly targeted."><KpiCard label="Orphan-ish pages" value={orphanGscPages.length.toLocaleString()} sub="impressions, no clicks" icon={Eye} /></HoverTooltip>
+                      <HoverTooltip tip="Pages with virtually zero GA4 sessions — these may be orphaned from your site navigation or have very poor search visibility."><KpiCard label="No GA4 traffic" value={seoNoTraffic.length.toLocaleString()} sub="pages with ~0 sessions" icon={Users} /></HoverTooltip>
+                      <HoverTooltip tip="Pages where '404' appears in the page title — a strong signal of broken or missing content that should be fixed or redirected."><KpiCard label="404 in title" value={seo404Titles.length.toLocaleString()} sub="potential dead pages" icon={X} /></HoverTooltip>
                     </div>
 
                     {/* Pies */}
@@ -4445,7 +4514,7 @@ ${combinedHtml}
 
                     {/* GSC opportunity tables */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                      <ChartCard title="Striking distance queries (pos 11–20)">
+                      <ChartCard title="Striking distance queries (pos 11–20)" tip="Queries ranking just off page one — positions 11 to 20. A small content improvement or link boost could push these onto page one and significantly increase clicks.">
                         <p className="text-[10px] text-gray-400 mb-2">Push these onto page 1 — small ranking gains, big traffic upside.</p>
                         <ScrollTable>
                           <table className="w-full text-xs">
@@ -4561,7 +4630,7 @@ ${combinedHtml}
                           </table>
                         </ScrollTable>
                       </ChartCard>
-                      <ChartCard title="Low engagement (≥10 sessions, &lt;35% engagement)">
+                      <ChartCard title="Low engagement (≥10 sessions, &lt;35% engagement)" tip="Pages with meaningful traffic but poor engagement rates — users are landing but not interacting. Check content relevance, page speed, and whether the content matches search intent.">
                         <ScrollTable>
                           <table className="w-full text-xs">
                             <thead className="sticky top-0 z-10 bg-white shadow-sm">
@@ -4583,7 +4652,7 @@ ${combinedHtml}
                           </table>
                         </ScrollTable>
                       </ChartCard>
-                      <ChartCard title="404 in page title">
+                      <ChartCard title="404 in page title" tip="Pages where the HTML title tag contains '404' — these are broken pages that are still receiving traffic. Set up proper redirects or restore the content.">
                         <ScrollTable>
                           <table className="w-full text-xs">
                             <thead className="sticky top-0 z-10 bg-white shadow-sm">
@@ -4645,7 +4714,7 @@ ${combinedHtml}
                     <>
                       {/* ── Element 1: URL performance ── */}
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        <ChartCard title="URL Performance by Clicks">
+                        <ChartCard title="URL Performance by Clicks" tip="Scatter plot of your pages by GSC impressions vs clicks. Pages in the top-left (high impressions, low clicks) are priority CTR optimisation targets.">
                           <div className="flex gap-4 items-center">
                             <ResponsiveContainer width="45%" height={210}>
                               <PieChart>
@@ -4729,7 +4798,7 @@ ${combinedHtml}
 
                       {/* ── Element 2: Query performance ── */}
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        <ChartCard title="Query Performance by Position">
+                        <ChartCard title="Query Performance by Position" tip="Your queries plotted by average position vs CTR. Queries ranking in positions 1–3 with low CTR suggest your title or snippet needs work — you're visible but not compelling.">
                           <div className="flex gap-4 items-center">
                             <ResponsiveContainer width="45%" height={210}>
                               <PieChart>
