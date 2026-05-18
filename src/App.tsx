@@ -203,7 +203,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "conversions" | "seoIssues" | "performance";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "conversions" | "seoIssues" | "performance";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -434,7 +434,7 @@ function gscDateWindows(f: GSCFilters): { startDate: string; endDate: string; co
 
 // ─── Hover Tooltip ────────────────────────────────────────────────────────────
 
-function HoverTooltip({ children, tip, className = "" }: { children: React.ReactNode; tip: string; className?: string }) {
+function HoverTooltip({ children, tip, className = "" }: { children: React.ReactNode; tip: string; className?: string; key?: string | number }) {
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const ref = useRef<HTMLDivElement>(null);
@@ -549,7 +549,7 @@ function TextInput({ value, onChange, placeholder, className = "" }: {
   );
 }
 
-function FilterPill({ label, onRemove }: { label: string; onRemove: () => void }) {
+function FilterPill({ label, onRemove }: { label: string; onRemove: () => void; key?: string }) {
   return (
     <span className="inline-flex items-center gap-1 bg-purple-50 border border-purple-200 rounded-full px-2.5 py-1 text-xs text-purple-700 font-medium">
       {label}
@@ -1722,7 +1722,8 @@ function GscOpportunitiesView({
     return { count: found?.size ?? 0, checked };
   };
 
-  const QUERY_FILTERS: { key: string; label: string; isNew?: boolean }[] = [
+  type FilterDef = { key: string; label: string; isNew?: boolean };
+  const QUERY_FILTERS: FilterDef[] = [
     { key: "on-page-2",    label: "On Page 2" },
     { key: "questions",    label: "Questions" },
     { key: "buyer",        label: "Buyer Keywords" },
@@ -1735,7 +1736,7 @@ function GscOpportunitiesView({
     { key: "no-brand",     label: "Exclude Brand" },
   ];
 
-  const PAGE_FILTERS: { key: string; label: string }[] = [
+  const PAGE_FILTERS: FilterDef[] = [
     { key: "on-page-2",   label: "On Page 2" },
     { key: "impr-500",    label: "Impressions > 500" },
     { key: "no-mention",  label: "No Mentions" },
@@ -1745,7 +1746,7 @@ function GscOpportunitiesView({
     { key: "low-ctr",     label: "Low CTR" },
   ];
 
-  const activeFiltersArr = oppTableMode === "queries" ? QUERY_FILTERS : PAGE_FILTERS;
+  const activeFiltersArr: FilterDef[] = oppTableMode === "queries" ? QUERY_FILTERS : PAGE_FILTERS;
   const displayedRows    = oppTableMode === "queries" ? filteredQueries : filteredPages;
 
   if (!selectedGSC) return (
@@ -2086,6 +2087,322 @@ function GscOpportunitiesView({
 }
 
 
+// ─── Product Categories View ───────────────────────────────────────────────────
+
+interface CatRowType {
+  category: string;
+  clicks: number; impressions: number; ctr: number; position: number;
+  leads: number; sessions: number;
+  clicksCmp: number; impressionsCmp: number; leadsCmp: number; sessionsCmp: number;
+  pages: string[];
+}
+
+interface ProductCatProps {
+  catRows: CatRowType[];
+  catLoading: boolean;
+  catTab: "all" | "growing" | "decaying";
+  setCatTab: (t: "all" | "growing" | "decaying") => void;
+  catMetric: "clicks" | "leads" | "sessions";
+  setCatMetric: (m: "clicks" | "leads" | "sessions") => void;
+  catExpandedCategory: string | null;
+  setCatExpandedCategory: React.Dispatch<React.SetStateAction<string | null>>;
+  catExpandedData: { page: string; clicks: number; impressions: number; ctr: number; position: number; leads: number; sessions: number }[];
+  catExpandedLoading: boolean;
+  fetchCatExpanded: (cat: { name: string; parent: string; children: string[] }) => Promise<void>;
+  vccCategories: { name: string; parent: string; children: string[] }[];
+  selectedGA4: string;
+  selectedGSC: string;
+}
+
+function pctDelta(cur: number, cmp: number): number | null {
+  if (!cmp) return null;
+  return ((cur - cmp) / Math.abs(cmp)) * 100;
+}
+
+function CatDelta({ cur, cmp, lowerBetter = false }: { cur: number; cmp: number; lowerBetter?: boolean }) {
+  const d = pctDelta(cur, cmp);
+  if (d === null) return null;
+  const up = d > 0;
+  const good = lowerBetter ? !up : up;
+  return (
+    <span className={`ml-1 text-[10px] font-bold ${good ? "text-emerald-600" : "text-red-500"}`}>
+      {up ? "+" : ""}{d.toFixed(0)}%
+    </span>
+  );
+}
+
+function SparkBar({ value, max, color = "#5b4fa8" }: { value: number; max: number; color?: string }) {
+  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+  return (
+    <div className="h-1.5 bg-gray-100 rounded-full mt-1" style={{ width: "100%" }}>
+      <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: color }} />
+    </div>
+  );
+}
+
+function ProductCategoriesView({
+  catRows, catLoading, catTab, setCatTab, catMetric, setCatMetric,
+  catExpandedCategory, setCatExpandedCategory,
+  catExpandedData, catExpandedLoading, fetchCatExpanded,
+  vccCategories, selectedGA4, selectedGSC,
+}: ProductCatProps) {
+
+  const getMetricVal = (r: CatRowType) => catMetric === "clicks" ? r.clicks : catMetric === "leads" ? r.leads : r.sessions;
+  const getCmpVal = (r: CatRowType) => catMetric === "clicks" ? r.clicksCmp : catMetric === "leads" ? r.leadsCmp : r.sessionsCmp;
+
+  const filtered = useMemo(() => {
+    let rows = [...catRows];
+    if (catTab === "growing")  rows = rows.filter((r) => (pctDelta(getMetricVal(r), getCmpVal(r)) ?? 0) > 0);
+    if (catTab === "decaying") rows = rows.filter((r) => (pctDelta(getMetricVal(r), getCmpVal(r)) ?? 0) < 0);
+    return rows.sort((a, b) => getMetricVal(b) - getMetricVal(a));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catRows, catTab, catMetric]);
+
+  const maxMetric = useMemo(() => Math.max(1, ...filtered.map(getMetricVal)), [filtered, catMetric]);
+  const maxLeads  = useMemo(() => Math.max(1, ...catRows.map((r) => r.leads)), [catRows]);
+
+  const handleRowClick = (row: CatRowType) => {
+    if (catExpandedCategory === row.category) {
+      setCatExpandedCategory(null);
+    } else {
+      setCatExpandedCategory(row.category);
+      const cat = vccCategories.find((c) => c.name === row.category);
+      if (cat) void fetchCatExpanded(cat);
+    }
+  };
+
+  if (!selectedGA4 || !selectedGSC) return (
+    <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center shadow-sm">
+      <Layers size={28} className="text-purple-200 mx-auto mb-3" />
+      <p className="text-sm text-gray-400">Connect both a GA4 property and a Search Console property to view Product Categories.</p>
+    </div>
+  );
+
+  // Summary KPIs
+  const totalClicks   = catRows.reduce((s, r) => s + r.clicks, 0);
+  const totalLeads    = catRows.reduce((s, r) => s + r.leads, 0);
+  const totalSessions = catRows.reduce((s, r) => s + r.sessions, 0);
+  const totalClicksCmp   = catRows.reduce((s, r) => s + r.clicksCmp, 0);
+  const totalLeadsCmp    = catRows.reduce((s, r) => s + r.leadsCmp, 0);
+  const totalSessionsCmp = catRows.reduce((s, r) => s + r.sessionsCmp, 0);
+
+  const growingCount  = catRows.filter((r) => (pctDelta(getMetricVal(r), getCmpVal(r)) ?? 0) > 0).length;
+  const decayingCount = catRows.filter((r) => (pctDelta(getMetricVal(r), getCmpVal(r)) ?? 0) < 0).length;
+
+  const metricLabel = { clicks: "GSC Clicks", leads: "Leads", sessions: "Organic Sessions" };
+  const metricColor = { clicks: "#5b4fa8", leads: "#059669", sessions: "#0ea5e9" };
+
+  return (
+    <div className="space-y-5">
+
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        <div className="bg-purple-100 rounded-xl p-2"><Layers size={16} className="text-[#5b4fa8]" /></div>
+        <div>
+          <h2 className="text-sm font-bold text-gray-900">Product Categories</h2>
+          <p className="text-xs text-gray-400">SEO performance by category · organic sessions · generate_lead events · vs previous period</p>
+        </div>
+      </div>
+
+      {/* KPI summary row */}
+      {!catLoading && catRows.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <HoverTooltip tip="Total GSC organic clicks across all product categories in the current period.">
+            <KpiCard label="Total Clicks" value={totalClicks.toLocaleString()} icon={MousePointerClick} cmpValue={totalClicksCmp} />
+          </HoverTooltip>
+          <HoverTooltip tip="Total generate_lead events fired on category pages — your primary conversion signal.">
+            <KpiCard label="Total Leads" value={totalLeads.toLocaleString()} icon={TrendingUp} cmpValue={totalLeadsCmp} />
+          </HoverTooltip>
+          <HoverTooltip tip="Organic search sessions from GA4 across all category pages.">
+            <KpiCard label="Organic Sessions" value={totalSessions.toLocaleString()} icon={Users} cmpValue={totalSessionsCmp} />
+          </HoverTooltip>
+          <HoverTooltip tip="How many categories are growing vs decaying in the selected metric vs the previous period.">
+            <div className="bg-white border border-purple-100 rounded-2xl p-4 shadow-sm">
+              <div className="flex gap-4">
+                <div>
+                  <p className="text-xl font-bold text-emerald-600">{growingCount}</p>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mt-0.5">Growing</p>
+                </div>
+                <div className="w-px bg-gray-100" />
+                <div>
+                  <p className="text-xl font-bold text-red-500">{decayingCount}</p>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mt-0.5">Decaying</p>
+                </div>
+              </div>
+            </div>
+          </HoverTooltip>
+        </div>
+      )}
+
+      {/* Controls: tab + metric toggle */}
+      <div className="flex items-center gap-3 flex-wrap">
+        {/* Growing/Decaying/All tabs */}
+        <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+          {(["all", "growing", "decaying"] as const).map((t) => (
+            <button key={t} onClick={() => setCatTab(t)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize transition-all ${catTab === t ? "bg-white text-[#5b4fa8] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+              {t === "all" ? `All (${catRows.length})` : t === "growing" ? `▲ Growing (${growingCount})` : `▼ Decaying (${decayingCount})`}
+            </button>
+          ))}
+        </div>
+        {/* Metric toggle */}
+        <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+          {(["clicks", "leads", "sessions"] as const).map((m) => (
+            <button key={m} onClick={() => setCatMetric(m)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${catMetric === m ? "bg-white shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+              style={catMetric === m ? { color: metricColor[m] } : {}}>
+              {metricLabel[m]}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+        <div className="flex">
+          <div className="w-1 bg-[#5b4fa8] rounded-l-2xl shrink-0" />
+          <div className="flex-1 overflow-x-auto">
+            {catLoading ? (
+              <div className="flex items-center justify-center py-16 gap-2">
+                <div className="w-5 h-5 border-2 border-purple-200 border-t-[#5b4fa8] rounded-full animate-spin" />
+                <span className="text-sm text-gray-400">Loading category data…</span>
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="py-16 text-center text-sm text-gray-400">No data yet. Make sure both GA4 and GSC are connected.</div>
+            ) : (
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-gray-100 bg-gray-50/60">
+                    <th className="py-3 pl-4 w-8" />
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500">Category</th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500 whitespace-nowrap" style={{ color: metricColor[catMetric] }}>{metricLabel[catMetric]}</th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500">Impressions</th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500">Avg Position</th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500">CTR</th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500 text-emerald-600">Leads</th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500 text-sky-600">Organic Sessions</th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500">Trend</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((row, i) => {
+                    const isExpanded = catExpandedCategory === row.category;
+                    const metVal   = getMetricVal(row);
+                    const metCmp   = getCmpVal(row);
+                    const delta    = pctDelta(metVal, metCmp);
+                    const isGrow   = (delta ?? 0) > 0;
+                    const isDecay  = (delta ?? 0) < 0;
+
+                    return (
+                      <>
+                        <tr key={row.category}
+                          className={`border-b border-gray-50 cursor-pointer hover:bg-purple-50/40 transition-colors ${isExpanded ? "bg-purple-50/60" : i % 2 === 0 ? "" : "bg-gray-50/20"}`}
+                          onClick={() => handleRowClick(row)}>
+                          <td className="py-3 pl-4 pr-1 w-8">
+                            <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${isExpanded ? "bg-[#5b4fa8] border-[#5b4fa8]" : "border-gray-200"}`}>
+                              {isExpanded ? <ChevronUp size={11} className="text-white" /> : <ChevronDown size={11} className="text-gray-400" />}
+                            </div>
+                          </td>
+                          <td className="py-3 px-3">
+                            <div className="flex items-center gap-2">
+                              <span className={`font-semibold ${isExpanded ? "text-[#5b4fa8]" : "text-gray-800"}`}>{row.category}</span>
+                              {isGrow  && <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">▲ Growing</span>}
+                              {isDecay && <span className="text-[9px] font-bold text-red-500 bg-red-50 px-1.5 py-0.5 rounded-full">▼ Decaying</span>}
+                            </div>
+                            <SparkBar value={metVal} max={maxMetric} color={metricColor[catMetric]} />
+                          </td>
+                          <td className="py-3 px-3 font-semibold text-gray-800">
+                            {metVal.toLocaleString()}
+                            <CatDelta cur={metVal} cmp={metCmp} />
+                          </td>
+                          <td className="py-3 px-3 text-gray-600">{row.impressions.toLocaleString()}</td>
+                          <td className="py-3 px-3"><PosBadge pos={row.position || 0} /></td>
+                          <td className="py-3 px-3 text-gray-600">{row.position > 0 ? `${(row.ctr * 100).toFixed(1)}%` : "—"}</td>
+                          <td className="py-3 px-3">
+                            <span className="font-semibold text-emerald-600">{row.leads.toLocaleString()}</span>
+                            <CatDelta cur={row.leads} cmp={row.leadsCmp} />
+                            <SparkBar value={row.leads} max={maxLeads} color="#059669" />
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="font-semibold text-sky-600">{row.sessions.toLocaleString()}</span>
+                            <CatDelta cur={row.sessions} cmp={row.sessionsCmp} />
+                          </td>
+                          <td className="py-3 px-3">
+                            {delta !== null ? (
+                              <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold ${
+                                isGrow ? "bg-emerald-50 text-emerald-600" : isDecay ? "bg-red-50 text-red-500" : "bg-gray-50 text-gray-400"
+                              }`}>
+                                {isGrow ? "▲" : isDecay ? "▼" : "—"} {Math.abs(delta).toFixed(0)}%
+                              </div>
+                            ) : <span className="text-gray-300 text-[10px]">No prev data</span>}
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr key={`${row.category}-expanded`}>
+                            <td colSpan={9} className="bg-purple-50/30 px-8 py-4 border-b border-purple-100">
+                              <p className="text-xs font-semibold text-[#5b4fa8] mb-3">Pages in "{row.category}"</p>
+                              {catExpandedLoading ? (
+                                <div className="flex items-center gap-2 py-2">
+                                  <div className="w-4 h-4 border border-purple-200 border-t-[#5b4fa8] rounded-full animate-spin" />
+                                  <span className="text-xs text-gray-400">Loading pages…</span>
+                                </div>
+                              ) : catExpandedData.length === 0 ? (
+                                <p className="text-xs text-gray-400">No page data found for this category.</p>
+                              ) : (
+                                <table className="w-full text-xs border border-gray-100 rounded-xl overflow-hidden">
+                                  <thead>
+                                    <tr className="bg-white border-b border-gray-100">
+                                      <th className="py-2 px-3 text-left font-semibold text-gray-400">Page URL</th>
+                                      <th className="py-2 px-3 text-left font-semibold text-gray-400">Clicks</th>
+                                      <th className="py-2 px-3 text-left font-semibold text-gray-400">Impressions</th>
+                                      <th className="py-2 px-3 text-left font-semibold text-gray-400">Position</th>
+                                      <th className="py-2 px-3 text-left font-semibold text-gray-400">CTR</th>
+                                      <th className="py-2 px-3 text-left font-semibold text-emerald-600">Leads</th>
+                                      <th className="py-2 px-3 text-left font-semibold text-sky-600">Org. Sessions</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {catExpandedData.map((p, pi) => (
+                                      <tr key={pi} className="border-b border-gray-50 last:border-0 hover:bg-purple-50/20">
+                                        <td className="py-2 px-3 text-[#5b4fa8] max-w-[340px] truncate font-medium" title={p.page}>
+                                          {p.page.replace(/^https?:\/\/[^/]+/, "")}
+                                        </td>
+                                        <td className="py-2 px-3 font-semibold text-gray-800">{p.clicks.toLocaleString()}</td>
+                                        <td className="py-2 px-3 text-gray-600">{p.impressions.toLocaleString()}</td>
+                                        <td className="py-2 px-3"><PosBadge pos={p.position} /></td>
+                                        <td className="py-2 px-3 text-gray-600">{(p.ctr * 100).toFixed(1)}%</td>
+                                        <td className="py-2 px-3 font-semibold text-emerald-600">{p.leads}</td>
+                                        <td className="py-2 px-3 font-semibold text-sky-600">{p.sessions}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+        {!catLoading && catRows.length > 0 && (
+          <div className="px-5 py-2.5 border-t border-gray-100 flex justify-between items-center">
+            <p className="text-xs text-gray-400">
+              Showing {filtered.length} of {catRows.length} categories · {catTab !== "all" ? catTab : "all"}
+            </p>
+            <p className="text-xs text-gray-400">Comparison: previous period of same length</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 function printElementAsPdf(el: HTMLElement, title: string) {
   const w = window.open("", "_blank", "width=1024,height=900");
   if (!w) return;
@@ -2299,6 +2616,23 @@ export default function App() {
   const [oppMentionMap, setOppMentionMap] = useState<Map<string, Set<string>>>(new Map());
   const [oppMentionChecked, setOppMentionChecked] = useState<Set<string>>(new Set());
   const BRAND_TERMS = ["vintage cash cow", "vintagecashcow", "vcc"];
+
+  // ── Product Categories state ────────────────────────────────────────────────
+  interface CatRow {
+    category: string;
+    clicks: number; impressions: number; ctr: number; position: number;
+    leads: number; sessions: number;
+    clicksCmp: number; impressionsCmp: number; leadsCmp: number; sessionsCmp: number;
+    pages: string[];
+    expanded?: boolean;
+  }
+  const [catRows, setCatRows] = useState<CatRow[]>([]);
+  const [catLoading, setCatLoading] = useState(false);
+  const [catTab, setCatTab] = useState<"all" | "growing" | "decaying">("all");
+  const [catMetric, setCatMetric] = useState<"clicks" | "leads" | "sessions">("clicks");
+  const [catExpandedCategory, setCatExpandedCategory] = useState<string | null>(null);
+  const [catExpandedData, setCatExpandedData] = useState<{ page: string; clicks: number; impressions: number; ctr: number; position: number; leads: number; sessions: number }[]>([]);
+  const [catExpandedLoading, setCatExpandedLoading] = useState(false);
   const [convLoading, setConvLoading] = useState(false);
 
   useEffect(() => {
@@ -2645,7 +2979,7 @@ export default function App() {
           f.metrics.forEach((metric) => {
             const metricVal = metric === "bounceRate"
               ? +((seriesMaps[i].get(date)?.bounceRate ?? 0) * 100).toFixed(2)
-              : (seriesMaps[i].get(date)?.[metric] ?? 0);
+              : ((seriesMaps[i].get(date) as Record<string, number> | undefined)?.[metric] ?? 0);
             row[`${k}__${metric}`] = metricVal;
           });
         });
@@ -3052,6 +3386,215 @@ export default function App() {
     setConvLoading(false);
   }, [selectedGA4, accessToken, ga4FetchFilters]);
 
+  // ── VCC Category map ───────────────────────────────────────────────────────
+  const VCC_CATEGORIES: { name: string; parent: string; children: string[] }[] = [
+    { name: "Digital Cameras", parent: "/items-we-buy/digital-cameras/", children: ["/items-we-buy/digital-cameras/digital-cameras"] },
+    { name: "Video Games", parent: "/items-we-buy/video-games/", children: ["/items-we-buy/video-games/accessories","/items-we-buy/video-games/handheld","/items-we-buy/video-games/nintendo","/items-we-buy/video-games/playstation","/items-we-buy/video-games/sega","/items-we-buy/video-games/xbox"] },
+    { name: "Cameras", parent: "/items-we-buy/cameras/", children: ["/items-we-buy/cameras/argoflex-cameras","/items-we-buy/cameras/large-format-cameras","/items-we-buy/cameras/mamiya-cameras","/items-we-buy/cameras/polaroid-cameras","/items-we-buy/cameras/rolleiflex-cameras","/items-we-buy/cameras/slr-cameras","/items-we-buy/cameras/tlr-cameras","/items-we-buy/cameras/vintage-cameras"] },
+    { name: "Watches & Pocket Watches", parent: "/items-we-buy/watches-and-pocket-watches/", children: ["/items-we-buy/watches-and-pocket-watches/antique-pocket-watches","/items-we-buy/watches-and-pocket-watches/cartier-watches","/items-we-buy/watches-and-pocket-watches/longines-watches","/items-we-buy/watches-and-pocket-watches/omega-watches","/items-we-buy/watches-and-pocket-watches/rolex-watches","/items-we-buy/watches-and-pocket-watches/universal-polerouter-vintage-watch","/items-we-buy/watches-and-pocket-watches/vintage-watches"] },
+    { name: "Jewellery", parent: "/items-we-buy/jewellery/", children: ["/items-we-buy/jewellery/antique-jewellery","/items-we-buy/jewellery/brooches","/items-we-buy/jewellery/charm-bracelets","/items-we-buy/jewellery/cufflinks","/items-we-buy/jewellery/multistone-jewellery","/items-we-buy/jewellery/trinket-boxes","/items-we-buy/jewellery/vintage-jewellery"] },
+    { name: "Medals & Militaria", parent: "/items-we-buy/medals-and-militaria/", children: ["/items-we-buy/medals-and-militaria/entire-collections","/items-we-buy/medals-and-militaria/war-medals"] },
+    { name: "Toys", parent: "/items-we-buy/toys/", children: ["/items-we-buy/toys/action-figures","/items-we-buy/toys/corgi-vehicles","/items-we-buy/toys/diecast-toys","/items-we-buy/toys/model-railway","/items-we-buy/toys/teddy-bears"] },
+    { name: "Writing Instruments", parent: "/items-we-buy/writing-instruments/", children: ["/items-we-buy/writing-instruments/fountain-pens","/items-we-buy/writing-instruments/montblanc-pens","/items-we-buy/writing-instruments/parker-pens","/items-we-buy/writing-instruments/wahl-eversharp-fountain-pen"] },
+    { name: "Old Currency", parent: "/items-we-buy/old-currency/", children: ["/items-we-buy/old-currency/obsolete-currency","/items-we-buy/old-currency/old-banknotes","/items-we-buy/old-currency/old-coins"] },
+    { name: "Vintage Electronics", parent: "/items-we-buy/vintage-electronics/", children: ["/items-we-buy/vintage-electronics/retro-mobile-phones","/items-we-buy/vintage-electronics/vintage-western-electric"] },
+    { name: "Gold", parent: "/items-we-buy/gold/", children: ["/items-we-buy/gold/gold-coins","/items-we-buy/gold/gold-plated","/items-we-buy/gold/gold-rings","/items-we-buy/gold/scrap-gold"] },
+    { name: "Costume Jewellery", parent: "/items-we-buy/costume-jewellery/", children: ["/items-we-buy/costume-jewellery/designer-costume-jewellery","/items-we-buy/costume-jewellery/vintage-costume-jewellery"] },
+    { name: "Amber", parent: "/items-we-buy/amber/", children: [] },
+    { name: "Android Products", parent: "/items-we-buy/android-products/", children: [] },
+    { name: "Apple Products", parent: "/items-we-buy/apple-products/", children: [] },
+    { name: "Binoculars", parent: "/items-we-buy/binoculars/", children: [] },
+    { name: "Clocks", parent: "/items-we-buy/clocks/", children: [] },
+    { name: "Diamonds", parent: "/items-we-buy/diamonds/", children: [] },
+    { name: "Gold", parent: "/items-we-buy/gold/", children: [] },
+    { name: "Lego", parent: "/items-we-buy/lego/", children: [] },
+    { name: "Silver & Silver Plate", parent: "/items-we-buy/silver-silver-plate/", children: [] },
+    { name: "Sports Memorabilia", parent: "/items-we-buy/sports-memorabilia/", children: [] },
+    { name: "Vintage Collectables", parent: "/items-we-buy/vintage-collectables/", children: [] },
+    { name: "Vintage Handbags & Purses", parent: "/items-we-buy/vintage-handbags-and-purses/", children: [] },
+  ];
+
+  const fetchProductCategories = useCallback(async () => {
+    if (!selectedGA4 || !selectedGSC || !accessToken) return;
+    setCatLoading(true);
+    try {
+      const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
+      const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
+      const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+
+      const f = ga4FetchFilters;
+      const { current: curWin, comparison: cmpWin } = ga4DateWindows(f);
+      const gf = gscFetchFilters;
+      const { startDate: gscStart, endDate: gscEnd } = gscDateWindows(gf);
+      const gscCmpWin = comparisonWindowBefore(gscStart, gscEnd);
+
+      // Collect all category page paths
+      const allPaths = VCC_CATEGORIES.flatMap((c) => [c.parent, ...c.children]);
+      const pathFilter = allPaths.map((p) => p.replace(/\/$/, ""));
+
+      // GA4: organic sessions + generate_lead per page
+      const ga4PageBody = (dateRange: { startDate: string; endDate: string }, channelFilter?: boolean) => ({
+        dateRanges: [dateRange],
+        dimensions: [{ name: "pagePath" }],
+        metrics: [{ name: "sessions" }, { name: "eventCount" }],
+        dimensionFilter: {
+          andGroup: {
+            expressions: [
+              ...(channelFilter ? [{ filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "EXACT", value: "Organic Search" } } }] : []),
+            ]
+          }
+        },
+        orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+        limit: 500,
+      });
+
+      // Lead events separately
+      const ga4LeadBody = (dateRange: { startDate: string; endDate: string }) => ({
+        dateRanges: [dateRange],
+        dimensions: [{ name: "pagePath" }],
+        metrics: [{ name: "eventCount" }],
+        dimensionFilter: { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
+        orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
+        limit: 500,
+      });
+
+      // GSC: clicks+impressions per page
+      const gscPageBody = (sd: string, ed: string) => ({
+        startDate: sd, endDate: ed,
+        dimensions: ["page"],
+        rowLimit: 500,
+      });
+
+      const [
+        ga4OrgCur, ga4OrgCmp,
+        ga4LeadCur, ga4LeadCmp,
+        gscCur, gscCmp,
+      ] = await Promise.all([
+        fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(ga4PageBody(curWin, true)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
+        cmpWin ? fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(ga4PageBody(cmpWin, true)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }> : Promise.resolve({ rows: [] }),
+        fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(ga4LeadBody(curWin)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
+        cmpWin ? fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(ga4LeadBody(cmpWin)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }> : Promise.resolve({ rows: [] }),
+        fetch(gscBase, { method: "POST", headers, body: JSON.stringify(gscPageBody(gscStart, gscEnd)) }).then((r) => r.json()) as Promise<{ rows?: GSCApiRow[] }>,
+        fetch(gscBase, { method: "POST", headers, body: JSON.stringify(gscPageBody(gscCmpWin.startDate, gscCmpWin.endDate)) }).then((r) => r.json()) as Promise<{ rows?: GSCApiRow[] }>,
+      ]);
+
+      // Build lookup maps
+      const siteBase = selectedGSC.replace(/\/$/, "");
+      const normPath = (url: string) => {
+        try { return new URL(url).pathname.replace(/\/$/, "") || "/"; } catch { return url.replace(/\/$/, "") || "/"; }
+      };
+
+      type PageStats = { sessions: number; leads: number; clicks: number; impressions: number; ctr: number; position: number };
+      const makeMap = (ga4Org: { rows?: GA4ApiRow[] }, ga4Lead: { rows?: GA4ApiRow[] }, gscData: { rows?: GSCApiRow[] }): Map<string, PageStats> => {
+        const m = new Map<string, PageStats>();
+        const get = (path: string) => m.get(path) ?? { sessions: 0, leads: 0, clicks: 0, impressions: 0, ctr: 0, position: 0 };
+        (ga4Org.rows ?? []).forEach((r) => {
+          const p = r.dimensionValues[0].value.replace(/\/$/, "") || "/";
+          const cur = get(p);
+          m.set(p, { ...cur, sessions: cur.sessions + parseInt(r.metricValues[0].value, 10) });
+        });
+        (ga4Lead.rows ?? []).forEach((r) => {
+          const p = r.dimensionValues[0].value.replace(/\/$/, "") || "/";
+          const cur = get(p);
+          m.set(p, { ...cur, leads: cur.leads + parseInt(r.metricValues[0].value, 10) });
+        });
+        (gscData.rows ?? []).forEach((r) => {
+          const p = normPath(r.keys[0]);
+          const cur = get(p);
+          m.set(p, { ...cur, clicks: cur.clicks + Math.round(r.clicks), impressions: cur.impressions + Math.round(r.impressions), ctr: r.ctr, position: r.position });
+        });
+        return m;
+      };
+
+      const curMap = makeMap(ga4OrgCur, ga4LeadCur, gscCur);
+      const cmpMap = makeMap(ga4OrgCmp as { rows?: GA4ApiRow[] }, ga4LeadCmp as { rows?: GA4ApiRow[] }, gscCmp);
+
+      // Aggregate by category (dedup Gold)
+      const seenNames = new Set<string>();
+      const rows = VCC_CATEGORIES
+        .filter((c) => { if (seenNames.has(c.name)) return false; seenNames.add(c.name); return true; })
+        .map((cat) => {
+          const allCatPaths = [cat.parent, ...cat.children].map((p) => p.replace(/\/$/, "") || "/");
+          const sum = (map: Map<string, PageStats>) => allCatPaths.reduce((acc, p) => {
+            const s = map.get(p) ?? { sessions: 0, leads: 0, clicks: 0, impressions: 0, ctr: 0, position: 0 };
+            return { sessions: acc.sessions + s.sessions, leads: acc.leads + s.leads, clicks: acc.clicks + s.clicks, impressions: acc.impressions + s.impressions, ctrSum: acc.ctrSum + s.ctr, posSum: acc.posSum + s.position, n: acc.n + (s.clicks > 0 ? 1 : 0) };
+          }, { sessions: 0, leads: 0, clicks: 0, impressions: 0, ctrSum: 0, posSum: 0, n: 0 });
+          const cur = sum(curMap);
+          const cmp = sum(cmpMap);
+          return {
+            category: cat.name,
+            clicks: cur.clicks, impressions: cur.impressions,
+            ctr: cur.n > 0 ? cur.ctrSum / cur.n : 0,
+            position: cur.n > 0 ? cur.posSum / cur.n : 0,
+            leads: cur.leads, sessions: cur.sessions,
+            clicksCmp: cmp.clicks, impressionsCmp: cmp.impressions,
+            leadsCmp: cmp.leads, sessionsCmp: cmp.sessions,
+            pages: allCatPaths,
+          };
+        })
+        .sort((a, b) => b.clicks - a.clicks);
+
+      setCatRows(rows);
+    } catch (e) {
+      console.error("fetchProductCategories", e);
+    }
+    setCatLoading(false);
+  }, [selectedGA4, selectedGSC, accessToken, ga4FetchFilters, gscFetchFilters]);
+
+  // Fetch expanded page data for a clicked category
+  const fetchCatExpanded = useCallback(async (cat: { name: string; parent: string; children: string[] }) => {
+    if (!selectedGA4 || !selectedGSC || !accessToken) return;
+    setCatExpandedLoading(true);
+    setCatExpandedData([]);
+    try {
+      const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
+      const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
+      const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+      const { current: curWin } = ga4DateWindows(ga4FetchFilters);
+      const { startDate, endDate } = gscDateWindows(gscFetchFilters);
+      const allPaths = [cat.parent, ...cat.children].map((p) => p.replace(/\/$/, "") || "/");
+
+      const [ga4Org, ga4Lead, gscData] = await Promise.all([
+        fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
+          dateRanges: [curWin],
+          dimensions: [{ name: "pagePath" }],
+          metrics: [{ name: "sessions" }],
+          dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "EXACT", value: "Organic Search" } } },
+          limit: 100,
+        }) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
+        fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
+          dateRanges: [curWin],
+          dimensions: [{ name: "pagePath" }],
+          metrics: [{ name: "eventCount" }],
+          dimensionFilter: { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
+          limit: 100,
+        }) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
+        fetch(gscBase, { method: "POST", headers, body: JSON.stringify({
+          startDate, endDate, dimensions: ["page"],
+          dimensionFilterGroups: [{ filters: allPaths.slice(0, 20).map((p) => ({ dimension: "page", operator: "contains", expression: p })) }],
+          rowLimit: 50,
+        }) }).then((r) => r.json()) as Promise<{ rows?: GSCApiRow[] }>,
+      ]);
+
+      const normPath = (url: string) => { try { return new URL(url).pathname.replace(/\/$/, "") || "/"; } catch { return url.replace(/\/$/, "") || "/"; } };
+      const sessionMap = new Map<string, number>();
+      const leadMap = new Map<string, number>();
+      (ga4Org.rows ?? []).forEach((r) => { const p = r.dimensionValues[0].value.replace(/\/$/, "") || "/"; sessionMap.set(p, (sessionMap.get(p) ?? 0) + parseInt(r.metricValues[0].value, 10)); });
+      (ga4Lead.rows ?? []).forEach((r) => { const p = r.dimensionValues[0].value.replace(/\/$/, "") || "/"; leadMap.set(p, (leadMap.get(p) ?? 0) + parseInt(r.metricValues[0].value, 10)); });
+
+      const rows = (gscData.rows ?? [])
+        .filter((r) => allPaths.some((p) => normPath(r.keys[0]).startsWith(p)))
+        .map((r) => {
+          const p = normPath(r.keys[0]);
+          return { page: r.keys[0], clicks: Math.round(r.clicks), impressions: Math.round(r.impressions), ctr: r.ctr, position: r.position, leads: leadMap.get(p) ?? 0, sessions: sessionMap.get(p) ?? 0 };
+        })
+        .sort((a, b) => b.clicks - a.clicks);
+
+      setCatExpandedData(rows);
+    } catch { setCatExpandedData([]); }
+    setCatExpandedLoading(false);
+  }, [selectedGA4, selectedGSC, accessToken, ga4FetchFilters, gscFetchFilters]);
+
   const fetchSeoIssues = useCallback(async () => {
     if (!selectedGA4 || !accessToken) return;
     setSeoIssuesLoading(true);
@@ -3117,11 +3660,12 @@ export default function App() {
   }, [convEventName]); // eslint-disable-line react-hooks/exhaustive-deps -- conversions mount/refetch is handled by the effect above
 
   useEffect(() => { if (activeView === "seoIssues" && selectedGA4 && accessToken) void fetchSeoIssues(); }, [activeView, selectedGA4, accessToken, fetchSeoIssues]);
+  useEffect(() => { if (activeView === "productCategories" && selectedGA4 && selectedGSC && accessToken) void fetchProductCategories(); }, [activeView, selectedGA4, selectedGSC, accessToken, fetchProductCategories]);
 
   // ── Auto-check mentions: for every page in gscPages, fetch copy and check query presence ──
   useEffect(() => {
     if (!gscPages.length || !gscQueries.length) return;
-    const querySet = new Set(gscQueries.map((q) => q.query.toLowerCase()));
+    const querySet = new Set<string>(gscQueries.map((q) => q.query.toLowerCase()));
     const pagesToCheck = gscPages.slice(0, 80).map((p) => p.page);
     const BRAND = ["vintage cash cow", "vintagecashcow", "vcc"];
     const checkPage = async (pageUrl: string) => {
@@ -3380,10 +3924,10 @@ export default function App() {
       ALL_METRIC_KEYS.forEach((m) => {
         row[m] = m === "bounceRate" ? +(r.bounceRate * 100).toFixed(1) : r[m];
       });
-      const cmpRow = cmpMap.get(i);
+      const cmpRow = cmpMap.get(i) as DailyGA4 | undefined;
       if (cmpRow) {
         ALL_METRIC_KEYS.forEach((m) => {
-          row[`${m}_cmp`] = m === "bounceRate" ? +(cmpRow.bounceRate * 100).toFixed(1) : cmpRow[m];
+          row[`${m}_cmp`] = m === "bounceRate" ? +(cmpRow.bounceRate * 100).toFixed(1) : (cmpRow as unknown as Record<string, number>)[m];
         });
       }
       return row;
@@ -3394,12 +3938,12 @@ export default function App() {
     if (gscSeriesKeys.length > 0) return gscSeries;
     const cmpMap = new Map(gscDailyCmp.map((r, i) => [i, r]));
     return gscDaily.map((r, i) => {
-      const row: SeriesRow = { date: r.date, clicks: r.clicks, impressions: r.impressions, ctr: +(r.ctr * 100).toFixed(2) };
+      const row: SeriesRow = { date: r.date, clicks: r.clicks, impressions: r.impressions, ctr: +(r.ctr * 100).toFixed(2) } as SeriesRow;
       const cmpRow = cmpMap.get(i);
       if (cmpRow) {
-        row["clicks_cmp"] = cmpRow.clicks;
-        row["impressions_cmp"] = cmpRow.impressions;
-        row["ctr_cmp"] = +(cmpRow.ctr * 100).toFixed(2);
+        row["clicks_cmp"] = (cmpRow as unknown as Record<string, number>).clicks;
+        row["impressions_cmp"] = (cmpRow as unknown as Record<string, number>).impressions;
+        row["ctr_cmp"] = +((cmpRow as unknown as Record<string, number>).ctr * 100).toFixed(2);
       }
       return row;
     });
@@ -3412,9 +3956,9 @@ export default function App() {
     const dates  = Array.from(new Set([...ga4Map.keys(), ...gscMap.keys()])).sort();
     return dates.map((date) => ({
       date,
-      ga4Users:    ga4Map.get(date)?.users    ?? null,
-      ga4Sessions: ga4Map.get(date)?.sessions ?? null,
-      gscClicks:   gscMap.get(date)?.clicks   ?? null,
+      ga4Users:    (ga4Map.get(date) as DailyGA4 | undefined)?.users    ?? null,
+      ga4Sessions: (ga4Map.get(date) as DailyGA4 | undefined)?.sessions ?? null,
+      gscClicks:   (gscMap.get(date) as DailyGSC | undefined)?.clicks   ?? null,
     }));
   }, [ga4Daily, gscDaily]);
 
@@ -3645,6 +4189,7 @@ export default function App() {
     { key: "intl",  label: "International", icon: Globe },
     { key: "opportunities", label: "SEO Opportunities", icon: Lightbulb },
     { key: "gscOpportunities", label: "GSC Opportunities", icon: TrendingUp },
+    { key: "productCategories", label: "Product Categories", icon: Layers },
     { key: "conversions", label: "Conversions", icon: ShoppingCart },
     { key: "seoIssues", label: "SEO Issues", icon: AlertTriangle },
     { key: "performance", label: "Performance", icon: BarChart2 },
@@ -3657,6 +4202,7 @@ export default function App() {
     intl: "International — see how your site performs across different countries in both GA4 and GSC.",
     opportunities: "SEO Opportunities — queries with high impressions but low CTR that are ripe for optimisation.",
     gscOpportunities: "GSC Opportunities — a full query/page explorer with smart filters for finding quick wins.",
+    productCategories: "Product Categories — SEO and conversion performance grouped by site category, with trending and GA4 lead data.",
     conversions: "Conversions — monitor key conversion events and goal completions tracked in GA4.",
     seoIssues: "SEO Issues — surface technical and on-page problems that may be hurting your rankings.",
     performance: "Performance — analyse Core Web Vitals and page speed signals from your Search Console data.",
@@ -3830,7 +4376,7 @@ ${combinedHtml}
             {/* ── View Switcher ── */}
             <div className="flex items-center gap-1.5 bg-white border border-gray-100 rounded-2xl p-1.5 shadow-sm w-fit flex-wrap max-w-full">
               {VIEWS.map(({ key, label, icon: Icon }) => (
-                <HoverTooltip key={key} tip={VIEW_TOOLTIPS[key as ActiveView]}>
+                <HoverTooltip key={key} tip={VIEW_TOOLTIPS[key as ActiveView]} className="">
                   <button onClick={() => setActiveView(key)}
                     className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${activeView === key ? "bg-purple-700 text-white shadow-sm" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"}`}>
                     <Icon size={14} />
@@ -3873,12 +4419,12 @@ ${combinedHtml}
                       <HoverTooltip tip="Average bounce rate across the period — the % of sessions where users left without interacting further. Lower is generally better."><KpiCard label="Avg Bounce"    value={`${ga4AvgBounce}%`}                 icon={TrendingUp}                                    cmpValue={hasCmp ? ga4CmpBounce   : undefined} cmpLabel={ga4CmpLabel} onClick={() => setGa4TrendMetricFocus((c) => (c === "bounceRate" ? null : "bounceRate"))} active={ga4TrendMetricFocus === "bounceRate"} /></HoverTooltip>
                     </div>
                     {ga4TrendMetricFocus && (
-                      <p className="text-xs text-purple-600">Trend chart shows <strong>{metricLabel[ga4TrendMetricFocus]}</strong> only. Click the same KPI again to show all selected metrics.</p>
+                      <p className="text-xs text-purple-600">Trend chart shows <strong>{metricLabel[ga4TrendMetricFocus as MetricKey]}</strong> only. Click the same KPI again to show all selected metrics.</p>
                     )}
 
                     {/* Metric chart */}
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                      <ChartCard title={isSingleSeries ? `${ga4ChartMetrics.map((m) => metricLabel[m]).join(", ")} over time${ga4Filters.comparison !== "none" ? ` — ${ga4Filters.comparison === "prevPeriod" ? "vs Prev Period" : "vs Prev Year"}` : ""}` : `${ga4Filters.deviceFilter.length > 1 ? "Devices" : "Channels"} — ${ga4ChartMetrics.map((m) => metricLabel[m]).join(", ")}`} className="lg:col-span-2" tip="Daily trend of your selected metrics. Click any KPI card above to isolate that metric. Use the Comparison toggle to overlay a previous period.">
+                      <ChartCard title={isSingleSeries ? `${ga4ChartMetrics.map((m) => metricLabel[m as MetricKey]).join(", ")} over time${ga4Filters.comparison !== "none" ? ` — ${ga4Filters.comparison === "prevPeriod" ? "vs Prev Period" : "vs Prev Year"}` : ""}` : `${ga4Filters.deviceFilter.length > 1 ? "Devices" : "Channels"} — ${ga4ChartMetrics.map((m) => metricLabel[m as MetricKey]).join(", ")}`} className="lg:col-span-2" tip="Daily trend of your selected metrics. Click any KPI card above to isolate that metric. Use the Comparison toggle to overlay a previous period.">
                         <ResponsiveContainer width="100%" height={200}>
                           <LineChart data={chartGA4Data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                             <defs>
@@ -3896,9 +4442,9 @@ ${combinedHtml}
                             <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} iconType="circle" iconSize={7} />
                             {isSingleSeries
                               ? ga4ChartMetrics.map((m, i) => [
-                                  <Line key={m} type="monotone" dataKey={m} name={metricLabel[m]} stroke={SERIES_COLORS[i % SERIES_COLORS.length]} strokeWidth={2} dot={false} activeDot={{ r: 3 }} />,
+                                  <Line key={m} type="monotone" dataKey={m} name={metricLabel[m as MetricKey]} stroke={SERIES_COLORS[i % SERIES_COLORS.length]} strokeWidth={2} dot={false} activeDot={{ r: 3 }} />,
                                   ga4Filters.comparison !== "none" && ga4DailyCmp.length > 0
-                                    ? <Line key={`${m}_cmp`} type="monotone" dataKey={`${m}_cmp`} name={`${metricLabel[m]} (cmp)`} stroke={SERIES_COLORS[i % SERIES_COLORS.length]} strokeWidth={1.5} strokeDasharray="5 3" dot={false} activeDot={{ r: 2 }} />
+                                    ? <Line key={`${m}_cmp`} type="monotone" dataKey={`${m}_cmp`} name={`${metricLabel[m as MetricKey]} (cmp)`} stroke={SERIES_COLORS[i % SERIES_COLORS.length]} strokeWidth={1.5} strokeDasharray="5 3" dot={false} activeDot={{ r: 2 }} />
                                     : null,
                                 ])
                               : ga4SeriesKeys.map((k, i) => {
@@ -4564,7 +5110,7 @@ ${combinedHtml}
                         <Select
                           value={queryCopyPage}
                           onChange={setQueryCopyPage}
-                          options={[...new Map(gscBuriedPageQueries.map((r) => [r.page, r.page])).keys()].slice(0, 200).map((p) => ({ value: p, label: p }))}
+                          options={[...new Map(gscBuriedPageQueries.map((r) => [r.page, r.page])).keys()].slice(0, 200).map((p) => ({ value: p as string, label: p as string }))}
                           placeholder="Pick a page to analyse…"
                         />
                       </div>
@@ -5059,6 +5605,31 @@ ${combinedHtml}
                   {!convLoading && selectedGA4 && convDaily.length === 0 && (
                     <p className="text-sm text-gray-400 py-4">No event data for this name in the selected range.</p>
                   )}
+                </section>
+              </>
+            )}
+
+            {/* ── Product Categories ── */}
+            {activeView === "productCategories" && (
+              <>
+                <SectionDivider label="PRODUCT CATEGORIES" />
+                <section>
+                  <ProductCategoriesView
+                    catRows={catRows}
+                    catLoading={catLoading}
+                    catTab={catTab}
+                    setCatTab={setCatTab}
+                    catMetric={catMetric}
+                    setCatMetric={setCatMetric}
+                    catExpandedCategory={catExpandedCategory}
+                    setCatExpandedCategory={setCatExpandedCategory}
+                    catExpandedData={catExpandedData}
+                    catExpandedLoading={catExpandedLoading}
+                    fetchCatExpanded={fetchCatExpanded}
+                    vccCategories={VCC_CATEGORIES}
+                    selectedGA4={selectedGA4}
+                    selectedGSC={selectedGSC}
+                  />
                 </section>
               </>
             )}
