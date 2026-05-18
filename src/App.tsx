@@ -203,7 +203,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "conversions" | "seoIssues" | "performance";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "conversions" | "seoIssues" | "performance";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -2422,6 +2422,404 @@ function ProductCategoriesView({
 }
 
 
+// ─── Brand vs Non-Brand View ───────────────────────────────────────────────────
+
+interface BrandDataType {
+  brandedClicks: number; nonBrandedClicks: number;
+  brandedImpressions: number; nonBrandedImpressions: number;
+  brandedCtr: number; nonBrandedCtr: number;
+  brandedPosition: number; nonBrandedPosition: number;
+  daily: { date: string; branded: number; nonBranded: number }[];
+  brandedQueries: { query: string; clicks: number; impressions: number; ctr: number; position: number }[];
+  nonBrandedQueries: { query: string; clicks: number; impressions: number; ctr: number; position: number }[];
+  brandedPages: { page: string; clicks: number; impressions: number }[];
+  nonBrandedPages: { page: string; clicks: number; impressions: number }[];
+  brandedLeads: number; nonBrandedLeads: number;
+  brandedSessions: number; nonBrandedSessions: number;
+  brandedClicksCmp: number; nonBrandedClicksCmp: number;
+  brandedLeadsCmp: number; nonBrandedLeadsCmp: number;
+  brandedSessionsCmp: number; nonBrandedSessionsCmp: number;
+}
+
+interface BrandViewProps {
+  brandData: BrandDataType | null;
+  brandLoading: boolean;
+  brandTab: "overview" | "queries" | "pages" | "leads";
+  setBrandTab: (t: "overview" | "queries" | "pages" | "leads") => void;
+  dateLabel: string;
+  cmpLabel: string;
+  selectedGSC: string;
+}
+
+function BrandPct({ branded, nonBranded }: { branded: number; nonBranded: number }) {
+  const total = branded + nonBranded || 1;
+  const bPct = Math.round((branded / total) * 100);
+  const nbPct = 100 - bPct;
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 text-xs">
+        <span className="w-24 text-right font-semibold text-[#5b4fa8]">{bPct}% Branded</span>
+        <div className="flex-1 h-3 bg-gray-100 rounded-full overflow-hidden flex">
+          <div className="h-full bg-[#5b4fa8] rounded-l-full transition-all" style={{ width: `${bPct}%` }} />
+          <div className="h-full bg-emerald-400 rounded-r-full transition-all" style={{ width: `${nbPct}%` }} />
+        </div>
+        <span className="w-28 font-semibold text-emerald-600">{nbPct}% Non-Branded</span>
+      </div>
+    </div>
+  );
+}
+
+function BVNBKpi({ label, branded, nonBranded, brandedCmp, nonBrandedCmp, icon: Icon, brandColor = "#5b4fa8", nbColor = "#059669" }: {
+  label: string; branded: number; nonBranded: number;
+  brandedCmp?: number; nonBrandedCmp?: number;
+  icon: React.ElementType; brandColor?: string; nbColor?: string;
+}) {
+  const total = branded + nonBranded;
+  const bPct = total > 0 ? Math.round((branded / total) * 100) : 0;
+  const bDelta = brandedCmp ? ((branded - brandedCmp) / Math.abs(brandedCmp)) * 100 : null;
+  const nbDelta = nonBrandedCmp ? ((nonBranded - nonBrandedCmp) / Math.abs(nonBrandedCmp)) * 100 : null;
+  return (
+    <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm space-y-3">
+      <div className="flex items-center gap-2">
+        <div className="rounded-xl p-2 bg-purple-50"><Icon size={14} className="text-[#5b4fa8]" /></div>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{label}</p>
+        <p className="ml-auto text-xs font-bold text-gray-400">{total.toLocaleString()} total</p>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-purple-50 rounded-xl p-3">
+          <p className="text-lg font-bold" style={{ color: brandColor }}>{branded.toLocaleString()}</p>
+          <p className="text-[10px] text-gray-500 font-medium mt-0.5">Branded · {bPct}%</p>
+          {bDelta !== null && (
+            <p className={`text-[10px] font-bold mt-1 ${bDelta >= 0 ? "text-emerald-600" : "text-red-500"}`}>
+              {bDelta >= 0 ? "+" : ""}{bDelta.toFixed(0)}% vs prev
+            </p>
+          )}
+        </div>
+        <div className="bg-emerald-50 rounded-xl p-3">
+          <p className="text-lg font-bold" style={{ color: nbColor }}>{nonBranded.toLocaleString()}</p>
+          <p className="text-[10px] text-gray-500 font-medium mt-0.5">Non-Branded · {100 - bPct}%</p>
+          {nbDelta !== null && (
+            <p className={`text-[10px] font-bold mt-1 ${nbDelta >= 0 ? "text-emerald-600" : "text-red-500"}`}>
+              {nbDelta >= 0 ? "+" : ""}{nbDelta.toFixed(0)}% vs prev
+            </p>
+          )}
+        </div>
+      </div>
+      <BrandPct branded={branded} nonBranded={nonBranded} />
+    </div>
+  );
+}
+
+function BrandVsNonBrandView({ brandData, brandLoading, brandTab, setBrandTab, dateLabel, cmpLabel, selectedGSC }: BrandViewProps) {
+
+  if (!selectedGSC) return (
+    <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center shadow-sm">
+      <BarChart2 size={28} className="text-purple-200 mx-auto mb-3" />
+      <p className="text-sm text-gray-400">Connect a Search Console property to view brand vs non-brand data.</p>
+    </div>
+  );
+
+  const TABS: { key: "overview" | "queries" | "pages" | "leads"; label: string }[] = [
+    { key: "overview", label: "Overview" },
+    { key: "queries", label: "Queries" },
+    { key: "pages", label: "Pages" },
+    { key: "leads", label: "Leads & Sessions" },
+  ];
+
+  const BRAND_COLOR = "#5b4fa8";
+  const NB_COLOR    = "#059669";
+
+  const maxDailyBranded    = brandData ? Math.max(1, ...brandData.daily.map((d) => d.branded)) : 1;
+  const maxDailyNonBranded = brandData ? Math.max(1, ...brandData.daily.map((d) => d.nonBranded)) : 1;
+  const maxDaily = Math.max(maxDailyBranded, maxDailyNonBranded);
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        <div className="bg-purple-100 rounded-xl p-2"><BarChart2 size={16} className="text-[#5b4fa8]" /></div>
+        <div>
+          <h2 className="text-sm font-bold text-gray-900">Brand vs Non-Brand Traffic</h2>
+          <p className="text-xs text-gray-400">Splitting queries containing "cash cow" from non-branded organic search · GSC + GA4</p>
+        </div>
+      </div>
+
+      {/* Date bar */}
+      <div className="flex items-center gap-3 bg-purple-50 border border-purple-100 rounded-xl px-4 py-2.5 flex-wrap">
+        <div className="flex items-center gap-2 text-xs font-semibold text-[#5b4fa8]">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          {dateLabel}
+        </div>
+        {cmpLabel && (
+          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+            <span className="text-gray-300">vs</span>
+            <span className="font-medium text-gray-600">{cmpLabel}</span>
+            <span className="text-[10px] bg-purple-100 text-[#5b4fa8] font-semibold px-1.5 py-0.5 rounded-full">previous period</span>
+          </div>
+        )}
+        <div className="flex items-center gap-3 ml-auto text-[10px] font-semibold">
+          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full inline-block" style={{ backgroundColor: BRAND_COLOR }} /> Branded (contains "cash cow")</span>
+          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full inline-block" style={{ backgroundColor: NB_COLOR }} /> Non-Branded</span>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1 w-fit">
+        {TABS.map((t) => (
+          <button key={t.key} onClick={() => setBrandTab(t.key)}
+            className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${brandTab === t.key ? "bg-white text-[#5b4fa8] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {brandLoading && (
+        <div className="flex items-center justify-center py-16 gap-2">
+          <div className="w-5 h-5 border-2 border-purple-200 border-t-[#5b4fa8] rounded-full animate-spin" />
+          <span className="text-sm text-gray-400">Fetching brand data…</span>
+        </div>
+      )}
+
+      {!brandLoading && !brandData && (
+        <div className="py-12 text-center text-sm text-gray-400">No data loaded yet.</div>
+      )}
+
+      {!brandLoading && brandData && brandTab === "overview" && (
+        <div className="space-y-5">
+          {/* KPI cards */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <BVNBKpi label="GSC Clicks" branded={brandData.brandedClicks} nonBranded={brandData.nonBrandedClicks} brandedCmp={brandData.brandedClicksCmp} nonBrandedCmp={brandData.nonBrandedClicksCmp} icon={MousePointerClick} />
+            <BVNBKpi label="Organic Sessions" branded={brandData.brandedSessions} nonBranded={brandData.nonBrandedSessions} brandedCmp={brandData.brandedSessionsCmp} nonBrandedCmp={brandData.nonBrandedSessionsCmp} icon={Users} />
+            <BVNBKpi label="Leads (generate_lead)" branded={brandData.brandedLeads} nonBranded={brandData.nonBrandedLeads} brandedCmp={brandData.brandedLeadsCmp} nonBrandedCmp={brandData.nonBrandedLeadsCmp} icon={TrendingUp} nbColor="#059669" />
+          </div>
+
+          {/* Position + CTR comparison */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+              <h3 className="text-sm font-semibold text-gray-800 mb-4">Average Position</h3>
+              <div className="space-y-3">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-gray-500 w-28">Branded</span>
+                  <div className="flex-1 bg-gray-100 rounded-full h-3 overflow-hidden">
+                    <div className="h-full rounded-full" style={{ width: `${Math.min(100, (brandData.brandedPosition / 50) * 100)}%`, backgroundColor: BRAND_COLOR }} />
+                  </div>
+                  <PosBadge pos={brandData.brandedPosition} />
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-gray-500 w-28">Non-Branded</span>
+                  <div className="flex-1 bg-gray-100 rounded-full h-3 overflow-hidden">
+                    <div className="h-full rounded-full" style={{ width: `${Math.min(100, (brandData.nonBrandedPosition / 50) * 100)}%`, backgroundColor: NB_COLOR }} />
+                  </div>
+                  <PosBadge pos={brandData.nonBrandedPosition} />
+                </div>
+              </div>
+              <p className="text-[10px] text-gray-400 mt-4">Lower position = closer to #1. Branded queries typically rank higher.</p>
+            </div>
+            <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+              <h3 className="text-sm font-semibold text-gray-800 mb-4">Average CTR</h3>
+              <div className="space-y-3">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-gray-500 w-28">Branded</span>
+                  <div className="flex-1 bg-gray-100 rounded-full h-3 overflow-hidden">
+                    <div className="h-full rounded-full" style={{ width: `${Math.min(100, brandData.brandedCtr * 100 * 3)}%`, backgroundColor: BRAND_COLOR }} />
+                  </div>
+                  <span className="text-xs font-bold text-[#5b4fa8] w-12 text-right">{(brandData.brandedCtr * 100).toFixed(1)}%</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-gray-500 w-28">Non-Branded</span>
+                  <div className="flex-1 bg-gray-100 rounded-full h-3 overflow-hidden">
+                    <div className="h-full rounded-full" style={{ width: `${Math.min(100, brandData.nonBrandedCtr * 100 * 3)}%`, backgroundColor: NB_COLOR }} />
+                  </div>
+                  <span className="text-xs font-bold text-emerald-600 w-12 text-right">{(brandData.nonBrandedCtr * 100).toFixed(1)}%</span>
+                </div>
+              </div>
+              <p className="text-[10px] text-gray-400 mt-4">Branded queries typically have higher CTR due to user intent and familiarity.</p>
+            </div>
+          </div>
+
+          {/* Daily trend chart */}
+          {brandData.daily.length > 0 && (
+            <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+              <h3 className="text-sm font-semibold text-gray-800 mb-1">Daily Clicks — Branded vs Non-Branded</h3>
+              <p className="text-xs text-gray-400 mb-4">Estimated daily split based on overall brand ratio</p>
+              <div className="overflow-x-auto">
+                <div className="flex items-end gap-0.5" style={{ minWidth: `${brandData.daily.length * 14}px`, height: "120px" }}>
+                  {brandData.daily.map((d, i) => {
+                    const bH = Math.round((d.branded / maxDaily) * 110);
+                    const nbH = Math.round((d.nonBranded / maxDaily) * 110);
+                    return (
+                      <div key={i} className="flex flex-col items-center gap-0" style={{ flex: 1, minWidth: "8px" }} title={`${d.date}: ${d.branded} branded, ${d.nonBranded} non-branded`}>
+                        <div className="w-full flex flex-col justify-end gap-0" style={{ height: "110px" }}>
+                          <div className="w-full rounded-t-sm opacity-90" style={{ height: `${nbH}px`, backgroundColor: NB_COLOR }} />
+                          <div className="w-full" style={{ height: `${bH}px`, backgroundColor: BRAND_COLOR }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex justify-between text-[9px] text-gray-400 mt-1 px-0.5">
+                  <span>{brandData.daily[0]?.date}</span>
+                  <span>{brandData.daily[Math.floor(brandData.daily.length / 2)]?.date}</span>
+                  <span>{brandData.daily[brandData.daily.length - 1]?.date}</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-4 mt-3 text-[10px]">
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded inline-block" style={{ backgroundColor: BRAND_COLOR }} /> Branded</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded inline-block" style={{ backgroundColor: NB_COLOR }} /> Non-Branded</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!brandLoading && brandData && brandTab === "queries" && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Branded queries */}
+          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
+            <div className="flex">
+              <div className="w-1 shrink-0 rounded-l-2xl" style={{ backgroundColor: BRAND_COLOR }} />
+              <div className="flex-1">
+                <div className="px-5 pt-4 pb-2 border-b border-gray-50">
+                  <h3 className="text-sm font-semibold text-gray-800">Top Branded Queries</h3>
+                  <p className="text-[10px] text-gray-400 mt-0.5">{brandData.brandedQueries.length} queries · {brandData.brandedClicks.toLocaleString()} total clicks</p>
+                </div>
+                <table className="w-full text-xs">
+                  <thead><tr className="border-b border-gray-50 bg-gray-50/50">
+                    <th className="py-2 px-4 text-left font-semibold text-gray-400">Query</th>
+                    <th className="py-2 px-3 text-left font-semibold text-gray-400">Clicks</th>
+                    <th className="py-2 px-3 text-left font-semibold text-gray-400">Pos.</th>
+                    <th className="py-2 px-3 text-left font-semibold text-gray-400">CTR</th>
+                  </tr></thead>
+                  <tbody>
+                    {brandData.brandedQueries.slice(0, 15).map((q, i) => (
+                      <tr key={i} className="border-b border-gray-50 last:border-0 hover:bg-purple-50/30">
+                        <td className="py-2 px-4 font-medium text-gray-700 max-w-[180px] truncate" title={q.query}>{q.query}</td>
+                        <td className="py-2 px-3 font-semibold" style={{ color: BRAND_COLOR }}>{q.clicks.toLocaleString()}</td>
+                        <td className="py-2 px-3"><PosBadge pos={q.position} /></td>
+                        <td className="py-2 px-3 text-gray-500">{(q.ctr * 100).toFixed(1)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          {/* Non-branded queries */}
+          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
+            <div className="flex">
+              <div className="w-1 shrink-0 rounded-l-2xl" style={{ backgroundColor: NB_COLOR }} />
+              <div className="flex-1">
+                <div className="px-5 pt-4 pb-2 border-b border-gray-50">
+                  <h3 className="text-sm font-semibold text-gray-800">Top Non-Branded Queries</h3>
+                  <p className="text-[10px] text-gray-400 mt-0.5">{brandData.nonBrandedQueries.length} queries · {brandData.nonBrandedClicks.toLocaleString()} total clicks</p>
+                </div>
+                <table className="w-full text-xs">
+                  <thead><tr className="border-b border-gray-50 bg-gray-50/50">
+                    <th className="py-2 px-4 text-left font-semibold text-gray-400">Query</th>
+                    <th className="py-2 px-3 text-left font-semibold text-gray-400">Clicks</th>
+                    <th className="py-2 px-3 text-left font-semibold text-gray-400">Pos.</th>
+                    <th className="py-2 px-3 text-left font-semibold text-gray-400">CTR</th>
+                  </tr></thead>
+                  <tbody>
+                    {brandData.nonBrandedQueries.slice(0, 15).map((q, i) => (
+                      <tr key={i} className="border-b border-gray-50 last:border-0 hover:bg-emerald-50/30">
+                        <td className="py-2 px-4 font-medium text-gray-700 max-w-[180px] truncate" title={q.query}>{q.query}</td>
+                        <td className="py-2 px-3 font-semibold text-emerald-600">{q.clicks.toLocaleString()}</td>
+                        <td className="py-2 px-3"><PosBadge pos={q.position} /></td>
+                        <td className="py-2 px-3 text-gray-500">{(q.ctr * 100).toFixed(1)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!brandLoading && brandData && brandTab === "pages" && (
+        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
+          <div className="px-5 pt-4 pb-3 border-b border-gray-50">
+            <h3 className="text-sm font-semibold text-gray-800">Top Pages by GSC Clicks</h3>
+            <p className="text-xs text-gray-400 mt-1">Page-level GSC data — brand split applies at the query level. Pages receiving mostly branded traffic will have high clicks from navigational intent.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead><tr className="border-b border-gray-50 bg-gray-50/60">
+                <th className="py-3 px-5 text-left font-semibold text-gray-400">Page</th>
+                <th className="py-3 px-3 text-left font-semibold text-gray-400">Clicks</th>
+                <th className="py-3 px-3 text-left font-semibold text-gray-400">Impressions</th>
+                <th className="py-3 px-3 text-left font-semibold text-gray-400">Branded share (est.)</th>
+              </tr></thead>
+              <tbody>
+                {brandData.brandedPages.map((p, i) => {
+                  const totalClicks = brandData.brandedClicks + brandData.nonBrandedClicks || 1;
+                  const bRatio = brandData.brandedClicks / totalClicks;
+                  const estBranded = Math.round(p.clicks * bRatio);
+                  const estNb = p.clicks - estBranded;
+                  return (
+                    <tr key={i} className="border-b border-gray-50 last:border-0 hover:bg-purple-50/20">
+                      <td className="py-2.5 px-5 font-medium text-[#5b4fa8] max-w-[380px] truncate" title={p.page}>
+                        {p.page.replace(/^https?:\/\/[^/]+/, "")}
+                      </td>
+                      <td className="py-2.5 px-3 font-semibold text-gray-800">{p.clicks.toLocaleString()}</td>
+                      <td className="py-2.5 px-3 text-gray-500">{p.impressions.toLocaleString()}</td>
+                      <td className="py-2.5 px-3 w-64">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden flex">
+                            <div className="h-full" style={{ width: `${bRatio * 100}%`, backgroundColor: BRAND_COLOR }} />
+                            <div className="h-full" style={{ width: `${(1 - bRatio) * 100}%`, backgroundColor: NB_COLOR }} />
+                          </div>
+                          <span className="text-[10px] text-gray-400 shrink-0">{estBranded} / {estNb}</span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-5 py-3 border-t border-gray-50 bg-amber-50/50">
+            <p className="text-[10px] text-amber-700">Note: GSC doesn't expose per-page brand splits directly. Branded share is estimated using the overall query-level brand ratio. For exact splits, filter the Queries tab by your brand terms.</p>
+          </div>
+        </div>
+      )}
+
+      {!brandLoading && brandData && brandTab === "leads" && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <BVNBKpi label="generate_lead Events" branded={brandData.brandedLeads} nonBranded={brandData.nonBrandedLeads} brandedCmp={brandData.brandedLeadsCmp} nonBrandedCmp={brandData.nonBrandedLeadsCmp} icon={TrendingUp} />
+            <BVNBKpi label="Organic Sessions" branded={brandData.brandedSessions} nonBranded={brandData.nonBrandedSessions} brandedCmp={brandData.brandedSessionsCmp} nonBrandedCmp={brandData.nonBrandedSessionsCmp} icon={Users} />
+          </div>
+
+          {/* Lead rate comparison */}
+          <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+            <h3 className="text-sm font-semibold text-gray-800 mb-4">Lead Rate — Branded vs Non-Branded</h3>
+            <div className="grid grid-cols-2 gap-6">
+              {[
+                { label: "Branded", leads: brandData.brandedLeads, sessions: brandData.brandedSessions, color: BRAND_COLOR, bg: "bg-purple-50" },
+                { label: "Non-Branded", leads: brandData.nonBrandedLeads, sessions: brandData.nonBrandedSessions, color: NB_COLOR, bg: "bg-emerald-50" },
+              ].map((seg) => {
+                const rate = seg.sessions > 0 ? ((seg.leads / seg.sessions) * 100).toFixed(2) : "0.00";
+                return (
+                  <div key={seg.label} className={`${seg.bg} rounded-xl p-4 text-center`}>
+                    <p className="text-2xl font-bold" style={{ color: seg.color }}>{rate}%</p>
+                    <p className="text-xs text-gray-500 mt-1 font-medium">{seg.label} lead rate</p>
+                    <p className="text-[10px] text-gray-400 mt-2">{seg.leads.toLocaleString()} leads from {seg.sessions.toLocaleString()} sessions</p>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-gray-400 mt-4 border-t border-gray-100 pt-3">Lead split is estimated using the branded vs non-branded click ratio from GSC applied to GA4 organic session and event totals. For precision, set up custom channel groupings in GA4 with brand keyword filters.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function printElementAsPdf(el: HTMLElement, title: string) {
   const w = window.open("", "_blank", "width=1024,height=900");
   if (!w) return;
@@ -2652,6 +3050,33 @@ export default function App() {
   const [catExpandedCategory, setCatExpandedCategory] = useState<string | null>(null);
   const [catExpandedData, setCatExpandedData] = useState<{ page: string; clicks: number; impressions: number; ctr: number; position: number; leads: number; sessions: number }[]>([]);
   const [catExpandedLoading, setCatExpandedLoading] = useState(false);
+
+  // ── Brand vs Non-Brand state ─────────────────────────────────────────────
+  interface BrandData {
+    // GSC query split
+    brandedClicks: number; nonBrandedClicks: number;
+    brandedImpressions: number; nonBrandedImpressions: number;
+    brandedCtr: number; nonBrandedCtr: number;
+    brandedPosition: number; nonBrandedPosition: number;
+    // GSC daily trend
+    daily: { date: string; branded: number; nonBranded: number }[];
+    // Top branded / non-branded queries
+    brandedQueries: { query: string; clicks: number; impressions: number; ctr: number; position: number }[];
+    nonBrandedQueries: { query: string; clicks: number; impressions: number; ctr: number; position: number }[];
+    // Pages split
+    brandedPages: { page: string; clicks: number; impressions: number }[];
+    nonBrandedPages: { page: string; clicks: number; impressions: number }[];
+    // GA4 leads split
+    brandedLeads: number; nonBrandedLeads: number;
+    brandedSessions: number; nonBrandedSessions: number;
+    // Comparison
+    brandedClicksCmp: number; nonBrandedClicksCmp: number;
+    brandedLeadsCmp: number; nonBrandedLeadsCmp: number;
+    brandedSessionsCmp: number; nonBrandedSessionsCmp: number;
+  }
+  const [brandData, setBrandData] = useState<BrandData | null>(null);
+  const [brandLoading, setBrandLoading] = useState(false);
+  const [brandTab, setBrandTab] = useState<"overview" | "queries" | "pages" | "leads">("overview");
   const [convLoading, setConvLoading] = useState(false);
 
   useEffect(() => {
@@ -3646,6 +4071,165 @@ export default function App() {
     setCatExpandedLoading(false);
   }, [selectedGA4, selectedGSC, accessToken, ga4FetchFilters, gscFetchFilters]);
 
+  // Brand terms — anything containing these is "branded"
+  const BRAND_PATTERNS = ["cash cow", "vintage cash cow", "vintagecashcow", "cashcow", "vcc"];
+  const isBranded = (q: string) => {
+    const l = q.toLowerCase();
+    return BRAND_PATTERNS.some((b) => l.includes(b));
+  };
+
+  const fetchBrandData = useCallback(async () => {
+    if (!selectedGSC || !accessToken) return;
+    setBrandLoading(true);
+    setBrandData(null);
+    try {
+      const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
+      const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+      const { startDate, endDate } = gscDateWindows(gscFetchFilters);
+      const cmpWin = comparisonWindowBefore(startDate, endDate);
+
+      // Fetch queries (current + comparison), daily clicks, pages
+      const [queryCur, queryCmp, dailyCur, pagesCur] = await Promise.all([
+        // Current period — all queries
+        fetch(gscBase, { method: "POST", headers, body: JSON.stringify({
+          startDate, endDate, dimensions: ["query"], rowLimit: 1000,
+        }) }).then((r) => r.json()) as Promise<{ rows?: GSCApiRow[] }>,
+        // Previous period — all queries
+        fetch(gscBase, { method: "POST", headers, body: JSON.stringify({
+          startDate: cmpWin.startDate, endDate: cmpWin.endDate, dimensions: ["query"], rowLimit: 1000,
+        }) }).then((r) => r.json()) as Promise<{ rows?: GSCApiRow[] }>,
+        // Daily clicks by date
+        fetch(gscBase, { method: "POST", headers, body: JSON.stringify({
+          startDate, endDate, dimensions: ["date"], rowLimit: 500,
+        }) }).then((r) => r.json()) as Promise<{ rows?: GSCApiRow[] }>,
+        // Pages
+        fetch(gscBase, { method: "POST", headers, body: JSON.stringify({
+          startDate, endDate, dimensions: ["page"], rowLimit: 500,
+        }) }).then((r) => r.json()) as Promise<{ rows?: GSCApiRow[] }>,
+      ]);
+
+      // Split queries into branded / non-branded
+      const splitQueries = (rows: GSCApiRow[]) => {
+        const branded: typeof rows = [], nonBranded: typeof rows = [];
+        (rows ?? []).forEach((r) => (isBranded(r.keys[0]) ? branded : nonBranded).push(r));
+        return { branded, nonBranded };
+      };
+      const { branded: bQCur, nonBranded: nbQCur } = splitQueries(queryCur.rows ?? []);
+      const { branded: bQCmp, nonBranded: nbQCmp } = splitQueries(queryCmp.rows ?? []);
+
+      const sumQ = (rows: GSCApiRow[]) => rows.reduce((a, r) => ({
+        clicks: a.clicks + Math.round(r.clicks),
+        impressions: a.impressions + Math.round(r.impressions),
+        ctrSum: a.ctrSum + r.ctr,
+        posSum: a.posSum + r.position,
+        n: a.n + 1,
+      }), { clicks: 0, impressions: 0, ctrSum: 0, posSum: 0, n: 0 });
+
+      const bCur = sumQ(bQCur), nbCur = sumQ(nbQCur);
+      const bCmp = sumQ(bQCmp), nbCmp = sumQ(nbQCmp);
+
+      // GA4 data — organic sessions + generate_lead split by channel/query isn't directly available
+      // We approximate: use GSC branded % to estimate GA4 branded sessions, and fetch lead count from GA4
+      // GA4 doesn't expose query-level data in the same way, so we use a best estimate
+      // Fetch GA4 organic sessions + leads separately for branded (as direct/referral estimate)
+      let brandedLeads = 0, nonBrandedLeads = 0;
+      let brandedSessions = 0, nonBrandedSessions = 0;
+      let brandedLeadsCmp = 0, nonBrandedLeadsCmp = 0;
+      let brandedSessionsCmp = 0, nonBrandedSessionsCmp = 0;
+
+      if (selectedGA4) {
+        const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
+        const { current: curWin, comparison: cmpGa4Win } = ga4DateWindows(ga4FetchFilters);
+
+        const [ga4OrgCur, ga4LeadCur, ga4OrgCmp, ga4LeadCmp] = await Promise.all([
+          fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
+            dateRanges: [curWin],
+            dimensions: [{ name: "sessionDefaultChannelGroup" }],
+            metrics: [{ name: "sessions" }],
+            limit: 20,
+          }) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
+          fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
+            dateRanges: [curWin],
+            dimensions: [{ name: "sessionDefaultChannelGroup" }],
+            metrics: [{ name: "eventCount" }],
+            dimensionFilter: { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
+            limit: 20,
+          }) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
+          cmpGa4Win ? fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
+            dateRanges: [cmpGa4Win],
+            dimensions: [{ name: "sessionDefaultChannelGroup" }],
+            metrics: [{ name: "sessions" }],
+            limit: 20,
+          }) }).then((r) => r.json()) : Promise.resolve({ rows: [] }) as Promise<{ rows?: GA4ApiRow[] }>,
+          cmpGa4Win ? fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
+            dateRanges: [cmpGa4Win],
+            dimensions: [{ name: "sessionDefaultChannelGroup" }],
+            metrics: [{ name: "eventCount" }],
+            dimensionFilter: { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
+            limit: 20,
+          }) }).then((r) => r.json()) : Promise.resolve({ rows: [] }) as Promise<{ rows?: GA4ApiRow[] }>,
+        ]);
+
+        // Use GSC brand ratio to split organic sessions/leads
+        const totalClicksCur = bCur.clicks + nbCur.clicks || 1;
+        const brandRatioCur = bCur.clicks / totalClicksCur;
+        const totalClicksCmp = bCmp.clicks + nbCmp.clicks || 1;
+        const brandRatioCmp = bCmp.clicks / totalClicksCmp;
+
+        const getChannelVal = (rows: GA4ApiRow[], channel: string, metric: number) =>
+          (rows ?? []).filter((r) => r.dimensionValues[0].value === channel).reduce((s, r) => s + parseInt(r.metricValues[metric]?.value ?? "0", 10), 0);
+
+        const orgSessions = getChannelVal(ga4OrgCur.rows ?? [], "Organic Search", 0);
+        const orgLeads    = getChannelVal(ga4LeadCur.rows ?? [], "Organic Search", 0);
+        const orgSessionsCmp = getChannelVal((ga4OrgCmp as { rows?: GA4ApiRow[] }).rows ?? [], "Organic Search", 0);
+        const orgLeadsCmp    = getChannelVal((ga4LeadCmp as { rows?: GA4ApiRow[] }).rows ?? [], "Organic Search", 0);
+
+        brandedSessions    = Math.round(orgSessions * brandRatioCur);
+        nonBrandedSessions = orgSessions - brandedSessions;
+        brandedLeads       = Math.round(orgLeads * brandRatioCur);
+        nonBrandedLeads    = orgLeads - brandedLeads;
+        brandedSessionsCmp    = Math.round(orgSessionsCmp * brandRatioCmp);
+        nonBrandedSessionsCmp = orgSessionsCmp - brandedSessionsCmp;
+        brandedLeadsCmp       = Math.round(orgLeadsCmp * brandRatioCmp);
+        nonBrandedLeadsCmp    = orgLeadsCmp - brandedLeadsCmp;
+      }
+
+      // Build daily trend (split each day's clicks by brand ratio)
+      const dailyRows = (dailyCur.rows ?? []).map((r) => ({
+        date: formatDisplayDate(r.keys[0]),
+        branded: Math.round(r.clicks * (bCur.clicks / (bCur.clicks + nbCur.clicks || 1))),
+        nonBranded: Math.round(r.clicks * (nbCur.clicks / (bCur.clicks + nbCur.clicks || 1))),
+      }));
+
+      // Page split: use query brand ratio per page (approx — we only have per-page GSC data)
+      const brandedPages = (pagesCur.rows ?? [])
+        .map((r) => ({ page: r.keys[0], clicks: Math.round(r.clicks), impressions: Math.round(r.impressions) }))
+        .filter((_, i) => i < 20);
+      // Non-branded pages are the same set — we can't split pages by brand query without a page+query fetch
+      // So show top pages overall, noting which are predominantly branded-traffic pages
+      const nonBrandedPages = [...brandedPages];
+
+      setBrandData({
+        brandedClicks: bCur.clicks, nonBrandedClicks: nbCur.clicks,
+        brandedImpressions: bCur.impressions, nonBrandedImpressions: nbCur.impressions,
+        brandedCtr: bCur.n > 0 ? bCur.ctrSum / bCur.n : 0,
+        nonBrandedCtr: nbCur.n > 0 ? nbCur.ctrSum / nbCur.n : 0,
+        brandedPosition: bCur.n > 0 ? bCur.posSum / bCur.n : 0,
+        nonBrandedPosition: nbCur.n > 0 ? nbCur.posSum / nbCur.n : 0,
+        daily: dailyRows,
+        brandedQueries: bQCur.sort((a, b) => b.clicks - a.clicks).slice(0, 20).map((r) => ({ query: r.keys[0], clicks: Math.round(r.clicks), impressions: Math.round(r.impressions), ctr: r.ctr, position: r.position })),
+        nonBrandedQueries: nbQCur.sort((a, b) => b.clicks - a.clicks).slice(0, 20).map((r) => ({ query: r.keys[0], clicks: Math.round(r.clicks), impressions: Math.round(r.impressions), ctr: r.ctr, position: r.position })),
+        brandedPages, nonBrandedPages,
+        brandedLeads, nonBrandedLeads,
+        brandedSessions, nonBrandedSessions,
+        brandedClicksCmp: bCmp.clicks, nonBrandedClicksCmp: nbCmp.clicks,
+        brandedLeadsCmp, nonBrandedLeadsCmp,
+        brandedSessionsCmp, nonBrandedSessionsCmp,
+      });
+    } catch (e) { console.error("fetchBrandData", e); }
+    setBrandLoading(false);
+  }, [selectedGSC, selectedGA4, accessToken, gscFetchFilters, ga4FetchFilters]);
+
   const fetchSeoIssues = useCallback(async () => {
     if (!selectedGA4 || !accessToken) return;
     setSeoIssuesLoading(true);
@@ -3712,6 +4296,7 @@ export default function App() {
 
   useEffect(() => { if (activeView === "seoIssues" && selectedGA4 && accessToken) void fetchSeoIssues(); }, [activeView, selectedGA4, accessToken, fetchSeoIssues]);
   useEffect(() => { if (activeView === "productCategories" && selectedGA4 && selectedGSC && accessToken) void fetchProductCategories(); }, [activeView, selectedGA4, selectedGSC, accessToken, fetchProductCategories]);
+  useEffect(() => { if (activeView === "brandVsNonBrand" && selectedGSC && accessToken) void fetchBrandData(); }, [activeView, selectedGSC, accessToken, fetchBrandData]);
 
   // ── Auto-check mentions: for every page in gscPages, fetch copy and check query presence ──
   useEffect(() => {
@@ -4241,6 +4826,7 @@ export default function App() {
     { key: "opportunities", label: "SEO Opportunities", icon: Lightbulb },
     { key: "gscOpportunities", label: "GSC Opportunities", icon: TrendingUp },
     { key: "productCategories", label: "Product Categories", icon: Layers },
+    { key: "brandVsNonBrand", label: "Brand vs Non-Brand", icon: BarChart2 },
     { key: "conversions", label: "Conversions", icon: ShoppingCart },
     { key: "seoIssues", label: "SEO Issues", icon: AlertTriangle },
     { key: "performance", label: "Performance", icon: BarChart2 },
@@ -4254,6 +4840,7 @@ export default function App() {
     opportunities: "SEO Opportunities — queries with high impressions but low CTR that are ripe for optimisation.",
     gscOpportunities: "GSC Opportunities — a full query/page explorer with smart filters for finding quick wins.",
     productCategories: "Product Categories — SEO and conversion performance grouped by site category, with trending and GA4 lead data.",
+    brandVsNonBrand: "Brand vs Non-Brand — split your GSC clicks, pages, and lead conversions between branded (Vintage Cash Cow) and non-branded queries.",
     conversions: "Conversions — monitor key conversion events and goal completions tracked in GA4.",
     seoIssues: "SEO Issues — surface technical and on-page problems that may be hurting your rankings.",
     performance: "Performance — analyse Core Web Vitals and page speed signals from your Search Console data.",
@@ -5689,6 +6276,31 @@ ${combinedHtml}
                       const cmp = comparisonWindowBefore(startDate, endDate);
                       return `${formatDisplayDate(cmp.startDate)} – ${formatDisplayDate(cmp.endDate)}`;
                     })()}
+                  />
+                </section>
+              </>
+            )}
+
+            {/* ── Brand vs Non-Brand ── */}
+            {activeView === "brandVsNonBrand" && (
+              <>
+                <SectionDivider label="BRAND VS NON-BRAND" />
+                <section>
+                  <BrandVsNonBrandView
+                    brandData={brandData}
+                    brandLoading={brandLoading}
+                    brandTab={brandTab}
+                    setBrandTab={setBrandTab}
+                    dateLabel={(() => {
+                      const { startDate, endDate } = gscDateWindows(gscFetchFilters);
+                      return `${formatDisplayDate(startDate)} – ${formatDisplayDate(endDate)}`;
+                    })()}
+                    cmpLabel={(() => {
+                      const { startDate, endDate } = gscDateWindows(gscFetchFilters);
+                      const cmp = comparisonWindowBefore(startDate, endDate);
+                      return `${formatDisplayDate(cmp.startDate)} – ${formatDisplayDate(cmp.endDate)}`;
+                    })()}
+                    selectedGSC={selectedGSC}
                   />
                 </section>
               </>
