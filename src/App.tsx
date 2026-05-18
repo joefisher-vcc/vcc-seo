@@ -203,7 +203,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "conversions" | "seoIssues" | "performance";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "conversions" | "seoIssues" | "performance";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -1561,6 +1561,531 @@ async function copyTableToClipboard(table: HTMLTableElement) {
   }
 }
 
+// ─── GSC Opportunities View ────────────────────────────────────────────────────
+
+interface GscOppProps {
+  gscQueries: QueryRow[];
+  gscPages: PagePerfRow[];
+  oppTableMode: "queries" | "pages";
+  setOppTableMode: (m: "queries" | "pages") => void;
+  oppSearch: string;
+  setOppSearch: (s: string) => void;
+  oppActiveFilters: Set<string>;
+  setOppActiveFilters: React.Dispatch<React.SetStateAction<Set<string>>>;
+  oppExpandedRow: string | null;
+  setOppExpandedRow: React.Dispatch<React.SetStateAction<string | null>>;
+  oppExpandedData: QueryRow[];
+  oppExpandedLoading: boolean;
+  oppMentionMap: Map<string, Set<string>>;
+  oppMentionChecked: Set<string>;
+  fetchOppExpanded: (key: string, mode: "query" | "page") => Promise<void>;
+  selectedGSC: string;
+  gscLoading: boolean;
+}
+
+type OppQuerySortKey = "query" | "impressions" | "clicks" | "ctr" | "position";
+type OppPageSortKey  = "page" | "impressions" | "clicks" | "ctr" | "position" | "queries";
+
+const BRAND_TERMS_GLOBAL = ["vintage cash cow", "vintagecashcow", "vcc"];
+
+function isBrandQuery(q: string) {
+  const ql = q.toLowerCase();
+  return BRAND_TERMS_GLOBAL.some((b) => ql.includes(b));
+}
+
+function GscOpportunitiesView({
+  gscQueries, gscPages,
+  oppTableMode, setOppTableMode,
+  oppSearch, setOppSearch,
+  oppActiveFilters, setOppActiveFilters,
+  oppExpandedRow, setOppExpandedRow,
+  oppExpandedData, oppExpandedLoading,
+  oppMentionMap, oppMentionChecked,
+  fetchOppExpanded,
+  selectedGSC, gscLoading,
+}: GscOppProps) {
+  const [querySortKey, setQuerySortKey] = useState<OppQuerySortKey>("impressions");
+  const [querySortDir, setQuerySortDir] = useState<SortDir>("desc");
+  const [pageSortKey, setPageSortKey] = useState<OppPageSortKey>("impressions");
+  const [pageSortDir, setPageSortDir] = useState<SortDir>("desc");
+
+  const toggleFilter = (f: string) => {
+    setOppActiveFilters((prev) => {
+      const next = new Set(prev);
+      next.has(f) ? next.delete(f) : next.add(f);
+      return next;
+    });
+  };
+
+  const af = oppActiveFilters;
+  const searchLow = oppSearch.toLowerCase();
+
+  // ── query filters ──
+  const filteredQueries = useMemo(() => {
+    let rows = [...gscQueries];
+    if (searchLow) rows = rows.filter((r) => r.query.toLowerCase().includes(searchLow));
+    if (af.has("no-brand"))      rows = rows.filter((r) => !isBrandQuery(r.query));
+    if (af.has("on-page-2"))     rows = rows.filter((r) => r.position >= 11 && r.position <= 20);
+    if (af.has("no-clicks"))     rows = rows.filter((r) => r.clicks === 0);
+    if (af.has("pos-gt-10"))     rows = rows.filter((r) => r.position > 10);
+    if (af.has("pos-lt-10"))     rows = rows.filter((r) => r.position < 10);
+    if (af.has("impr-500"))      rows = rows.filter((r) => r.impressions >= 500);
+    if (af.has("low-ctr"))       rows = rows.filter((r) => r.ctr < 0.03 && r.impressions >= 100);
+    if (af.has("questions"))     rows = rows.filter((r) => /^(what|how|why|when|where|who|which|is|are|can|does|do|should|will)\b/i.test(r.query));
+    if (af.has("buyer"))         rows = rows.filter((r) => /\b(buy|price|cost|cheap|best|review|near me|delivery|order|shop|discount|deal|sale|vs|compare|worth|top\s+\d)/i.test(r.query));
+    if (af.has("comparison"))    rows = rows.filter((r) => /\b(vs\.?|versus|compared? to|or |alternative|better|worse)/i.test(r.query));
+    if (af.has("no-mention")) {
+      rows = rows.filter((r) => {
+        const q = r.query.toLowerCase();
+        // If no pages checked yet, keep row (can't determine yet)
+        if (oppMentionChecked.size === 0) return true;
+        // Check if ANY checked page mentions this query
+        for (const [page, found] of oppMentionMap.entries()) {
+          if (oppMentionChecked.has(page) && found.has(q)) return false;
+        }
+        return true;
+      });
+    }
+    rows.sort((a, b) => {
+      const dir = querySortDir === "desc" ? -1 : 1;
+      const aV = a[querySortKey as keyof QueryRow] as number | string;
+      const bV = b[querySortKey as keyof QueryRow] as number | string;
+      return typeof aV === "string" ? dir * aV.localeCompare(bV as string) : dir * ((aV as number) - (bV as number));
+    });
+    return rows;
+  }, [gscQueries, searchLow, af, querySortKey, querySortDir, oppMentionMap, oppMentionChecked]);
+
+  // ── page filters ──
+  const filteredPages = useMemo(() => {
+    let rows = [...gscPages];
+    if (searchLow) rows = rows.filter((r) => r.page.toLowerCase().includes(searchLow));
+    if (af.has("no-clicks"))  rows = rows.filter((r) => r.clicks === 0);
+    if (af.has("pos-gt-10"))  rows = rows.filter((r) => r.position > 10);
+    if (af.has("pos-lt-10"))  rows = rows.filter((r) => r.position < 10);
+    if (af.has("impr-500"))   rows = rows.filter((r) => r.impressions >= 500);
+    if (af.has("on-page-2"))  rows = rows.filter((r) => r.position >= 11 && r.position <= 20);
+    if (af.has("low-ctr"))    rows = rows.filter((r) => r.ctr < 0.03 && r.impressions >= 100);
+    if (af.has("no-mention")) {
+      // pages where <50% of queries are mentioned in copy
+      rows = rows.filter((r) => {
+        const checked = oppMentionChecked.has(r.page);
+        if (!checked) return true;
+        const mentioned = oppMentionMap.get(r.page);
+        return !mentioned || mentioned.size === 0;
+      });
+    }
+    rows.sort((a, b) => {
+      const dir = pageSortDir === "desc" ? -1 : 1;
+      if (pageSortKey === "queries") return dir; // stable; no query count on PagePerfRow
+      const aV = a[pageSortKey as keyof PagePerfRow] as number | string;
+      const bV = b[pageSortKey as keyof PagePerfRow] as number | string;
+      return typeof aV === "string" ? dir * aV.localeCompare(bV as string) : dir * ((aV as number) - (bV as number));
+    });
+    return rows;
+  }, [gscPages, searchLow, af, pageSortKey, pageSortDir, oppMentionMap, oppMentionChecked]);
+
+  const handleRowClick = (key: string) => {
+    if (oppExpandedRow === key) {
+      setOppExpandedRow(null);
+    } else {
+      setOppExpandedRow(key);
+      void fetchOppExpanded(key, oppTableMode === "queries" ? "query" : "page");
+    }
+  };
+
+  const toggleQuerySort = (k: OppQuerySortKey) => {
+    if (querySortKey === k) setQuerySortDir((d) => d === "desc" ? "asc" : "desc");
+    else { setQuerySortKey(k); setQuerySortDir("desc"); }
+  };
+  const togglePageSort = (k: OppPageSortKey) => {
+    if (pageSortKey === k) setPageSortDir((d) => d === "desc" ? "asc" : "desc");
+    else { setPageSortKey(k); setPageSortDir("desc"); }
+  };
+
+  const SortChevron = ({ active, dir }: { active: boolean; dir: SortDir }) =>
+    active ? <span className="ml-0.5 text-[#5b4fa8]">{dir === "desc" ? "↓" : "↑"}</span> : <span className="ml-0.5 text-gray-300">↕</span>;
+
+  // Mention status for a query (checks across all pages that might rank for it)
+  const queryMentionStatus = (query: string): "yes" | "no" | "checking" => {
+    const q = query.toLowerCase();
+    let anyChecked = false;
+    for (const [page, found] of oppMentionMap.entries()) {
+      if (oppMentionChecked.has(page)) { anyChecked = true; if (found.has(q)) return "yes"; }
+    }
+    if (!anyChecked && oppMentionChecked.size === 0) return "checking";
+    return anyChecked ? "no" : "checking";
+  };
+
+  const pageMentionCount = (page: string): { count: number; checked: boolean } => {
+    const checked = oppMentionChecked.has(page);
+    const found = oppMentionMap.get(page);
+    return { count: found?.size ?? 0, checked };
+  };
+
+  const QUERY_FILTERS: { key: string; label: string; isNew?: boolean }[] = [
+    { key: "on-page-2",    label: "On Page 2" },
+    { key: "questions",    label: "Questions" },
+    { key: "buyer",        label: "Buyer Keywords" },
+    { key: "comparison",   label: "Comparison Keywords", isNew: true },
+    { key: "no-mention",   label: "No Mentions" },
+    { key: "impr-500",     label: "Impressions > 500" },
+    { key: "no-clicks",    label: "No Clicks" },
+    { key: "pos-gt-10",    label: "Best Position > 10" },
+    { key: "pos-lt-10",    label: "Best Position < 10" },
+    { key: "no-brand",     label: "Exclude Brand" },
+  ];
+
+  const PAGE_FILTERS: { key: string; label: string }[] = [
+    { key: "on-page-2",   label: "On Page 2" },
+    { key: "impr-500",    label: "Impressions > 500" },
+    { key: "no-mention",  label: "No Mentions" },
+    { key: "no-clicks",   label: "No Clicks" },
+    { key: "pos-gt-10",   label: "Best Position > 10" },
+    { key: "pos-lt-10",   label: "Best Position < 10" },
+    { key: "low-ctr",     label: "Low CTR" },
+  ];
+
+  const activeFiltersArr = oppTableMode === "queries" ? QUERY_FILTERS : PAGE_FILTERS;
+  const displayedRows    = oppTableMode === "queries" ? filteredQueries : filteredPages;
+
+  if (!selectedGSC) return (
+    <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center shadow-sm">
+      <TrendingUp size={28} className="text-purple-200 mx-auto mb-3" />
+      <p className="text-sm text-gray-400">Connect a Search Console property to use GSC Opportunities.</p>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-1">
+        <div className="bg-purple-100 rounded-xl p-2"><TrendingUp size={16} className="text-[#5b4fa8]" /></div>
+        <div>
+          <h2 className="text-sm font-bold text-gray-900">GSC Opportunities</h2>
+          <p className="text-xs text-gray-400">{selectedGSC} · {gscLoading ? "Loading…" : `${gscQueries.length} queries · ${gscPages.length} pages`}</p>
+        </div>
+      </div>
+
+      {/* Top bar: domain + search + mode toggle */}
+      <div className="bg-white border border-gray-200 rounded-2xl px-4 py-3 flex items-center gap-3 flex-wrap shadow-sm">
+        <div className="flex items-center gap-2 text-sm font-semibold text-gray-700 shrink-0">
+          <svg width="16" height="16" viewBox="0 0 48 48" fill="none"><path d="M12 8C7.6 8 4 11.6 4 16c0 3.2 1.8 6 4.4 7.6L24 40l15.6-16.4C42.2 22 44 19.2 44 16c0-4.4-3.6-8-8-8-2.8 0-5.2 1.4-6.8 3.6L24 17l-5.2-5.4C17.2 9.4 14.8 8 12 8z" stroke="#5b4fa8" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>
+          {selectedGSC.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+        </div>
+        <div className="flex-1 min-w-[180px]">
+          <div className="relative">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              value={oppSearch}
+              onChange={(e) => setOppSearch(e.target.value)}
+              placeholder={oppTableMode === "queries" ? "Search for a query…" : "Search for a page…"}
+              className="w-full pl-8 pr-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-[#5b4fa8] focus:ring-1 focus:ring-purple-200 transition-all"
+            />
+          </div>
+        </div>
+        {/* Mode toggle */}
+        <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+          <button onClick={() => { setOppTableMode("queries"); setOppExpandedRow(null); }}
+            className={\`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all \${oppTableMode === "queries" ? "bg-white text-[#5b4fa8] shadow-sm" : "text-gray-500 hover:text-gray-700"}\`}>
+            Queries
+          </button>
+          <button onClick={() => { setOppTableMode("pages"); setOppExpandedRow(null); }}
+            className={\`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all \${oppTableMode === "pages" ? "bg-white text-[#5b4fa8] shadow-sm" : "text-gray-500 hover:text-gray-700"}\`}>
+            Pages
+          </button>
+        </div>
+      </div>
+
+      {/* Filter pills */}
+      <div>
+        <p className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">Toggle Filters</p>
+        <div className="flex flex-wrap gap-2">
+          {activeFiltersArr.map(({ key, label, isNew }) => (
+            <button key={key} onClick={() => toggleFilter(key)}
+              className={\`relative inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all \${
+                af.has(key)
+                  ? "bg-[#5b4fa8] text-white border-[#5b4fa8] shadow-sm"
+                  : "bg-white text-gray-600 border-gray-200 hover:border-[#5b4fa8] hover:text-[#5b4fa8]"
+              }\`}>
+              {isNew && <span className="absolute -top-2 -right-1 bg-amber-400 text-white text-[9px] font-bold px-1 rounded-full leading-tight">New!</span>}
+              {label}
+            </button>
+          ))}
+          {af.size > 0 && (
+            <button onClick={() => setOppActiveFilters(new Set())}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-red-500 border border-dashed border-gray-200 hover:border-red-200 transition-all">
+              Clear all
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+        {/* Teal left accent bar */}
+        <div className="flex">
+          <div className="w-1 bg-[#5b4fa8] rounded-l-2xl shrink-0" />
+          <div className="flex-1 overflow-x-auto">
+            {gscLoading ? (
+              <div className="flex items-center justify-center py-16 gap-2">
+                <div className="w-5 h-5 border-2 border-purple-200 border-t-[#5b4fa8] rounded-full animate-spin" />
+                <span className="text-sm text-gray-400">Loading GSC data…</span>
+              </div>
+            ) : displayedRows.length === 0 ? (
+              <div className="py-16 text-center text-sm text-gray-400">No results match the current filters.</div>
+            ) : oppTableMode === "queries" ? (
+              /* ── Queries table ── */
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-gray-100 bg-gray-50/60">
+                    <th className="w-8 py-3 pl-4" />
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500 cursor-pointer select-none"
+                      onClick={() => toggleQuerySort("query")}>
+                      Query <SortChevron active={querySortKey === "query"} dir={querySortDir} />
+                    </th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500">Pages</th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500 cursor-pointer select-none whitespace-nowrap"
+                      onClick={() => toggleQuerySort("impressions")}>
+                      Unique Impressions <SortChevron active={querySortKey === "impressions"} dir={querySortDir} />
+                    </th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500 cursor-pointer select-none"
+                      onClick={() => toggleQuerySort("position")}>
+                      Best Position <SortChevron active={querySortKey === "position"} dir={querySortDir} />
+                    </th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500 cursor-pointer select-none"
+                      onClick={() => toggleQuerySort("clicks")}>
+                      Total Clicks <SortChevron active={querySortKey === "clicks"} dir={querySortDir} />
+                    </th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500 cursor-pointer select-none"
+                      onClick={() => toggleQuerySort("ctr")}>
+                      Avg CTR <SortChevron active={querySortKey === "ctr"} dir={querySortDir} />
+                    </th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500">
+                      <HoverTooltip tip="Whether the query text appears in the copy of pages that rank for it. Checked automatically via page content fetch.">
+                        <span className="flex items-center gap-1 cursor-help">Mentions <span className="text-[#5b4fa8] text-[10px]">ⓘ</span></span>
+                      </HoverTooltip>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredQueries.slice(0, 200).map((row, i) => {
+                    const isExpanded = oppExpandedRow === row.query;
+                    const mentionStatus = queryMentionStatus(row.query);
+                    const filtered = af.has("no-mention") && mentionStatus === "yes";
+                    if (filtered) return null;
+                    return (
+                      <>
+                        <tr key={row.query}
+                          className={\`border-b border-gray-50 hover:bg-purple-50/40 cursor-pointer transition-colors \${isExpanded ? "bg-purple-50/60" : i % 2 === 0 ? "" : "bg-gray-50/30"}\`}
+                          onClick={() => handleRowClick(row.query)}>
+                          <td className="py-3 pl-4 pr-1 w-8">
+                            <div className={\`w-5 h-5 rounded border flex items-center justify-center transition-all \${isExpanded ? "bg-[#5b4fa8] border-[#5b4fa8]" : "border-gray-200"}\`}>
+                              {isExpanded ? <ChevronUp size={11} className="text-white" /> : <ChevronDown size={11} className="text-gray-400" />}
+                            </div>
+                          </td>
+                          <td className="py-3 px-3 font-medium text-gray-800 max-w-[280px]">
+                            <span className={isExpanded ? "text-[#5b4fa8] underline" : ""}>{row.query}</span>
+                          </td>
+                          <td className="py-3 px-3 text-gray-500">—</td>
+                          <td className="py-3 px-3 font-semibold text-gray-800">{row.impressions.toLocaleString()}</td>
+                          <td className="py-3 px-3"><PosBadge pos={row.position} /></td>
+                          <td className="py-3 px-3 text-gray-700">{row.clicks.toLocaleString()}</td>
+                          <td className="py-3 px-3 text-gray-700">{(row.ctr * 100).toFixed(1)}%</td>
+                          <td className="py-3 px-3">
+                            {mentionStatus === "checking" ? (
+                              <span className="inline-flex items-center gap-1 text-gray-400"><div className="w-3 h-3 border border-gray-300 border-t-[#5b4fa8] rounded-full animate-spin" /> Checking…</span>
+                            ) : mentionStatus === "yes" ? (
+                              <span className="inline-flex items-center gap-1 text-emerald-600 font-semibold"><span className="w-2 h-2 bg-emerald-500 rounded-full" /> Yes</span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-red-500 font-semibold"><span className="w-2 h-2 bg-red-400 rounded-full" /> No</span>
+                            )}
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr key={\`\${row.query}-expanded\`} className="bg-purple-50/40">
+                            <td colSpan={8} className="px-8 py-3">
+                              <p className="text-xs font-semibold text-[#5b4fa8] mb-2">Pages ranking for "{row.query}"</p>
+                              {oppExpandedLoading ? (
+                                <div className="flex items-center gap-2 py-2"><div className="w-4 h-4 border border-purple-200 border-t-[#5b4fa8] rounded-full animate-spin" /><span className="text-xs text-gray-400">Loading pages…</span></div>
+                              ) : oppExpandedData.length === 0 ? (
+                                <p className="text-xs text-gray-400 py-1">No pages found.</p>
+                              ) : (
+                                <table className="w-full text-xs border border-gray-100 rounded-xl overflow-hidden">
+                                  <thead><tr className="bg-white border-b border-gray-100">
+                                    <th className="py-2 px-3 text-left font-semibold text-gray-400">Page URL</th>
+                                    <th className="py-2 px-3 text-left font-semibold text-gray-400">Impressions</th>
+                                    <th className="py-2 px-3 text-left font-semibold text-gray-400">Position</th>
+                                    <th className="py-2 px-3 text-left font-semibold text-gray-400">Clicks</th>
+                                    <th className="py-2 px-3 text-left font-semibold text-gray-400">CTR</th>
+                                    <th className="py-2 px-3 text-left font-semibold text-gray-400">Mentioned?</th>
+                                  </tr></thead>
+                                  <tbody>
+                                    {oppExpandedData.slice(0, 8).map((p, pi) => {
+                                      const pageUrl = p.query; // when fetched by query, dim=page, key=query field
+                                      const mentioned = oppMentionMap.get(pageUrl)?.has(row.query.toLowerCase());
+                                      const checked   = oppMentionChecked.has(pageUrl);
+                                      return (
+                                        <tr key={pi} className="border-b border-gray-50 last:border-0">
+                                          <td className="py-2 px-3 text-[#5b4fa8] max-w-[300px] truncate" title={pageUrl}>{pageUrl}</td>
+                                          <td className="py-2 px-3">{p.impressions.toLocaleString()}</td>
+                                          <td className="py-2 px-3"><PosBadge pos={p.position} /></td>
+                                          <td className="py-2 px-3">{p.clicks}</td>
+                                          <td className="py-2 px-3">{(p.ctr * 100).toFixed(1)}%</td>
+                                          <td className="py-2 px-3">
+                                            {!checked ? <span className="text-gray-400 text-[10px]">Checking…</span>
+                                              : mentioned ? <span className="text-emerald-600 font-semibold">✓ Yes</span>
+                                              : <span className="text-red-500 font-semibold">✗ No</span>}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              /* ── Pages table ── */
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-gray-100 bg-gray-50/60">
+                    <th className="w-8 py-3 pl-4" />
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500 cursor-pointer select-none"
+                      onClick={() => togglePageSort("page")}>
+                      Page URL <SortChevron active={pageSortKey === "page"} dir={pageSortDir} />
+                    </th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500">Total Queries</th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500 cursor-pointer select-none whitespace-nowrap"
+                      onClick={() => togglePageSort("impressions")}>
+                      Total Impressions <SortChevron active={pageSortKey === "impressions"} dir={pageSortDir} />
+                    </th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500 cursor-pointer select-none"
+                      onClick={() => togglePageSort("position")}>
+                      Best Position <SortChevron active={pageSortKey === "position"} dir={pageSortDir} />
+                    </th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500 cursor-pointer select-none"
+                      onClick={() => togglePageSort("clicks")}>
+                      Total Clicks <SortChevron active={pageSortKey === "clicks"} dir={pageSortDir} />
+                    </th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500 cursor-pointer select-none"
+                      onClick={() => togglePageSort("ctr")}>
+                      Total CTR <SortChevron active={pageSortKey === "ctr"} dir={pageSortDir} />
+                    </th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500">
+                      <HoverTooltip tip="Number of ranking queries that appear in this page's copy. Checked automatically by fetching the live page content.">
+                        <span className="flex items-center gap-1 cursor-help">Total Mentions <span className="text-[#5b4fa8] text-[10px]">ⓘ</span></span>
+                      </HoverTooltip>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredPages.slice(0, 200).map((row, i) => {
+                    const isExpanded = oppExpandedRow === row.page;
+                    const { count: mentionCount, checked } = pageMentionCount(row.page);
+                    return (
+                      <>
+                        <tr key={row.page}
+                          className={\`border-b border-gray-50 hover:bg-purple-50/40 cursor-pointer transition-colors \${isExpanded ? "bg-purple-50/60" : i % 2 === 0 ? "" : "bg-gray-50/30"}\`}
+                          onClick={() => handleRowClick(row.page)}>
+                          <td className="py-3 pl-4 pr-1 w-8">
+                            <div className={\`w-5 h-5 rounded border flex items-center justify-center transition-all \${isExpanded ? "bg-[#5b4fa8] border-[#5b4fa8]" : "border-gray-200"}\`}>
+                              {isExpanded ? <ChevronUp size={11} className="text-white" /> : <ChevronDown size={11} className="text-gray-400" />}
+                            </div>
+                          </td>
+                          <td className="py-3 px-3 font-medium text-gray-700 max-w-[320px] truncate" title={row.page}>
+                            <span className={isExpanded ? "text-[#5b4fa8] underline" : ""}>{row.page}</span>
+                          </td>
+                          <td className="py-3 px-3 text-gray-500">—</td>
+                          <td className="py-3 px-3 font-semibold text-gray-800">{row.impressions.toLocaleString()}</td>
+                          <td className="py-3 px-3"><PosBadge pos={row.position} /></td>
+                          <td className="py-3 px-3 text-gray-700">{row.clicks.toLocaleString()}</td>
+                          <td className="py-3 px-3 text-gray-700">{(row.ctr * 100).toFixed(1)}%</td>
+                          <td className="py-3 px-3">
+                            {!checked ? (
+                              <span className="inline-flex items-center gap-1 text-gray-400 text-[10px]"><div className="w-3 h-3 border border-gray-300 border-t-[#5b4fa8] rounded-full animate-spin" /> Checking…</span>
+                            ) : (
+                              <span className={\`inline-flex items-center gap-1 font-semibold \${mentionCount > 0 ? "text-emerald-600" : "text-red-500"}\`}>
+                                <span className={\`w-2 h-2 rounded-full \${mentionCount > 0 ? "bg-emerald-500" : "bg-red-400"}\`} />
+                                {mentionCount}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr key={\`\${row.page}-expanded\`} className="bg-purple-50/40">
+                            <td colSpan={8} className="px-8 py-3">
+                              <p className="text-xs font-semibold text-[#5b4fa8] mb-2">Queries ranking for this page</p>
+                              {oppExpandedLoading ? (
+                                <div className="flex items-center gap-2 py-2"><div className="w-4 h-4 border border-purple-200 border-t-[#5b4fa8] rounded-full animate-spin" /><span className="text-xs text-gray-400">Loading queries…</span></div>
+                              ) : oppExpandedData.length === 0 ? (
+                                <p className="text-xs text-gray-400 py-1">No queries found.</p>
+                              ) : (
+                                <table className="w-full text-xs border border-gray-100 rounded-xl overflow-hidden">
+                                  <thead><tr className="bg-white border-b border-gray-100">
+                                    <th className="py-2 px-3 text-left font-semibold text-gray-400">Query</th>
+                                    <th className="py-2 px-3 text-left font-semibold text-gray-400">Impressions</th>
+                                    <th className="py-2 px-3 text-left font-semibold text-gray-400">Position</th>
+                                    <th className="py-2 px-3 text-left font-semibold text-gray-400">Clicks</th>
+                                    <th className="py-2 px-3 text-left font-semibold text-gray-400">CTR</th>
+                                    <th className="py-2 px-3 text-left font-semibold text-gray-400">In Copy?</th>
+                                  </tr></thead>
+                                  <tbody>
+                                    {oppExpandedData.slice(0, 10).map((q, qi) => {
+                                      const mentioned = oppMentionMap.get(row.page)?.has(q.query.toLowerCase());
+                                      const pChecked  = oppMentionChecked.has(row.page);
+                                      return (
+                                        <tr key={qi} className="border-b border-gray-50 last:border-0">
+                                          <td className="py-2 px-3 font-medium text-gray-800">{q.query}</td>
+                                          <td className="py-2 px-3">{q.impressions.toLocaleString()}</td>
+                                          <td className="py-2 px-3"><PosBadge pos={q.position} /></td>
+                                          <td className="py-2 px-3">{q.clicks}</td>
+                                          <td className="py-2 px-3">{(q.ctr * 100).toFixed(1)}%</td>
+                                          <td className="py-2 px-3">
+                                            {!pChecked ? <span className="text-gray-400 text-[10px]">Checking…</span>
+                                              : mentioned ? <span className="text-emerald-600 font-semibold">✓ Yes</span>
+                                              : <span className="text-red-500 font-semibold">✗ No</span>}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+        {/* Row count */}
+        <div className="px-5 py-2.5 border-t border-gray-100 flex items-center justify-between">
+          <p className="text-xs text-gray-400">
+            Showing {Math.min(200, displayedRows.length)} of {displayedRows.length} {oppTableMode} {af.size > 0 ? "(filtered)" : ""}
+          </p>
+          {oppMentionChecked.size > 0 && (
+            <p className="text-xs text-gray-400">
+              ✓ Mention check: {oppMentionChecked.size} page{oppMentionChecked.size !== 1 ? "s" : ""} scanned
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function printElementAsPdf(el: HTMLElement, title: string) {
   const w = window.open("", "_blank", "width=1024,height=900");
   if (!w) return;
@@ -1763,6 +2288,17 @@ export default function App() {
   const [gscCrossPages, setGscCrossPages] = useState<QueryRow[]>([]);
   const [gscCrossQueries, setGscCrossQueries] = useState<QueryRow[]>([]);
   const [seoIssuesLoading, setSeoIssuesLoading] = useState(false);
+
+  // ── GSC Opportunities table state ──────────────────────────────────────────
+  const [oppTableMode, setOppTableMode] = useState<"queries" | "pages">("queries");
+  const [oppSearch, setOppSearch] = useState("");
+  const [oppActiveFilters, setOppActiveFilters] = useState<Set<string>>(new Set());
+  const [oppExpandedRow, setOppExpandedRow] = useState<string | null>(null);
+  const [oppExpandedData, setOppExpandedData] = useState<QueryRow[]>([]);
+  const [oppExpandedLoading, setOppExpandedLoading] = useState(false);
+  const [oppMentionMap, setOppMentionMap] = useState<Map<string, Set<string>>>(new Map());
+  const [oppMentionChecked, setOppMentionChecked] = useState<Set<string>>(new Set());
+  const BRAND_TERMS = ["vintage cash cow", "vintagecashcow", "vcc"];
   const [convLoading, setConvLoading] = useState(false);
 
   useEffect(() => {
@@ -2582,6 +3118,68 @@ export default function App() {
 
   useEffect(() => { if (activeView === "seoIssues" && selectedGA4 && accessToken) void fetchSeoIssues(); }, [activeView, selectedGA4, accessToken, fetchSeoIssues]);
 
+  // ── Auto-check mentions: for every page in gscPages, fetch copy and check query presence ──
+  useEffect(() => {
+    if (!gscPages.length || !gscQueries.length) return;
+    const querySet = new Set(gscQueries.map((q) => q.query.toLowerCase()));
+    const pagesToCheck = gscPages.slice(0, 80).map((p) => p.page);
+    const BRAND = ["vintage cash cow", "vintagecashcow", "vcc"];
+    const checkPage = async (pageUrl: string) => {
+      setOppMentionChecked((prev) => new Set([...prev, pageUrl]));
+      try {
+        const resp = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(pageUrl)}`);
+        const json = await resp.json() as { contents: string };
+        const text = (json.contents ?? "").toLowerCase().replace(/<[^>]+>/g, " ");
+        const found = new Set<string>();
+        for (const q of querySet) {
+          if (BRAND.some((b) => q.includes(b))) continue;
+          if (text.includes(q)) found.add(q);
+        }
+        setOppMentionMap((prev) => new Map([...prev, [pageUrl, found]]));
+      } catch {
+        setOppMentionMap((prev) => new Map([...prev, [pageUrl, new Set()]]));
+      }
+    };
+    pagesToCheck.forEach((url, i) => {
+      if (!oppMentionChecked.has(url)) setTimeout(() => void checkPage(url), i * 500);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gscPages.length, gscQueries.length, selectedGSC]);
+
+  // ── Fetch expanded rows when opp table row clicked ──
+  const fetchOppExpanded = useCallback(async (key: string, mode: "query" | "page") => {
+    if (!selectedGSC || !accessToken) return;
+    setOppExpandedLoading(true);
+    setOppExpandedData([]);
+    const gf = gscFetchFilters;
+    const { startDate, endDate } = gscDateWindows(gf);
+    const base = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
+    const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+    try {
+      const dim = mode === "query" ? "page" : "query";
+      const filterDim = mode === "query" ? "query" : "page";
+      const j = await fetch(base, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          startDate, endDate,
+          dimensions: [dim],
+          dimensionFilterGroups: [{ filters: [{ dimension: filterDim, operator: "equals", expression: key }] }],
+          rowLimit: 10,
+        }),
+      }).then((r) => r.json()) as { rows?: GSCApiRow[] };
+      const rows: QueryRow[] = ((j.rows as GSCApiRow[]) ?? []).map((r) => ({
+        query: r.keys[0],
+        clicks: Math.round(r.clicks),
+        impressions: Math.round(r.impressions),
+        ctr: r.ctr,
+        position: r.position,
+      }));
+      setOppExpandedData(rows);
+    } catch { setOppExpandedData([]); }
+    setOppExpandedLoading(false);
+  }, [selectedGSC, accessToken, gscFetchFilters]);
+
   useEffect(() => {
     if (!selectedGSC || !accessToken || (!gscLinkQuery && !gscLinkPage)) {
       setGscCrossPages([]);
@@ -3046,6 +3644,7 @@ export default function App() {
     { key: "blend", label: "Blend",    icon: Layers },
     { key: "intl",  label: "International", icon: Globe },
     { key: "opportunities", label: "SEO Opportunities", icon: Lightbulb },
+    { key: "gscOpportunities", label: "GSC Opportunities", icon: TrendingUp },
     { key: "conversions", label: "Conversions", icon: ShoppingCart },
     { key: "seoIssues", label: "SEO Issues", icon: AlertTriangle },
     { key: "performance", label: "Performance", icon: BarChart2 },
@@ -3057,6 +3656,7 @@ export default function App() {
     blend: "Blend — overlay GA4 and GSC data side-by-side on a single timeline to spot correlations.",
     intl: "International — see how your site performs across different countries in both GA4 and GSC.",
     opportunities: "SEO Opportunities — queries with high impressions but low CTR that are ripe for optimisation.",
+    gscOpportunities: "GSC Opportunities — a full query/page explorer with smart filters for finding quick wins.",
     conversions: "Conversions — monitor key conversion events and goal completions tracked in GA4.",
     seoIssues: "SEO Issues — surface technical and on-page problems that may be hurting your rankings.",
     performance: "Performance — analyse Core Web Vitals and page speed signals from your Search Console data.",
@@ -4144,6 +4744,34 @@ ${combinedHtml}
                       </ChartCard>
                     </div>
                   )}
+                </section>
+              </>
+            )}
+
+            {/* ── GSC Opportunities Table ── */}
+            {activeView === "gscOpportunities" && (
+              <>
+                <SectionDivider label="GSC OPPORTUNITIES" />
+                <section>
+                  <GscOpportunitiesView
+                    gscQueries={gscQueries}
+                    gscPages={gscPages}
+                    oppTableMode={oppTableMode}
+                    setOppTableMode={setOppTableMode}
+                    oppSearch={oppSearch}
+                    setOppSearch={setOppSearch}
+                    oppActiveFilters={oppActiveFilters}
+                    setOppActiveFilters={setOppActiveFilters}
+                    oppExpandedRow={oppExpandedRow}
+                    setOppExpandedRow={setOppExpandedRow}
+                    oppExpandedData={oppExpandedData}
+                    oppExpandedLoading={oppExpandedLoading}
+                    oppMentionMap={oppMentionMap}
+                    oppMentionChecked={oppMentionChecked}
+                    fetchOppExpanded={fetchOppExpanded}
+                    selectedGSC={selectedGSC}
+                    gscLoading={gscLoading}
+                  />
                 </section>
               </>
             )}
