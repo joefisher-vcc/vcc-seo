@@ -1980,7 +1980,7 @@ function GscOpportunitiesView({
                       Total CTR <SortChevron active={pageSortKey === "ctr"} dir={pageSortDir} />
                     </th>
                     <th className="py-3 px-3 text-left font-semibold text-gray-500">
-                      <HoverTooltip tip="Number of ranking queries that appear in this page's copy. Checked automatically by fetching the live page content.">
+                      <HoverTooltip tip="Sessions on /free-selling-pack that were referred from pages in this category — i.e. users who visited a category page then went to request a free selling pack.">
                         <span className="flex items-center gap-1 cursor-help">Total Mentions <span className="text-[#5b4fa8] text-[10px]">ⓘ</span></span>
                       </HoverTooltip>
                     </th>
@@ -2192,7 +2192,7 @@ function ProductCategoriesView({
   const growingCount  = catRows.filter((r) => (pctDelta(getMetricVal(r), getCmpVal(r)) ?? 0) > 0).length;
   const decayingCount = catRows.filter((r) => (pctDelta(getMetricVal(r), getCmpVal(r)) ?? 0) < 0).length;
 
-  const metricLabel = { clicks: "GSC Clicks", leads: "Leads", sessions: "Organic Sessions" };
+  const metricLabel = { clicks: "GSC Clicks", leads: "FSP Referrals", sessions: "Organic Sessions" };
   const metricColor = { clicks: "#5b4fa8", leads: "#059669", sessions: "#0ea5e9" };
 
   return (
@@ -2203,7 +2203,7 @@ function ProductCategoriesView({
         <div className="bg-purple-100 rounded-xl p-2"><Layers size={16} className="text-[#5b4fa8]" /></div>
         <div>
           <h2 className="text-sm font-bold text-gray-900">Product Categories</h2>
-          <p className="text-xs text-gray-400">SEO performance by category · organic sessions · generate_lead events · vs previous period</p>
+          <p className="text-xs text-gray-400">SEO performance by category · organic sessions · /free-selling-pack referrals · vs previous period</p>
         </div>
       </div>
 
@@ -2220,7 +2220,7 @@ function ProductCategoriesView({
             <span className="text-[10px] bg-purple-100 text-[#5b4fa8] font-semibold px-1.5 py-0.5 rounded-full">previous period</span>
           </div>
         )}
-        <div className="ml-auto text-[10px] text-gray-400">GSC dates · GA4 organic sessions · generate_lead events</div>
+        <div className="ml-auto text-[10px] text-gray-400">GSC dates · GA4 organic sessions · /free-selling-pack referrals</div>
       </div>
 
       {/* KPI summary row */}
@@ -2229,8 +2229,8 @@ function ProductCategoriesView({
           <HoverTooltip tip="Total GSC organic clicks across all product categories in the current period.">
             <KpiCard label="Total Clicks" value={totalClicks.toLocaleString()} icon={MousePointerClick} cmpValue={totalClicksCmp} />
           </HoverTooltip>
-          <HoverTooltip tip="Total generate_lead events fired on category pages — your primary conversion signal.">
-            <KpiCard label="Total Leads" value={totalLeads.toLocaleString()} icon={TrendingUp} cmpValue={totalLeadsCmp} />
+          <HoverTooltip tip="Sessions that landed on /free-selling-pack having come from a page in this category — a direct measure of which categories drive pack requests.">
+            <KpiCard label="FSP Referrals" value={totalLeads.toLocaleString()} icon={TrendingUp} cmpValue={totalLeadsCmp} />
           </HoverTooltip>
           <HoverTooltip tip="Organic search sessions from GA4 across all category pages.">
             <KpiCard label="Organic Sessions" value={totalSessions.toLocaleString()} icon={Users} cmpValue={totalSessionsCmp} />
@@ -2298,7 +2298,7 @@ function ProductCategoriesView({
                     <th className="py-3 px-3 text-left font-semibold text-gray-500">Impressions</th>
                     <th className="py-3 px-3 text-left font-semibold text-gray-500">Avg Position</th>
                     <th className="py-3 px-3 text-left font-semibold text-gray-500">CTR</th>
-                    <th className="py-3 px-3 text-left font-semibold text-gray-500 text-emerald-600">Leads</th>
+                    <th className="py-3 px-3 text-left font-semibold text-gray-500 text-emerald-600">FSP Refs</th>
                     <th className="py-3 px-3 text-left font-semibold text-gray-500 text-sky-600">Organic Sessions</th>
                     <th className="py-3 px-3 text-left font-semibold text-gray-500">Trend</th>
                   </tr>
@@ -2338,7 +2338,7 @@ function ProductCategoriesView({
                           <td className="py-3 px-3"><PosBadge pos={row.position || 0} /></td>
                           <td className="py-3 px-3 text-gray-600">{row.position > 0 ? `${(row.ctr * 100).toFixed(1)}%` : "—"}</td>
                           <td className="py-3 px-3">
-                            <span className="font-semibold text-emerald-600">{row.leads.toLocaleString()}</span>
+                            <span className="font-semibold text-emerald-600" title="Sessions referred to /free-selling-pack from this category">{row.leads.toLocaleString()}</span>
                             <CatDelta cur={row.leads} cmp={row.leadsCmp} />
                             <SparkBar value={row.leads} max={maxLeads} color="#059669" />
                           </td>
@@ -2376,7 +2376,7 @@ function ProductCategoriesView({
                                       <th className="py-2 px-3 text-left font-semibold text-gray-400">Impressions</th>
                                       <th className="py-2 px-3 text-left font-semibold text-gray-400">Position</th>
                                       <th className="py-2 px-3 text-left font-semibold text-gray-400">CTR</th>
-                                      <th className="py-2 px-3 text-left font-semibold text-emerald-600">Leads</th>
+                                      <th className="py-2 px-3 text-left font-semibold text-emerald-600">FSP Refs</th>
                                       <th className="py-2 px-3 text-left font-semibold text-sky-600">Org. Sessions</th>
                                     </tr>
                                   </thead>
@@ -2390,7 +2390,7 @@ function ProductCategoriesView({
                                         <td className="py-2 px-3 text-gray-600">{p.impressions.toLocaleString()}</td>
                                         <td className="py-2 px-3"><PosBadge pos={p.position} /></td>
                                         <td className="py-2 px-3 text-gray-600">{(p.ctr * 100).toFixed(1)}%</td>
-                                        <td className="py-2 px-3 font-semibold text-emerald-600">{p.leads}</td>
+                                        <td className="py-2 px-3 font-semibold text-emerald-600" title="Sessions referred to /free-selling-pack from this page">{p.leads}</td>
                                         <td className="py-2 px-3 font-semibold text-sky-600">{p.sessions}</td>
                                       </tr>
                                     ))}
@@ -2523,7 +2523,7 @@ function BrandVsNonBrandView({ brandData, brandLoading, brandTab, setBrandTab, d
     { key: "overview", label: "Overview" },
     { key: "queries", label: "Queries" },
     { key: "pages", label: "Pages" },
-    { key: "leads", label: "Leads & Sessions" },
+    { key: "leads", label: "FSP Referrals & Sessions" },
   ];
 
   const BRAND_COLOR = "#5b4fa8";
@@ -2590,7 +2590,7 @@ function BrandVsNonBrandView({ brandData, brandLoading, brandTab, setBrandTab, d
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <BVNBKpi label="GSC Clicks" branded={brandData.brandedClicks} nonBranded={brandData.nonBrandedClicks} brandedCmp={brandData.brandedClicksCmp} nonBrandedCmp={brandData.nonBrandedClicksCmp} icon={MousePointerClick} />
             <BVNBKpi label="Organic Sessions" branded={brandData.brandedSessions} nonBranded={brandData.nonBrandedSessions} brandedCmp={brandData.brandedSessionsCmp} nonBrandedCmp={brandData.nonBrandedSessionsCmp} icon={Users} />
-            <BVNBKpi label="Leads (generate_lead)" branded={brandData.brandedLeads} nonBranded={brandData.nonBrandedLeads} brandedCmp={brandData.brandedLeadsCmp} nonBrandedCmp={brandData.nonBrandedLeadsCmp} icon={TrendingUp} nbColor="#059669" />
+            <BVNBKpi label="FSP Referrals" branded={brandData.brandedLeads} nonBranded={brandData.nonBrandedLeads} brandedCmp={brandData.brandedLeadsCmp} nonBrandedCmp={brandData.nonBrandedLeadsCmp} icon={TrendingUp} nbColor="#059669" />
           </div>
 
           {/* Position + CTR comparison */}
@@ -2789,13 +2789,13 @@ function BrandVsNonBrandView({ brandData, brandLoading, brandTab, setBrandTab, d
       {!brandLoading && brandData && brandTab === "leads" && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <BVNBKpi label="generate_lead Events" branded={brandData.brandedLeads} nonBranded={brandData.nonBrandedLeads} brandedCmp={brandData.brandedLeadsCmp} nonBrandedCmp={brandData.nonBrandedLeadsCmp} icon={TrendingUp} />
+            <BVNBKpi label="Free Selling Pack Referrals" branded={brandData.brandedLeads} nonBranded={brandData.nonBrandedLeads} brandedCmp={brandData.brandedLeadsCmp} nonBrandedCmp={brandData.nonBrandedLeadsCmp} icon={TrendingUp} />
             <BVNBKpi label="Organic Sessions" branded={brandData.brandedSessions} nonBranded={brandData.nonBrandedSessions} brandedCmp={brandData.brandedSessionsCmp} nonBrandedCmp={brandData.nonBrandedSessionsCmp} icon={Users} />
           </div>
 
           {/* Lead rate comparison */}
           <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
-            <h3 className="text-sm font-semibold text-gray-800 mb-4">Lead Rate — Branded vs Non-Branded</h3>
+            <h3 className="text-sm font-semibold text-gray-800 mb-4">Free Selling Pack Referral Rate — Branded vs Non-Branded</h3>
             <div className="grid grid-cols-2 gap-6">
               {[
                 { label: "Branded", leads: brandData.brandedLeads, sessions: brandData.brandedSessions, color: BRAND_COLOR, bg: "bg-purple-50" },
@@ -2805,13 +2805,13 @@ function BrandVsNonBrandView({ brandData, brandLoading, brandTab, setBrandTab, d
                 return (
                   <div key={seg.label} className={`${seg.bg} rounded-xl p-4 text-center`}>
                     <p className="text-2xl font-bold" style={{ color: seg.color }}>{rate}%</p>
-                    <p className="text-xs text-gray-500 mt-1 font-medium">{seg.label} lead rate</p>
-                    <p className="text-[10px] text-gray-400 mt-2">{seg.leads.toLocaleString()} leads from {seg.sessions.toLocaleString()} sessions</p>
+                    <p className="text-xs text-gray-500 mt-1 font-medium">{seg.label} FSP referral rate</p>
+                    <p className="text-[10px] text-gray-400 mt-2">{seg.leads.toLocaleString()} FSP refs from {seg.sessions.toLocaleString()} sessions</p>
                   </div>
                 );
               })}
             </div>
-            <p className="text-[10px] text-gray-400 mt-4 border-t border-gray-100 pt-3">Lead split is estimated using the branded vs non-branded click ratio from GSC applied to GA4 organic session and event totals. For precision, set up custom channel groupings in GA4 with brand keyword filters.</p>
+            <p className="text-[10px] text-gray-400 mt-4 border-t border-gray-100 pt-3">FSP referral count is the actual number of sessions that landed on /free-selling-pack after visiting a branded or non-branded referring page, from GA4 pageReferrer data. Sessions are split using the overall GSC brand click ratio.</p>
           </div>
         </div>
       )}
@@ -3858,6 +3858,8 @@ export default function App() {
     { name: "Vintage Handbags & Purses", parent: "/items-we-buy/vintage-handbags-and-purses/", children: [] },
   ];
 
+  const FREE_SELLING_PACK_PATH = "/free-selling-pack";
+
   const fetchProductCategories = useCallback(async () => {
     if (!selectedGA4 || !selectedGSC || !accessToken) return;
     setCatLoading(true);
@@ -3872,99 +3874,111 @@ export default function App() {
       const { startDate: gscStart, endDate: gscEnd } = gscDateWindows(gf);
       const gscCmpWin = comparisonWindowBefore(gscStart, gscEnd);
 
-      // Collect all category page paths
-      const allPaths = VCC_CATEGORIES.flatMap((c) => [c.parent, ...c.children]);
-      const pathFilter = allPaths.map((p) => p.replace(/\/$/, ""));
+      const normPath = (url: string) => {
+        try { return new URL(url).pathname.replace(/\/$/, "") || "/"; } catch { return url.replace(/\/$/, "") || "/"; }
+      };
 
-      // GA4: organic sessions + generate_lead per page
-      const ga4PageBody = (dateRange: { startDate: string; endDate: string }, channelFilter?: boolean) => ({
+      // GA4 body: organic sessions per page
+      const ga4OrgBody = (dateRange: { startDate: string; endDate: string }) => ({
         dateRanges: [dateRange],
         dimensions: [{ name: "pagePath" }],
-        metrics: [{ name: "sessions" }, { name: "eventCount" }],
+        metrics: [{ name: "sessions" }],
+        dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "EXACT", value: "Organic Search" } } },
+        orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+        limit: 500,
+      });
+
+      // GA4 body: sessions arriving at /free-selling-pack grouped by page_referrer
+      // This gives us: how many sessions on /free-selling-pack came from each referrer page
+      const ga4ReferralBody = (dateRange: { startDate: string; endDate: string }) => ({
+        dateRanges: [dateRange],
+        dimensions: [{ name: "pageReferrer" }],
+        metrics: [{ name: "sessions" }],
         dimensionFilter: {
-          andGroup: {
-            expressions: [
-              ...(channelFilter ? [{ filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "EXACT", value: "Organic Search" } } }] : []),
-            ]
-          }
+          andGroup: { expressions: [
+            { filter: { fieldName: "pagePath", stringFilter: { matchType: "BEGINS_WITH", value: FREE_SELLING_PACK_PATH } } },
+            { filter: { fieldName: "pageReferrer", stringFilter: { matchType: "CONTAINS", value: "vintagecashcow.co.uk" } } },
+          ]}
         },
         orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
         limit: 500,
       });
 
-      // Lead events separately
-      const ga4LeadBody = (dateRange: { startDate: string; endDate: string }) => ({
-        dateRanges: [dateRange],
-        dimensions: [{ name: "pagePath" }],
-        metrics: [{ name: "eventCount" }],
-        dimensionFilter: { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
-        orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
-        limit: 500,
-      });
-
       // GSC: clicks+impressions per page
       const gscPageBody = (sd: string, ed: string) => ({
-        startDate: sd, endDate: ed,
-        dimensions: ["page"],
-        rowLimit: 500,
+        startDate: sd, endDate: ed, dimensions: ["page"], rowLimit: 500,
       });
 
-      const [
-        ga4OrgCur, ga4OrgCmp,
-        ga4LeadCur, ga4LeadCmp,
-        gscCur, gscCmp,
-      ] = await Promise.all([
-        fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(ga4PageBody(curWin, true)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
-        cmpWin ? fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(ga4PageBody(cmpWin, true)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }> : Promise.resolve({ rows: [] }),
-        fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(ga4LeadBody(curWin)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
-        cmpWin ? fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(ga4LeadBody(cmpWin)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }> : Promise.resolve({ rows: [] }),
+      const [ga4OrgCur, ga4OrgCmp, ga4RefCur, ga4RefCmp, gscCur, gscCmp] = await Promise.all([
+        fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(ga4OrgBody(curWin)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
+        cmpWin ? fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(ga4OrgBody(cmpWin)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }> : Promise.resolve({ rows: [] }),
+        fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(ga4ReferralBody(curWin)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
+        cmpWin ? fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(ga4ReferralBody(cmpWin)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }> : Promise.resolve({ rows: [] }),
         fetch(gscBase, { method: "POST", headers, body: JSON.stringify(gscPageBody(gscStart, gscEnd)) }).then((r) => r.json()) as Promise<{ rows?: GSCApiRow[] }>,
         fetch(gscBase, { method: "POST", headers, body: JSON.stringify(gscPageBody(gscCmpWin.startDate, gscCmpWin.endDate)) }).then((r) => r.json()) as Promise<{ rows?: GSCApiRow[] }>,
       ]);
 
-      // Build lookup maps
-      const siteBase = selectedGSC.replace(/\/$/, "");
-      const normPath = (url: string) => {
-        try { return new URL(url).pathname.replace(/\/$/, "") || "/"; } catch { return url.replace(/\/$/, "") || "/"; }
-      };
-
-      type PageStats = { sessions: number; leads: number; clicks: number; impressions: number; ctr: number; position: number };
-      const makeMap = (ga4Org: { rows?: GA4ApiRow[] }, ga4Lead: { rows?: GA4ApiRow[] }, gscData: { rows?: GSCApiRow[] }): Map<string, PageStats> => {
-        const m = new Map<string, PageStats>();
-        const get = (path: string) => m.get(path) ?? { sessions: 0, leads: 0, clicks: 0, impressions: 0, ctr: 0, position: 0 };
-        (ga4Org.rows ?? []).forEach((r) => {
-          const p = r.dimensionValues[0].value.replace(/\/$/, "") || "/";
-          const cur = get(p);
-          m.set(p, { ...cur, sessions: cur.sessions + parseInt(r.metricValues[0].value, 10) });
-        });
-        (ga4Lead.rows ?? []).forEach((r) => {
-          const p = r.dimensionValues[0].value.replace(/\/$/, "") || "/";
-          const cur = get(p);
-          m.set(p, { ...cur, leads: cur.leads + parseInt(r.metricValues[0].value, 10) });
-        });
-        (gscData.rows ?? []).forEach((r) => {
-          const p = normPath(r.keys[0]);
-          const cur = get(p);
-          m.set(p, { ...cur, clicks: cur.clicks + Math.round(r.clicks), impressions: cur.impressions + Math.round(r.impressions), ctr: r.ctr, position: r.position });
+      // Build referral map: normalised page path → sessions on /free-selling-pack referred from that page
+      const buildRefMap = (rows?: GA4ApiRow[]) => {
+        const m = new Map<string, number>();
+        (rows ?? []).forEach((r) => {
+          const ref = r.dimensionValues[0].value;
+          const p = normPath(ref);
+          m.set(p, (m.get(p) ?? 0) + parseInt(r.metricValues[0].value, 10));
         });
         return m;
       };
+      const refMapCur = buildRefMap(ga4RefCur.rows);
+      const refMapCmp = buildRefMap(ga4RefCmp.rows);
 
-      const curMap = makeMap(ga4OrgCur, ga4LeadCur, gscCur);
-      const cmpMap = makeMap(ga4OrgCmp as { rows?: GA4ApiRow[] }, ga4LeadCmp as { rows?: GA4ApiRow[] }, gscCmp);
+      // Build session map: page path → organic sessions
+      const buildSessMap = (rows?: GA4ApiRow[]) => {
+        const m = new Map<string, number>();
+        (rows ?? []).forEach((r) => {
+          const p = r.dimensionValues[0].value.replace(/\/$/, "") || "/";
+          m.set(p, (m.get(p) ?? 0) + parseInt(r.metricValues[0].value, 10));
+        });
+        return m;
+      };
+      const sessMapCur = buildSessMap(ga4OrgCur.rows);
+      const sessMapCmp = buildSessMap(ga4OrgCmp.rows);
 
-      // Aggregate by category (dedup Gold)
+      // Build GSC map: page path → {clicks, impressions, ctr, position}
+      type GscStats = { clicks: number; impressions: number; ctr: number; position: number; n: number };
+      const buildGscMap = (rows?: GSCApiRow[]) => {
+        const m = new Map<string, GscStats>();
+        (rows ?? []).forEach((r) => {
+          const p = normPath(r.keys[0]);
+          const cur = m.get(p) ?? { clicks: 0, impressions: 0, ctr: 0, position: 0, n: 0 };
+          m.set(p, { clicks: cur.clicks + Math.round(r.clicks), impressions: cur.impressions + Math.round(r.impressions), ctr: cur.ctr + r.ctr, position: cur.position + r.position, n: cur.n + 1 });
+        });
+        return m;
+      };
+      const gscMapCur = buildGscMap(gscCur.rows);
+      const gscMapCmp = buildGscMap(gscCmp.rows);
+
+      // Aggregate by category
       const seenNames = new Set<string>();
       const rows = VCC_CATEGORIES
         .filter((c) => { if (seenNames.has(c.name)) return false; seenNames.add(c.name); return true; })
         .map((cat) => {
           const allCatPaths = [cat.parent, ...cat.children].map((p) => p.replace(/\/$/, "") || "/");
-          const sum = (map: Map<string, PageStats>) => allCatPaths.reduce((acc, p) => {
-            const s = map.get(p) ?? { sessions: 0, leads: 0, clicks: 0, impressions: 0, ctr: 0, position: 0 };
-            return { sessions: acc.sessions + s.sessions, leads: acc.leads + s.leads, clicks: acc.clicks + s.clicks, impressions: acc.impressions + s.impressions, ctrSum: acc.ctrSum + s.ctr, posSum: acc.posSum + s.position, n: acc.n + (s.clicks > 0 ? 1 : 0) };
-          }, { sessions: 0, leads: 0, clicks: 0, impressions: 0, ctrSum: 0, posSum: 0, n: 0 });
-          const cur = sum(curMap);
-          const cmp = sum(cmpMap);
+          const sumStats = (refMap: Map<string, number>, sessMap: Map<string, number>, gscMap: Map<string, GscStats>) =>
+            allCatPaths.reduce((acc, p) => {
+              const g = gscMap.get(p) ?? { clicks: 0, impressions: 0, ctr: 0, position: 0, n: 0 };
+              return {
+                leads: acc.leads + (refMap.get(p) ?? 0),
+                sessions: acc.sessions + (sessMap.get(p) ?? 0),
+                clicks: acc.clicks + g.clicks,
+                impressions: acc.impressions + g.impressions,
+                ctrSum: acc.ctrSum + g.ctr,
+                posSum: acc.posSum + g.position,
+                n: acc.n + g.n,
+              };
+            }, { leads: 0, sessions: 0, clicks: 0, impressions: 0, ctrSum: 0, posSum: 0, n: 0 });
+
+          const cur = sumStats(refMapCur, sessMapCur, gscMapCur);
+          const cmp = sumStats(refMapCmp, sessMapCmp, gscMapCmp);
           return {
             category: cat.name,
             clicks: cur.clicks, impressions: cur.impressions,
@@ -4027,30 +4041,31 @@ export default function App() {
         limit: 50,
       }) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>;
 
-      const ga4LeadFetch = fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
+      // Fetch /free-selling-pack sessions referred from each page in this category
+      const ga4RefFetch = fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
         dateRanges: [curWin],
-        dimensions: [{ name: "pagePath" }],
-        metrics: [{ name: "eventCount" }],
+        dimensions: [{ name: "pageReferrer" }],
+        metrics: [{ name: "sessions" }],
         dimensionFilter: {
           andGroup: { expressions: [
-            ga4PageFilter("eventName", "generate_lead"),
-            { filter: { fieldName: "pagePath", stringFilter: { matchType: "BEGINS_WITH", value: parentPath } } },
+            { filter: { fieldName: "pagePath", stringFilter: { matchType: "BEGINS_WITH", value: FREE_SELLING_PACK_PATH } } },
+            { filter: { fieldName: "pageReferrer", stringFilter: { matchType: "CONTAINS", value: parentPath } } },
           ]}
         },
-        orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
-        limit: 50,
+        orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+        limit: 100,
       }) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>;
 
-      const [gscData, ga4Org, ga4Lead] = await Promise.all([gscFetch, ga4OrgFetch, ga4LeadFetch]);
+      const [gscData, ga4Org, ga4Ref] = await Promise.all([gscFetch, ga4OrgFetch, ga4RefFetch]);
 
       const normPath = (url: string) => {
         try { return new URL(url).pathname.replace(/\/$/, "") || "/"; }
         catch { return url.replace(/^https?:\/\/[^\/]+/, "").replace(/\/$/, "") || "/"; }
       };
       const sessionMap = new Map<string, number>();
-      const leadMap    = new Map<string, number>();
-      (ga4Org.rows  ?? []).forEach((r) => { const p = r.dimensionValues[0].value.replace(/\/$/, "") || "/"; sessionMap.set(p, (sessionMap.get(p) ?? 0) + parseInt(r.metricValues[0].value, 10)); });
-      (ga4Lead.rows ?? []).forEach((r) => { const p = r.dimensionValues[0].value.replace(/\/$/, "") || "/"; leadMap.set(p, (leadMap.get(p) ?? 0) + parseInt(r.metricValues[0].value, 10));    });
+      const leadMap    = new Map<string, number>(); // referrals to /free-selling-pack
+      (ga4Org.rows ?? []).forEach((r) => { const p = r.dimensionValues[0].value.replace(/\/$/, "") || "/"; sessionMap.set(p, (sessionMap.get(p) ?? 0) + parseInt(r.metricValues[0].value, 10)); });
+      (ga4Ref.rows ?? []).forEach((r) => { const p = normPath(r.dimensionValues[0].value); leadMap.set(p, (leadMap.get(p) ?? 0) + parseInt(r.metricValues[0].value, 10)); });
 
       // Build rows from GSC data, enriched with GA4 data
       const gscRows = (gscData.rows ?? []).map((r) => {
@@ -4128,10 +4143,9 @@ export default function App() {
       const bCur = sumQ(bQCur), nbCur = sumQ(nbQCur);
       const bCmp = sumQ(bQCmp), nbCmp = sumQ(nbQCmp);
 
-      // GA4 data — organic sessions + generate_lead split by channel/query isn't directly available
-      // We approximate: use GSC branded % to estimate GA4 branded sessions, and fetch lead count from GA4
-      // GA4 doesn't expose query-level data in the same way, so we use a best estimate
-      // Fetch GA4 organic sessions + leads separately for branded (as direct/referral estimate)
+      // GA4: referrals to /free-selling-pack from branded vs non-branded pages
+      // We fetch sessions on /free-selling-pack grouped by pageReferrer, then check if each referrer
+      // URL contained a branded query (we use GSC query→page data to classify, or classify the referrer URL itself)
       let brandedLeads = 0, nonBrandedLeads = 0;
       let brandedSessions = 0, nonBrandedSessions = 0;
       let brandedLeadsCmp = 0, nonBrandedLeadsCmp = 0;
@@ -4141,57 +4155,85 @@ export default function App() {
         const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
         const { current: curWin, comparison: cmpGa4Win } = ga4DateWindows(ga4FetchFilters);
 
-        const [ga4OrgCur, ga4LeadCur, ga4OrgCmp, ga4LeadCmp] = await Promise.all([
-          fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
-            dateRanges: [curWin],
-            dimensions: [{ name: "sessionDefaultChannelGroup" }],
-            metrics: [{ name: "sessions" }],
-            limit: 20,
-          }) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
-          fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
-            dateRanges: [curWin],
-            dimensions: [{ name: "sessionDefaultChannelGroup" }],
-            metrics: [{ name: "eventCount" }],
-            dimensionFilter: { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
-            limit: 20,
-          }) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
-          cmpGa4Win ? fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
-            dateRanges: [cmpGa4Win],
-            dimensions: [{ name: "sessionDefaultChannelGroup" }],
-            metrics: [{ name: "sessions" }],
-            limit: 20,
-          }) }).then((r) => r.json()) : Promise.resolve({ rows: [] }) as Promise<{ rows?: GA4ApiRow[] }>,
-          cmpGa4Win ? fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
-            dateRanges: [cmpGa4Win],
-            dimensions: [{ name: "sessionDefaultChannelGroup" }],
-            metrics: [{ name: "eventCount" }],
-            dimensionFilter: { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
-            limit: 20,
-          }) }).then((r) => r.json()) : Promise.resolve({ rows: [] }) as Promise<{ rows?: GA4ApiRow[] }>,
+        // Fetch /free-selling-pack sessions by pageReferrer (which page sent them)
+        const fspRefBody = (dateRange: { startDate: string; endDate: string }) => ({
+          dateRanges: [dateRange],
+          dimensions: [{ name: "pageReferrer" }, { name: "sessionDefaultChannelGroup" }],
+          metrics: [{ name: "sessions" }],
+          dimensionFilter: {
+            andGroup: { expressions: [
+              { filter: { fieldName: "pagePath", stringFilter: { matchType: "BEGINS_WITH", value: FREE_SELLING_PACK_PATH } } },
+              { filter: { fieldName: "pageReferrer", stringFilter: { matchType: "CONTAINS", value: "vintagecashcow.co.uk" } } },
+            ]}
+          },
+          limit: 500,
+        });
+
+        // Also fetch organic sessions split — for overall session context
+        const orgSessBody = (dateRange: { startDate: string; endDate: string }) => ({
+          dateRanges: [dateRange],
+          dimensions: [{ name: "sessionDefaultChannelGroup" }],
+          metrics: [{ name: "sessions" }],
+          limit: 20,
+        });
+
+        const [fspRefCur, fspRefCmp, orgCur, orgCmp] = await Promise.all([
+          fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(fspRefBody(curWin)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
+          cmpGa4Win ? fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(fspRefBody(cmpGa4Win)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }> : Promise.resolve({ rows: [] }),
+          fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(orgSessBody(curWin)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
+          cmpGa4Win ? fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(orgSessBody(cmpGa4Win)) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }> : Promise.resolve({ rows: [] }),
         ]);
 
-        // Use GSC brand ratio to split organic sessions/leads
+        // Classify each referrer: if the referring page URL contains a brand term → branded referral
+        const classifyReferral = (refUrl: string): "branded" | "nonBranded" => {
+          const l = refUrl.toLowerCase();
+          return BRAND_PATTERNS.some((b) => l.includes(b.replace(/ /g, "-")) || l.includes(b.replace(/ /g, ""))) ? "branded" : "nonBranded";
+        };
+
+        const sumFspRef = (rows?: GA4ApiRow[]) => {
+          let b = 0, nb = 0;
+          (rows ?? []).forEach((r) => {
+            const ref = r.dimensionValues[0].value;
+            const sessions = parseInt(r.metricValues[0].value, 10);
+            if (classifyReferral(ref)) nb += sessions;
+            // Brand referrals come from /items-we-buy/* pages that have brand terms in URL — but most category pages are non-brand
+            // More accurately: classify by whether the referrer is a brand-search landing page
+            // For simplicity: any referrer containing brand URL patterns → branded
+            if (isBranded(ref)) b += sessions; else nb += sessions - sessions; // re-sum cleanly below
+          });
+          // Redo cleanly
+          b = 0; nb = 0;
+          (rows ?? []).forEach((r) => {
+            const ref = r.dimensionValues[0].value;
+            const sessions = parseInt(r.metricValues[0].value, 10);
+            if (isBranded(ref)) b += sessions; else nb += sessions;
+          });
+          return { branded: b, nonBranded: nb };
+        };
+
+        const fspCur = sumFspRef(fspRefCur.rows);
+        const fspCmp = sumFspRef(fspRefCmp.rows);
+
+        brandedLeads    = fspCur.branded;
+        nonBrandedLeads = fspCur.nonBranded;
+        brandedLeadsCmp    = fspCmp.branded;
+        nonBrandedLeadsCmp = fspCmp.nonBranded;
+
+        // Sessions: use GSC brand ratio applied to organic sessions
         const totalClicksCur = bCur.clicks + nbCur.clicks || 1;
-        const brandRatioCur = bCur.clicks / totalClicksCur;
+        const brandRatioCur  = bCur.clicks / totalClicksCur;
         const totalClicksCmp = bCmp.clicks + nbCmp.clicks || 1;
-        const brandRatioCmp = bCmp.clicks / totalClicksCmp;
+        const brandRatioCmp  = bCmp.clicks / totalClicksCmp;
 
-        const getChannelVal = (rows: GA4ApiRow[], channel: string, metric: number) =>
-          (rows ?? []).filter((r) => r.dimensionValues[0].value === channel).reduce((s, r) => s + parseInt(r.metricValues[metric]?.value ?? "0", 10), 0);
+        const getOrgSessions = (rows?: GA4ApiRow[]) =>
+          (rows ?? []).filter((r) => r.dimensionValues[0].value === "Organic Search").reduce((s, r) => s + parseInt(r.metricValues[0].value, 10), 0);
 
-        const orgSessions = getChannelVal(ga4OrgCur.rows ?? [], "Organic Search", 0);
-        const orgLeads    = getChannelVal(ga4LeadCur.rows ?? [], "Organic Search", 0);
-        const orgSessionsCmp = getChannelVal((ga4OrgCmp as { rows?: GA4ApiRow[] }).rows ?? [], "Organic Search", 0);
-        const orgLeadsCmp    = getChannelVal((ga4LeadCmp as { rows?: GA4ApiRow[] }).rows ?? [], "Organic Search", 0);
-
-        brandedSessions    = Math.round(orgSessions * brandRatioCur);
-        nonBrandedSessions = orgSessions - brandedSessions;
-        brandedLeads       = Math.round(orgLeads * brandRatioCur);
-        nonBrandedLeads    = orgLeads - brandedLeads;
-        brandedSessionsCmp    = Math.round(orgSessionsCmp * brandRatioCmp);
-        nonBrandedSessionsCmp = orgSessionsCmp - brandedSessionsCmp;
-        brandedLeadsCmp       = Math.round(orgLeadsCmp * brandRatioCmp);
-        nonBrandedLeadsCmp    = orgLeadsCmp - brandedLeadsCmp;
+        const orgSessCur = getOrgSessions(orgCur.rows);
+        const orgSessCmp = getOrgSessions((orgCmp as { rows?: GA4ApiRow[] }).rows);
+        brandedSessions    = Math.round(orgSessCur * brandRatioCur);
+        nonBrandedSessions = orgSessCur - brandedSessions;
+        brandedSessionsCmp    = Math.round(orgSessCmp * brandRatioCmp);
+        nonBrandedSessionsCmp = orgSessCmp - brandedSessionsCmp;
       }
 
       // Build daily trend (split each day's clicks by brand ratio)
