@@ -1787,11 +1787,11 @@ function GscOpportunitiesView({
         {/* Mode toggle */}
         <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
           <button onClick={() => { setOppTableMode("queries"); setOppExpandedRow(null); }}
-            className={\`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all \${oppTableMode === "queries" ? "bg-white text-[#5b4fa8] shadow-sm" : "text-gray-500 hover:text-gray-700"}\`}>
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${oppTableMode === "queries" ? "bg-white text-[#5b4fa8] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
             Queries
           </button>
           <button onClick={() => { setOppTableMode("pages"); setOppExpandedRow(null); }}
-            className={\`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all \${oppTableMode === "pages" ? "bg-white text-[#5b4fa8] shadow-sm" : "text-gray-500 hover:text-gray-700"}\`}>
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${oppTableMode === "pages" ? "bg-white text-[#5b4fa8] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
             Pages
           </button>
         </div>
@@ -1803,11 +1803,11 @@ function GscOpportunitiesView({
         <div className="flex flex-wrap gap-2">
           {activeFiltersArr.map(({ key, label, isNew }) => (
             <button key={key} onClick={() => toggleFilter(key)}
-              className={\`relative inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all \${
+              className={`relative inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
                 af.has(key)
                   ? "bg-[#5b4fa8] text-white border-[#5b4fa8] shadow-sm"
                   : "bg-white text-gray-600 border-gray-200 hover:border-[#5b4fa8] hover:text-[#5b4fa8]"
-              }\`}>
+              }`}>
               {isNew && <span className="absolute -top-2 -right-1 bg-amber-400 text-white text-[9px] font-bold px-1 rounded-full leading-tight">New!</span>}
               {label}
             </button>
@@ -1877,10 +1877,10 @@ function GscOpportunitiesView({
                     return (
                       <>
                         <tr key={row.query}
-                          className={\`border-b border-gray-50 hover:bg-purple-50/40 cursor-pointer transition-colors \${isExpanded ? "bg-purple-50/60" : i % 2 === 0 ? "" : "bg-gray-50/30"}\`}
+                          className={`border-b border-gray-50 hover:bg-purple-50/40 cursor-pointer transition-colors ${isExpanded ? "bg-purple-50/60" : i % 2 === 0 ? "" : "bg-gray-50/30"}`}
                           onClick={() => handleRowClick(row.query)}>
                           <td className="py-3 pl-4 pr-1 w-8">
-                            <div className={\`w-5 h-5 rounded border flex items-center justify-center transition-all \${isExpanded ? "bg-[#5b4fa8] border-[#5b4fa8]" : "border-gray-200"}\`}>
+                            <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${isExpanded ? "bg-[#5b4fa8] border-[#5b4fa8]" : "border-gray-200"}`}>
                               {isExpanded ? <ChevronUp size={11} className="text-white" /> : <ChevronDown size={11} className="text-gray-400" />}
                             </div>
                           </td>
@@ -1903,7 +1903,7 @@ function GscOpportunitiesView({
                           </td>
                         </tr>
                         {isExpanded && (
-                          <tr key={\`\${row.query}-expanded\`} className="bg-purple-50/40">
+                          <tr key={`${row.query}-expanded`} className="bg-purple-50/40">
                             <td colSpan={8} className="px-8 py-3">
                               <p className="text-xs font-semibold text-[#5b4fa8] mb-2">Pages ranking for "{row.query}"</p>
                               {oppExpandedLoading ? (
@@ -1992,10 +1992,10 @@ function GscOpportunitiesView({
                     return (
                       <>
                         <tr key={row.page}
-                          className={\`border-b border-gray-50 hover:bg-purple-50/40 cursor-pointer transition-colors \${isExpanded ? "bg-purple-50/60" : i % 2 === 0 ? "" : "bg-gray-50/30"}\`}
+                          className={`border-b border-gray-50 hover:bg-purple-50/40 cursor-pointer transition-colors ${isExpanded ? "bg-purple-50/60" : i % 2 === 0 ? "" : "bg-gray-50/30"}`}
                           onClick={() => handleRowClick(row.page)}>
                           <td className="py-3 pl-4 pr-1 w-8">
-                            <div className={\`w-5 h-5 rounded border flex items-center justify-center transition-all \${isExpanded ? "bg-[#5b4fa8] border-[#5b4fa8]" : "border-gray-200"}\`}>
+                            <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${isExpanded ? "bg-[#5b4fa8] border-[#5b4fa8]" : "border-gray-200"}`}>
                               {isExpanded ? <ChevronUp size={11} className="text-white" /> : <ChevronDown size={11} className="text-gray-400" />}
                             </div>
                           </td>
@@ -2011,15 +2011,15 @@ function GscOpportunitiesView({
                             {!checked ? (
                               <span className="inline-flex items-center gap-1 text-gray-400 text-[10px]"><div className="w-3 h-3 border border-gray-300 border-t-[#5b4fa8] rounded-full animate-spin" /> Checking…</span>
                             ) : (
-                              <span className={\`inline-flex items-center gap-1 font-semibold \${mentionCount > 0 ? "text-emerald-600" : "text-red-500"}\`}>
-                                <span className={\`w-2 h-2 rounded-full \${mentionCount > 0 ? "bg-emerald-500" : "bg-red-400"}\`} />
+                              <span className={`inline-flex items-center gap-1 font-semibold ${mentionCount > 0 ? "text-emerald-600" : "text-red-500"}`}>
+                                <span className={`w-2 h-2 rounded-full ${mentionCount > 0 ? "bg-emerald-500" : "bg-red-400"}`} />
                                 {mentionCount}
                               </span>
                             )}
                           </td>
                         </tr>
                         {isExpanded && (
-                          <tr key={\`\${row.page}-expanded\`} className="bg-purple-50/40">
+                          <tr key={`${row.page}-expanded`} className="bg-purple-50/40">
                             <td colSpan={8} className="px-8 py-3">
                               <p className="text-xs font-semibold text-[#5b4fa8] mb-2">Queries ranking for this page</p>
                               {oppExpandedLoading ? (
