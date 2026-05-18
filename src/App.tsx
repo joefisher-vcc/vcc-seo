@@ -2112,6 +2112,8 @@ interface ProductCatProps {
   vccCategories: { name: string; parent: string; children: string[] }[];
   selectedGA4: string;
   selectedGSC: string;
+  dateLabel: string;
+  cmpLabel: string;
 }
 
 function pctDelta(cur: number, cmp: number): number | null {
@@ -2145,6 +2147,7 @@ function ProductCategoriesView({
   catExpandedCategory, setCatExpandedCategory,
   catExpandedData, catExpandedLoading, fetchCatExpanded,
   vccCategories, selectedGA4, selectedGSC,
+  dateLabel, cmpLabel,
 }: ProductCatProps) {
 
   const getMetricVal = (r: CatRowType) => catMetric === "clicks" ? r.clicks : catMetric === "leads" ? r.leads : r.sessions;
@@ -2202,6 +2205,22 @@ function ProductCategoriesView({
           <h2 className="text-sm font-bold text-gray-900">Product Categories</h2>
           <p className="text-xs text-gray-400">SEO performance by category · organic sessions · generate_lead events · vs previous period</p>
         </div>
+      </div>
+
+      {/* Date range bar */}
+      <div className="flex items-center gap-3 bg-purple-50 border border-purple-100 rounded-xl px-4 py-2.5 flex-wrap">
+        <div className="flex items-center gap-2 text-xs font-semibold text-[#5b4fa8]">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          {dateLabel}
+        </div>
+        {cmpLabel && (
+          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+            <span className="text-gray-300">vs</span>
+            <span className="font-medium text-gray-600">{cmpLabel}</span>
+            <span className="text-[10px] bg-purple-100 text-[#5b4fa8] font-semibold px-1.5 py-0.5 rounded-full">previous period</span>
+          </div>
+        )}
+        <div className="ml-auto text-[10px] text-gray-400">GSC dates · GA4 organic sessions · generate_lead events</div>
       </div>
 
       {/* KPI summary row */}
@@ -3552,46 +3571,78 @@ export default function App() {
       const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
       const { current: curWin } = ga4DateWindows(ga4FetchFilters);
       const { startDate, endDate } = gscDateWindows(gscFetchFilters);
+      // All paths for this category (parent + children), normalised (no trailing slash)
       const allPaths = [cat.parent, ...cat.children].map((p) => p.replace(/\/$/, "") || "/");
 
-      const [ga4Org, ga4Lead, gscData] = await Promise.all([
-        fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
-          dateRanges: [curWin],
-          dimensions: [{ name: "pagePath" }],
-          metrics: [{ name: "sessions" }],
-          dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "EXACT", value: "Organic Search" } } },
-          limit: 100,
-        }) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
-        fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
-          dateRanges: [curWin],
-          dimensions: [{ name: "pagePath" }],
-          metrics: [{ name: "eventCount" }],
-          dimensionFilter: { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
-          limit: 100,
-        }) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>,
-        fetch(gscBase, { method: "POST", headers, body: JSON.stringify({
-          startDate, endDate, dimensions: ["page"],
-          dimensionFilterGroups: [{ filters: allPaths.slice(0, 20).map((p) => ({ dimension: "page", operator: "contains", expression: p })) }],
-          rowLimit: 50,
-        }) }).then((r) => r.json()) as Promise<{ rows?: GSCApiRow[] }>,
-      ]);
+      // GSC: fetch each path separately and merge (avoids OR-filter complexity)
+      // We use the parent path with "contains" to catch all children in one shot
+      const parentPath = cat.parent.replace(/\/$/, "");
+      const gscFetch = fetch(gscBase, { method: "POST", headers, body: JSON.stringify({
+        startDate, endDate,
+        dimensions: ["page"],
+        dimensionFilterGroups: [{ filters: [{ dimension: "page", operator: "contains", expression: parentPath }] }],
+        rowLimit: 50,
+      }) }).then((r) => r.json()) as Promise<{ rows?: GSCApiRow[] }>;
 
-      const normPath = (url: string) => { try { return new URL(url).pathname.replace(/\/$/, "") || "/"; } catch { return url.replace(/\/$/, "") || "/"; } };
+      // GA4: sessions scoped to category paths (use page path contains filter)
+      const ga4PageFilter = (fieldName: string, value: string) => ({
+        filter: { fieldName, stringFilter: { matchType: "EXACT", value } }
+      });
+      const ga4OrgFetch = fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
+        dateRanges: [curWin],
+        dimensions: [{ name: "pagePath" }],
+        metrics: [{ name: "sessions" }],
+        dimensionFilter: {
+          andGroup: { expressions: [
+            ga4PageFilter("sessionDefaultChannelGroup", "Organic Search"),
+            { filter: { fieldName: "pagePath", stringFilter: { matchType: "BEGINS_WITH", value: parentPath } } },
+          ]}
+        },
+        orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+        limit: 50,
+      }) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>;
+
+      const ga4LeadFetch = fetch(ga4Base, { method: "POST", headers, body: JSON.stringify({
+        dateRanges: [curWin],
+        dimensions: [{ name: "pagePath" }],
+        metrics: [{ name: "eventCount" }],
+        dimensionFilter: {
+          andGroup: { expressions: [
+            ga4PageFilter("eventName", "generate_lead"),
+            { filter: { fieldName: "pagePath", stringFilter: { matchType: "BEGINS_WITH", value: parentPath } } },
+          ]}
+        },
+        orderBys: [{ metric: { metricName: "eventCount" }, desc: true }],
+        limit: 50,
+      }) }).then((r) => r.json()) as Promise<{ rows?: GA4ApiRow[] }>;
+
+      const [gscData, ga4Org, ga4Lead] = await Promise.all([gscFetch, ga4OrgFetch, ga4LeadFetch]);
+
+      const normPath = (url: string) => {
+        try { return new URL(url).pathname.replace(/\/$/, "") || "/"; }
+        catch { return url.replace(/^https?:\/\/[^\/]+/, "").replace(/\/$/, "") || "/"; }
+      };
       const sessionMap = new Map<string, number>();
-      const leadMap = new Map<string, number>();
-      (ga4Org.rows ?? []).forEach((r) => { const p = r.dimensionValues[0].value.replace(/\/$/, "") || "/"; sessionMap.set(p, (sessionMap.get(p) ?? 0) + parseInt(r.metricValues[0].value, 10)); });
-      (ga4Lead.rows ?? []).forEach((r) => { const p = r.dimensionValues[0].value.replace(/\/$/, "") || "/"; leadMap.set(p, (leadMap.get(p) ?? 0) + parseInt(r.metricValues[0].value, 10)); });
+      const leadMap    = new Map<string, number>();
+      (ga4Org.rows  ?? []).forEach((r) => { const p = r.dimensionValues[0].value.replace(/\/$/, "") || "/"; sessionMap.set(p, (sessionMap.get(p) ?? 0) + parseInt(r.metricValues[0].value, 10)); });
+      (ga4Lead.rows ?? []).forEach((r) => { const p = r.dimensionValues[0].value.replace(/\/$/, "") || "/"; leadMap.set(p, (leadMap.get(p) ?? 0) + parseInt(r.metricValues[0].value, 10));    });
 
-      const rows = (gscData.rows ?? [])
-        .filter((r) => allPaths.some((p) => normPath(r.keys[0]).startsWith(p)))
-        .map((r) => {
-          const p = normPath(r.keys[0]);
-          return { page: r.keys[0], clicks: Math.round(r.clicks), impressions: Math.round(r.impressions), ctr: r.ctr, position: r.position, leads: leadMap.get(p) ?? 0, sessions: sessionMap.get(p) ?? 0 };
-        })
-        .sort((a, b) => b.clicks - a.clicks);
+      // Build rows from GSC data, enriched with GA4 data
+      const gscRows = (gscData.rows ?? []).map((r) => {
+        const np = normPath(r.keys[0]);
+        return { page: r.keys[0], clicks: Math.round(r.clicks), impressions: Math.round(r.impressions), ctr: r.ctr, position: r.position, leads: leadMap.get(np) ?? 0, sessions: sessionMap.get(np) ?? 0 };
+      });
 
-      setCatExpandedData(rows);
-    } catch { setCatExpandedData([]); }
+      // Also include any GA4-only pages (no GSC data) that match the parent path
+      const gscPageSet = new Set(gscRows.map((r) => normPath(r.page)));
+      sessionMap.forEach((sessions, p) => {
+        if (!gscPageSet.has(p) && p.startsWith(parentPath)) {
+          gscRows.push({ page: p, clicks: 0, impressions: 0, ctr: 0, position: 0, leads: leadMap.get(p) ?? 0, sessions });
+        }
+      });
+
+      setCatExpandedData(gscRows.sort((a, b) => (b.clicks + b.sessions) - (a.clicks + a.sessions)));
+    } catch (e) { console.error("fetchCatExpanded", e); setCatExpandedData([]); }
     setCatExpandedLoading(false);
   }, [selectedGA4, selectedGSC, accessToken, ga4FetchFilters, gscFetchFilters]);
 
@@ -5629,6 +5680,15 @@ ${combinedHtml}
                     vccCategories={VCC_CATEGORIES}
                     selectedGA4={selectedGA4}
                     selectedGSC={selectedGSC}
+                    dateLabel={(() => {
+                      const { startDate, endDate } = gscDateWindows(gscFetchFilters);
+                      return `${formatDisplayDate(startDate)} – ${formatDisplayDate(endDate)}`;
+                    })()}
+                    cmpLabel={(() => {
+                      const { startDate, endDate } = gscDateWindows(gscFetchFilters);
+                      const cmp = comparisonWindowBefore(startDate, endDate);
+                      return `${formatDisplayDate(cmp.startDate)} – ${formatDisplayDate(cmp.endDate)}`;
+                    })()}
                   />
                 </section>
               </>
