@@ -3097,7 +3097,7 @@ export default function App() {
 <html>
 <head>
 <meta charset="utf-8"/>
-<title>SEO Dashboard — Full Report</title>
+<title>Vintage Cash Cow — SEO Report</title>
 ${styleNodes}
 <style>
   @page { size: A4; margin: 12mm; }
@@ -3116,7 +3116,7 @@ ${styleNodes}
 </head>
 <body>
 <div class="print-header">
-  <h1>SEO/AIO Dashboard — Full Report</h1>
+  <h1>Vintage Cash Cow — SEO & Analytics Report</h1>
   <span>Generated ${new Date().toLocaleString()}</span>
 </div>
 ${combinedHtml}
@@ -3136,12 +3136,16 @@ ${combinedHtml}
       <header className="sticky top-0 z-20 bg-white border-b border-gray-100 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 py-3.5 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="bg-purple-700 rounded-xl p-2">
-              <BarChart3 size={18} className="text-white" />
+            <div className="bg-[#5b4fa8] rounded-xl p-2">
+              {/* VCC Heart Logo */}
+              <svg width="18" height="18" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 8C7.6 8 4 11.6 4 16c0 3.2 1.8 6 4.4 7.6L24 40l15.6-16.4C42.2 22 44 19.2 44 16c0-4.4-3.6-8-8-8-2.8 0-5.2 1.4-6.8 3.6L24 17l-5.2-5.4C17.2 9.4 14.8 8 12 8z" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+                <path d="M17 30l7 7 7-7" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
             </div>
             <div>
-              <h1 className="text-base font-bold text-gray-900 leading-none">SEO/AIO Dashboard</h1>
-              <p className="text-xs text-purple-500 mt-0.5">GA4 · Search Console · AI Channels</p>
+              <h1 className="text-base font-bold text-gray-900 leading-none">Vintage Cash Cow</h1>
+              <p className="text-xs text-[#5b4fa8] mt-0.5 font-medium">SEO · GA4 · Search Console · AI</p>
             </div>
           </div>
 
@@ -3182,9 +3186,9 @@ ${combinedHtml}
             )}
             {!isLoggedIn && (
               <button onClick={handleLogin} disabled={!googleReady || isLoggingIn}
-                className="flex items-center gap-2 bg-purple-700 hover:bg-purple-800 disabled:bg-purple-300 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-all shadow-sm">
+                className="flex items-center gap-2 bg-[#5b4fa8] hover:bg-[#4a3f96] disabled:bg-purple-300 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-all shadow-sm">
                 <LogIn size={14} />
-                {isLoggingIn ? "Connecting…" : "Login with Google"}
+                {isLoggingIn ? "Connecting…" : "Sign in with Google"}
               </button>
             )}
           </div>
@@ -3201,17 +3205,22 @@ ${combinedHtml}
         {/* Login CTA */}
         {!isLoggedIn && (
           <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center max-w-lg mx-auto shadow-sm">
-            <div className="mx-auto w-16 h-16 bg-purple-100 rounded-2xl flex items-center justify-center mb-5">
-              <Globe size={28} className="text-purple-700" />
+            {/* VCC Logo Mark */}
+            <div className="mx-auto w-20 h-20 bg-[#5b4fa8] rounded-2xl flex items-center justify-center mb-5 shadow-md">
+              <svg width="40" height="40" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 8C7.6 8 4 11.6 4 16c0 3.2 1.8 6 4.4 7.6L24 40l15.6-16.4C42.2 22 44 19.2 44 16c0-4.4-3.6-8-8-8-2.8 0-5.2 1.4-6.8 3.6L24 17l-5.2-5.4C17.2 9.4 14.8 8 12 8z" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+                <path d="M17 30l7 7 7-7" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
             </div>
-            <h2 className="text-xl font-bold text-gray-900 mb-2">SEO/AIO Dashboard</h2>
-            <p className="text-gray-500 text-sm max-w-sm mx-auto mb-6">
-              Sign in with Google to access GA4 analytics, Search Console, and AI traffic channels — all in one place.
+            <h2 className="text-xl font-bold text-gray-900 mb-1">Vintage Cash Cow</h2>
+            <p className="text-[#5b4fa8] text-sm font-semibold mb-3">SEO & Analytics Dashboard</p>
+            <p className="text-gray-400 text-sm max-w-sm mx-auto mb-6">
+              Connect your Google account to access GA4 analytics, Search Console data, and AI traffic insights — all in one place.
             </p>
             <button onClick={handleLogin} disabled={!googleReady || isLoggingIn}
-              className="inline-flex items-center gap-2 bg-purple-700 hover:bg-purple-800 disabled:bg-purple-300 text-white px-6 py-3 rounded-xl text-sm font-semibold transition-all shadow-sm">
+              className="inline-flex items-center gap-2 bg-[#5b4fa8] hover:bg-[#4a3f96] disabled:bg-purple-300 text-white px-6 py-3 rounded-xl text-sm font-semibold transition-all shadow-sm">
               <LogIn size={16} />
-              {isLoggingIn ? "Connecting…" : "Login with Google"}
+              {isLoggingIn ? "Connecting…" : "Sign in with Google"}
             </button>
           </div>
         )}
@@ -4903,7 +4912,7 @@ ${combinedHtml}
       </main>
 
       <footer className="max-w-7xl mx-auto px-6 py-6 border-t border-gray-100 mt-8">
-        <p className="text-xs text-gray-300 text-center">SEO/AIO Dashboard · GA4 · Search Console · AI Channels</p>
+        <p className="text-xs text-gray-300 text-center">Vintage Cash Cow · SEO & Analytics Dashboard · GA4 · Search Console · AI Channels</p>
       </footer>
     </div>
   );
