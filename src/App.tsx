@@ -558,6 +558,61 @@ function FilterPill({ label, onRemove }: { label: string; onRemove: () => void; 
   );
 }
 
+/** Strip protocol + host from a URL so tables show only the slug (path + query). Falls back to the raw string. */
+function slugifyUrl(url: string): string {
+  if (!url) return "/";
+  try {
+    const u = new URL(url);
+    const path = (u.pathname || "/") + (u.search || "");
+    return path || "/";
+  } catch {
+    // Already a slug, or a malformed URL — strip a leading scheme+host if present
+    return url.replace(/^https?:\/\/[^/]+/i, "") || url;
+  }
+}
+
+/**
+ * Renders a URL slug as text plus a tiny external-link arrow that opens the URL in a new tab.
+ * The arrow uses stopPropagation so clicking it never triggers a parent <tr onClick> handler.
+ * Pass `slug` if you've already computed it (e.g. tables that strip the domain inline); otherwise
+ * the slug is derived from `url` via slugifyUrl.
+ */
+function UrlLink({
+  url,
+  slug,
+  className = "",
+}: {
+  url: string;
+  slug?: string;
+  className?: string;
+}) {
+  const text = slug ?? slugifyUrl(url);
+  // Build an absolute href even when only a slug was passed in.
+  let href = url;
+  if (url && !/^https?:\/\//i.test(url)) {
+    try { href = new URL(url, window.location.origin).toString(); }
+    catch { href = url; }
+  }
+  return (
+    <span className={`inline-flex items-center gap-1 min-w-0 ${className}`}>
+      <span className="truncate" title={url}>{text}</span>
+      {url && (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          title={`Open ${url} in new tab`}
+          className="shrink-0 text-gray-400 hover:text-[#5b4fa8] transition-colors"
+          aria-label="Open in new tab"
+        >
+          <ArrowUpRight size={11} />
+        </a>
+      )}
+    </span>
+  );
+}
+
 function ChartCard({ title, children, className = "", tip }: { title: string; children: React.ReactNode; className?: string; tip?: string }) {
   return (
     <div className={`bg-white border border-gray-100 rounded-2xl p-5 shadow-sm ${className}`}>
@@ -1928,7 +1983,9 @@ function GscOpportunitiesView({
                                       const checked   = oppMentionChecked.has(pageUrl);
                                       return (
                                         <tr key={pi} className="border-b border-gray-50 last:border-0">
-                                          <td className="py-2 px-3 text-[#5b4fa8] max-w-[300px] truncate" title={pageUrl}>{pageUrl}</td>
+                                          <td className="py-2 px-3 text-[#5b4fa8] max-w-[300px] truncate" title={pageUrl}>
+                                            <UrlLink url={pageUrl} />
+                                          </td>
                                           <td className="py-2 px-3">{p.impressions.toLocaleString()}</td>
                                           <td className="py-2 px-3"><PosBadge pos={p.position} /></td>
                                           <td className="py-2 px-3">{p.clicks}</td>
@@ -2001,7 +2058,20 @@ function GscOpportunitiesView({
                             </div>
                           </td>
                           <td className="py-3 px-3 font-medium text-gray-700 max-w-[320px] truncate" title={row.page}>
-                            <span className={isExpanded ? "text-[#5b4fa8] underline" : ""}>{row.page}</span>
+                            <span className={`inline-flex items-center gap-1 min-w-0 ${isExpanded ? "text-[#5b4fa8] underline" : ""}`}>
+                              <span className="truncate">{slugifyUrl(row.page)}</span>
+                              <a
+                                href={row.page}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                title={`Open ${row.page} in new tab`}
+                                className="shrink-0 text-gray-400 hover:text-[#5b4fa8] transition-colors"
+                                aria-label="Open in new tab"
+                              >
+                                <ArrowUpRight size={11} />
+                              </a>
+                            </span>
                           </td>
                           <td className="py-3 px-3 text-gray-500">—</td>
                           <td className="py-3 px-3 font-semibold text-gray-800">{row.impressions.toLocaleString()}</td>
@@ -2384,7 +2454,7 @@ function ProductCategoriesView({
                                     {catExpandedData.map((p, pi) => (
                                       <tr key={pi} className="border-b border-gray-50 last:border-0 hover:bg-purple-50/20">
                                         <td className="py-2 px-3 text-[#5b4fa8] max-w-[340px] truncate font-medium" title={p.page}>
-                                          {p.page.replace(/^https?:\/\/[^/]+/, "")}
+                                          <UrlLink url={p.page} slug={p.page.replace(/^https?:\/\/[^/]+/, "")} />
                                         </td>
                                         <td className="py-2 px-3 font-semibold text-gray-800">{p.clicks.toLocaleString()}</td>
                                         <td className="py-2 px-3 text-gray-600">{p.impressions.toLocaleString()}</td>
@@ -2761,7 +2831,7 @@ function BrandVsNonBrandView({ brandData, brandLoading, brandTab, setBrandTab, d
                   return (
                     <tr key={i} className="border-b border-gray-50 last:border-0 hover:bg-purple-50/20">
                       <td className="py-2.5 px-5 font-medium text-[#5b4fa8] max-w-[380px] truncate" title={p.page}>
-                        {p.page.replace(/^https?:\/\/[^/]+/, "")}
+                        <UrlLink url={p.page} slug={p.page.replace(/^https?:\/\/[^/]+/, "")} />
                       </td>
                       <td className="py-2.5 px-3 font-semibold text-gray-800">{p.clicks.toLocaleString()}</td>
                       <td className="py-2.5 px-3 text-gray-500">{p.impressions.toLocaleString()}</td>
@@ -2874,6 +2944,8 @@ export default function App() {
   const [activeView, setActiveView]     = useState<ActiveView>(() => (localStorage.getItem(LS_ACTIVE_VIEW) as ActiveView) ?? "ga4");
   const [perfPieFilter, setPerfPieFilter] = useState<"high"|"med"|"low"|null>(null);
   const [perfSubFilter, setPerfSubFilter] = useState<string|null>(null);
+  const [perfIntentFilter, setPerfIntentFilter] = useState<"informational"|"transactional"|"commercial"|"navigational"|null>(null);
+  const [queryCountSearch, setQueryCountSearch] = useState("");
 
   const [ga4Properties, setGa4Properties] = useState<{ value: string; label: string }[]>([]);
   const [selectedGA4, setSelectedGA4]     = useState(() => localStorage.getItem(LS_SELECTED_GA4) ?? "");
@@ -2966,6 +3038,10 @@ export default function App() {
   const [gscOpportunityQueriesCmp, setGscOpportunityQueriesCmp] = useState<QueryRow[]>([]);
   const [gscPages, setGscPages]             = useState<PagePerfRow[]>([]);
   const [gscBuriedPageQueries, setGscBuriedPageQueries] = useState<{ page: string; query: string; impressions: number; clicks: number; position: number }[]>([]);
+  /** Full unfiltered page+query bulk data for the current period — used for the Query Counting section. */
+  const [gscPageQueryAll, setGscPageQueryAll] = useState<{ page: string; query: string; clicks: number; impressions: number }[]>([]);
+  /** Full unfiltered page+query bulk data for the comparison period — used for the Query Counting section. */
+  const [gscPageQueryAllCmp, setGscPageQueryAllCmp] = useState<{ page: string; query: string; clicks: number; impressions: number }[]>([]);
   const [queryCopyResults, setQueryCopyResults] = useState<Map<string, { text: string; queryHits: Map<string, boolean> }>>(new Map());
   const [queryCopyLoading, setQueryCopyLoading] = useState<Set<string>>(new Set());
   const [queryCopyPage, setQueryCopyPage] = useState<string>(""); // URL typed/selected by user
@@ -3495,6 +3571,7 @@ export default function App() {
         fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: [queryDim], rowLimit: 500, ...singleFilter }) }),
         fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: ["query"], rowLimit: 25000, ...singleFilter }) }),
         fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: ["country"], rowLimit: 100, ...singleFilter }) }),
+        fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: cmpRange.startDate, endDate: cmpRange.endDate, dimensions: ["page", "query"], rowLimit: 25000, ...singleFilter }) }),
       ] : []),
       ...(needsSeries
         ? (multiCountry ? gf.countryFilter : gf.deviceFilter).map((key) =>
@@ -3525,6 +3602,7 @@ export default function App() {
     const cmpQueryData  = cmpRange ? jsons[idx++] : null;
     const cmpOpportunityQueryData = cmpRange ? jsons[idx++] : null;
     const cmpCountryData = cmpRange ? jsons[idx++] : null;
+    const cmpPageQueryData = cmpRange ? jsons[idx++] : null;
     const seriesDataArr = jsons.slice(idx);
 
     const parseGSCDaily = (data: { rows?: GSCApiRow[] }): DailyGSC[] =>
@@ -3617,6 +3695,24 @@ export default function App() {
         }))
         .sort((a, b) => b.impressions - a.impressions)
         .slice(0, 5000),
+    );
+
+    // ── Full unfiltered page+query data for Query Counting section ──
+    setGscPageQueryAll(
+      (bulkRows ?? []).map((r: GSCApiRow) => ({
+        page:        r.keys[0],
+        query:       r.keys[1],
+        clicks:      Math.round(r.clicks),
+        impressions: Math.round(r.impressions),
+      })),
+    );
+    setGscPageQueryAllCmp(
+      ((cmpPageQueryData?.rows as GSCApiRow[]) ?? []).map((r: GSCApiRow) => ({
+        page:        r.keys[0],
+        query:       r.keys[1],
+        clicks:      Math.round(r.clicks),
+        impressions: Math.round(r.impressions),
+      })),
     );
 
     // Multi-series
@@ -4721,6 +4817,136 @@ export default function App() {
     [gscOpportunityQueries, perfSubFilter]
   );
 
+  // ── Query Intent classification ────────────────────────────────────────────
+  // Lightweight rule-based classifier: informational / transactional / commercial / navigational.
+  // Order of checks matters — more specific patterns (transactional, navigational) win over broader ones.
+  type QueryIntent = "informational" | "transactional" | "commercial" | "navigational";
+  const classifyQueryIntent = (raw: string): QueryIntent => {
+    const q = raw.toLowerCase().trim();
+
+    // Transactional: explicit purchase/booking/conversion intent
+    if (/\b(buy|sell|order|purchase|book|hire|rent|download|signup|sign up|subscribe|join|register|apply|claim|free shipping|coupon|discount|deal|deals|voucher|promo|cheap|cheapest|near me|delivery|same day|in stock|for sale|sell my|pawn|valuation|cash for|quote)\b/.test(q)) {
+      return "transactional";
+    }
+    // Commercial investigation: comparison / "best" / reviews / "vs"
+    if (/\b(best|top|review|reviews|compare|comparison|vs|versus|alternative|alternatives|pros and cons|worth it|recommendation|recommendations|rating|ratings)\b/.test(q)) {
+      return "commercial";
+    }
+    // Navigational: brand/site-specific or login/contact lookups
+    if (/\b(login|log in|sign in|account|contact|customer service|support|address|phone number|opening hours|hours|location|near me)\b/.test(q)) {
+      return "navigational";
+    }
+    // Informational: question words and "how/what/why/when/where/who" + "guide", "tutorial", "meaning", "definition"
+    if (/\b(how|what|why|when|where|who|which|guide|tutorial|tips|ideas|meaning|definition|history|explain|examples?|learn|identify|tell if|spot|worth)\b/.test(q) || q.endsWith("?")) {
+      return "informational";
+    }
+    // Default: most short queries without explicit verbs are informational
+    return "informational";
+  };
+
+  const INTENT_COLORS: Record<QueryIntent, string> = {
+    informational: "#0ea5e9", // sky
+    transactional: "#059669", // emerald
+    commercial:    "#d97706", // amber
+    navigational:  "#7e22ce", // purple
+  };
+  const INTENT_LABELS: Record<QueryIntent, string> = {
+    informational: "Informational",
+    transactional: "Transactional",
+    commercial:    "Commercial",
+    navigational:  "Navigational",
+  };
+  const INTENT_DESCRIPTIONS: Record<QueryIntent, string> = {
+    informational: "Users seeking knowledge or answers — \"how to\", \"what is\", guides, tutorials.",
+    transactional: "Users ready to act — buy, sell, book, download, signup. Highest commercial value.",
+    commercial:    "Users comparing options — \"best\", \"reviews\", \"vs\", alternatives. Pre-purchase research.",
+    navigational:  "Users looking for a specific page or brand — login, contact, account, hours.",
+  };
+  const INTENT_BG: Record<QueryIntent, string> = {
+    informational: "bg-sky-100 text-sky-800",
+    transactional: "bg-emerald-100 text-emerald-800",
+    commercial:    "bg-amber-100 text-amber-800",
+    navigational:  "bg-purple-100 text-purple-800",
+  };
+
+  // Pie + breakdown data for query intent
+  const perfIntentPieData = useMemo(() => {
+    const counts: Record<QueryIntent, number> = { informational: 0, transactional: 0, commercial: 0, navigational: 0 };
+    gscOpportunityQueries.forEach((q) => { counts[classifyQueryIntent(q.query)]++; });
+    return (["informational","commercial","transactional","navigational"] as const)
+      .map((k) => ({ name: INTENT_LABELS[k], value: counts[k], key: k }))
+      .filter((d) => d.value > 0);
+  }, [gscOpportunityQueries]);
+
+  // Aggregated metrics per intent (for the breakdown table next to the pie)
+  const perfIntentTableData = useMemo(() => {
+    const agg: Record<QueryIntent, { queries: number; clicks: number; impressions: number; ctrSum: number; ctrN: number; posSum: number; posN: number }> = {
+      informational: { queries: 0, clicks: 0, impressions: 0, ctrSum: 0, ctrN: 0, posSum: 0, posN: 0 },
+      transactional: { queries: 0, clicks: 0, impressions: 0, ctrSum: 0, ctrN: 0, posSum: 0, posN: 0 },
+      commercial:    { queries: 0, clicks: 0, impressions: 0, ctrSum: 0, ctrN: 0, posSum: 0, posN: 0 },
+      navigational:  { queries: 0, clicks: 0, impressions: 0, ctrSum: 0, ctrN: 0, posSum: 0, posN: 0 },
+    };
+    gscOpportunityQueries.forEach((q) => {
+      const k = classifyQueryIntent(q.query);
+      agg[k].queries++;
+      agg[k].clicks += q.clicks;
+      agg[k].impressions += q.impressions;
+      if (q.impressions > 0) { agg[k].ctrSum += q.ctr; agg[k].ctrN++; }
+      if (q.position > 0)    { agg[k].posSum += q.position; agg[k].posN++; }
+    });
+    return (["informational","commercial","transactional","navigational"] as const)
+      .map((k) => ({
+        key: k,
+        label: INTENT_LABELS[k],
+        queries:     agg[k].queries,
+        clicks:      agg[k].clicks,
+        impressions: agg[k].impressions,
+        ctr:         agg[k].ctrN > 0 ? agg[k].ctrSum / agg[k].ctrN : 0,
+        avgPosition: agg[k].posN > 0 ? agg[k].posSum / agg[k].posN : 0,
+      }))
+      .filter((r) => r.queries > 0);
+  }, [gscOpportunityQueries]);
+
+  // ── Query Counting per URL (current vs previous period) ────────────────────
+  // Counts the number of distinct queries each URL ranks for, plus clicks/impressions,
+  // and pairs each URL with the same metrics from the comparison period for delta display.
+  const perfQueryCountByUrl = useMemo(() => {
+    type Bucket = { queries: Set<string>; clicks: number; impressions: number };
+    const cur = new Map<string, Bucket>();
+    const cmp = new Map<string, Bucket>();
+    const addTo = (target: Map<string, Bucket>, page: string, query: string, clicks: number, impressions: number) => {
+      let b = target.get(page);
+      if (!b) { b = { queries: new Set(), clicks: 0, impressions: 0 }; target.set(page, b); }
+      b.queries.add(query.toLowerCase());
+      b.clicks += clicks;
+      b.impressions += impressions;
+    };
+    gscPageQueryAll.forEach((r) => addTo(cur, r.page, r.query, r.clicks, r.impressions));
+    gscPageQueryAllCmp.forEach((r) => addTo(cmp, r.page, r.query, r.clicks, r.impressions));
+
+    // Union of all URLs seen in either period
+    const allUrls = new Set<string>([...cur.keys(), ...cmp.keys()]);
+    const rows = [...allUrls].map((page) => {
+      const c = cur.get(page);
+      const p = cmp.get(page);
+      const queries    = c?.queries.size ?? 0;
+      const queriesCmp = p?.queries.size ?? 0;
+      const delta      = queries - queriesCmp;
+      const pct        = queriesCmp > 0 ? ((queries - queriesCmp) / queriesCmp) * 100 : (queries > 0 ? 100 : 0);
+      return {
+        page,
+        queries,
+        queriesCmp,
+        delta,
+        pct,
+        clicks:      c?.clicks ?? 0,
+        impressions: c?.impressions ?? 0,
+      };
+    });
+    return rows;
+  }, [gscPageQueryAll, gscPageQueryAllCmp]);
+
+
   // ── Sort state for non-sortable tables ──────────────────────────────────────
   const URL_TIER_RANK: Record<string, number> = { high: 4, med: 3, low: 2, opportunity: 1 };
   const landingSort = useTableSort(filteredLandingPages, { key: "users", dir: "desc" });
@@ -4737,6 +4963,14 @@ export default function App() {
   const seoNoTrafficSort = useTableSort(seoNoTraffic, { key: "sessions", dir: "asc" });
   const seoLowEngSort = useTableSort(seoLowEngagement, { key: "engagementRate", dir: "asc" });
   const seo404Sort = useTableSort(seo404Titles, { key: "sessions", dir: "desc" });
+
+  // ── Filtered + sorted Query Counting rows ──
+  const perfQueryCountFiltered = useMemo(() => {
+    const q = queryCountSearch.trim().toLowerCase();
+    if (!q) return perfQueryCountByUrl;
+    return perfQueryCountByUrl.filter((r) => r.page.toLowerCase().includes(q));
+  }, [perfQueryCountByUrl, queryCountSearch]);
+  const queryCountSort = useTableSort(perfQueryCountFiltered, { key: "queries", dir: "desc" });
 
   // ── SEO Issues: GSC-derived opportunity sets ──
   const strikingDistanceQueries = useMemo(
@@ -5205,7 +5439,7 @@ ${combinedHtml}
                                     className="border-b border-gray-50 last:border-0 hover:bg-purple-50/40 transition-colors cursor-pointer"
                                     onClick={() => { setPageDrillPath(p.page); setGscLinkQuery(null); setGscLinkPage(null); }}
                                   >
-                                    <td className="py-2 pr-4 text-gray-700 font-medium max-w-[200px] truncate" title={p.page}>{p.page}</td>
+                                    <td className="py-2 pr-4 text-gray-700 font-medium max-w-[200px] truncate" title={p.page}><UrlLink url={p.page} /></td>
                                     <td className="py-2 pr-4">
                                       <span className="text-gray-900 font-semibold">{p.users.toLocaleString()}</span>
                                       {uDelta !== null && <span className={`ml-1 text-[10px] font-bold ${uDelta >= 0 ? "text-emerald-600" : "text-red-500"}`}>{uDelta >= 0 ? "+" : ""}{uDelta.toFixed(0)}%</span>}
@@ -5822,9 +6056,9 @@ ${combinedHtml}
                                 className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 cursor-pointer hover:bg-gray-100 transition-colors"
                                 onClick={() => setQueryCopyExpanded(isOpen ? null : page)}
                               >
-                                <div className="flex items-center gap-2 min-w-0">
+                                <div className="flex items-center gap-2 min-w-0 text-xs font-medium text-gray-700">
                                   <span className={`text-[10px] transition-transform ${isOpen ? "rotate-90" : ""}`}>▶</span>
-                                  <span className="text-xs font-medium text-gray-700 truncate">{page}</span>
+                                  <UrlLink url={page} />
                                 </div>
                                 <div className="flex items-center gap-2 shrink-0">
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-semibold">
@@ -5930,9 +6164,9 @@ ${combinedHtml}
                                       className="border-b border-gray-50 cursor-pointer hover:bg-amber-50/40 transition-colors"
                                       onClick={() => setBuriedExpandedPage(isExpanded ? null : row.page)}>
                                       <td className="py-2 pr-3">
-                                        <div className="flex items-center gap-1.5">
-                                          <span className={`text-[10px] transition-transform ${isExpanded ? "rotate-90" : ""}`}>▶</span>
-                                          <span className="max-w-[220px] truncate text-gray-700 font-medium" title={row.page}>{row.page}</span>
+                                        <div className="flex items-center gap-1.5 max-w-[220px] text-gray-700 font-medium">
+                                          <span className={`text-[10px] transition-transform shrink-0 ${isExpanded ? "rotate-90" : ""}`}>▶</span>
+                                          <UrlLink url={row.page} />
                                         </div>
                                       </td>
                                       <td className="py-2 pr-3">
@@ -6202,7 +6436,7 @@ ${combinedHtml}
                                 <tbody>
                                   {convByPage.slice(0, 20).map((r) => (
                                     <tr key={r.page} className="border-b border-gray-50">
-                                      <td className="py-1.5 max-w-[180px] truncate text-gray-600" title={r.page}>{r.page}</td>
+                                      <td className="py-1.5 max-w-[180px] truncate text-gray-600" title={r.page}><UrlLink url={r.page} /></td>
                                       <td className="py-1.5 font-semibold text-emerald-700">{r.count.toLocaleString()}</td>
                                       <td className="py-1.5 text-gray-400">{r.users.toLocaleString()}</td>
                                     </tr>
@@ -6214,7 +6448,7 @@ ${combinedHtml}
                               <BarChart data={convByPage.slice(0, 10)} layout="vertical" margin={{ left: 8, right: 16, top: 4, bottom: 4 }}>
                                 <XAxis type="number" tick={{ fontSize: 9, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
                                 <YAxis type="category" dataKey="page" tick={{ fontSize: 8, fill: "#6b7280" }} axisLine={false} tickLine={false} width={100}
-                                  tickFormatter={(v: string) => v.length > 18 ? v.slice(0, 18) + "…" : v} />
+                                  tickFormatter={(v: string) => { const s = slugifyUrl(v); return s.length > 18 ? s.slice(0, 18) + "…" : s; }} />
                                 <Tooltip {...chartTooltipStyle} />
                                 <Bar dataKey="count" name="Events" fill="#059669" radius={[0,4,4,0]} />
                               </BarChart>
@@ -6241,7 +6475,7 @@ ${combinedHtml}
                               <tbody>
                                 {convLowPages.map((r) => (
                                   <tr key={r.page} className="border-b border-gray-50">
-                                    <td className="py-1.5 max-w-[200px] truncate text-gray-600" title={r.page}>{r.page}</td>
+                                    <td className="py-1.5 max-w-[200px] truncate text-gray-600" title={r.page}><UrlLink url={r.page} /></td>
                                     <td className="py-1.5">{r.sessions.toLocaleString()}</td>
                                     <td className="py-1.5">{r.eventCount.toLocaleString()}</td>
                                     <td className="py-1.5 font-semibold text-red-600">{(r.rate * 100).toFixed(2)}%</td>
@@ -6510,11 +6744,9 @@ ${combinedHtml}
                           </thead>
                           <tbody>
                             {orphanPagesSort.sorted.map((p, i) => {
-                              let displayUrl = p.page;
-                              try { displayUrl = new URL(p.page).pathname || "/"; } catch {}
                               return (
                                 <tr key={i} className="border-b border-gray-50 hover:bg-sky-50/40">
-                                  <td className="py-1.5 pr-2 max-w-[300px] truncate text-gray-700" title={p.page}>{displayUrl}</td>
+                                  <td className="py-1.5 pr-2 max-w-[300px] truncate text-gray-700" title={p.page}><UrlLink url={p.page} /></td>
                                   <td className="py-1.5 text-right tabular-nums text-gray-900 font-semibold">{p.impressions.toLocaleString()}</td>
                                   <td className="py-1.5 text-right tabular-nums text-gray-500">{p.clicks.toLocaleString()}</td>
                                   <td className="py-1.5 text-right tabular-nums text-gray-500">{(p.ctr * 100).toFixed(2)}%</td>
@@ -6544,7 +6776,7 @@ ${combinedHtml}
                             <tbody>
                               {seoNoTrafficSort.sorted.map((r, i) => (
                                 <tr key={i} className="border-b border-gray-50 cursor-pointer hover:bg-red-50/40" onClick={() => { setPageDrillPath(r.page); setGscLinkQuery(null); setGscLinkPage(null); }}>
-                                  <td className="py-2 pr-2 max-w-[180px] truncate" title={r.page}>{r.page}</td>
+                                  <td className="py-2 pr-2 max-w-[180px] truncate" title={r.page}><UrlLink url={r.page} /></td>
                                   <td className="py-2 font-semibold">{r.sessions}</td>
                                 </tr>
                               ))}
@@ -6565,7 +6797,7 @@ ${combinedHtml}
                             <tbody>
                               {seoLowEngSort.sorted.map((r, i) => (
                                 <tr key={i} className="border-b border-gray-50 cursor-pointer hover:bg-red-50/40" onClick={() => { setPageDrillPath(r.page); setGscLinkQuery(null); setGscLinkPage(null); }}>
-                                  <td className="py-2 pr-2 max-w-[140px] truncate" title={r.page}>{r.page}</td>
+                                  <td className="py-2 pr-2 max-w-[140px] truncate" title={r.page}><UrlLink url={r.page} /></td>
                                   <td className="py-2">{(r.engagementRate * 100).toFixed(1)}%</td>
                                   <td className="py-2">{r.sessions}</td>
                                 </tr>
@@ -6588,7 +6820,7 @@ ${combinedHtml}
                               {seo404Sort.sorted.map((r, i) => (
                                 <tr key={i} className="border-b border-gray-50 cursor-pointer hover:bg-red-50/40" onClick={() => { setPageDrillPath(r.page); setGscLinkQuery(null); setGscLinkPage(null); }}>
                                   <td className="py-2 pr-2 max-w-[120px] truncate" title={r.title}>{r.title}</td>
-                                  <td className="py-2 pr-2 max-w-[120px] truncate" title={r.page}>{r.page}</td>
+                                  <td className="py-2 pr-2 max-w-[120px] truncate" title={r.page}><UrlLink url={r.page} /></td>
                                   <td className="py-2">{r.sessions}</td>
                                 </tr>
                               ))}
@@ -6697,12 +6929,10 @@ ${combinedHtml}
                               <tbody>
                                 {perfPagesSort.sorted.map((p, i) => {
                                   const tier = getUrlPerf(p.clicks);
-                                  let displayUrl = p.page;
-                                  try { displayUrl = new URL(p.page).pathname || "/"; } catch {}
                                   return (
                                     <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
                                       <td className="py-1.5 pr-2" style={{ maxWidth: 0, width: "52%" }}>
-                                        <span className="block truncate text-gray-700" title={p.page}>{displayUrl}</span>
+                                        <UrlLink url={p.page} className="text-gray-700 max-w-full" />
                                       </td>
                                       <td className="py-1.5 pr-2 text-right text-gray-900 font-semibold tabular-nums">{p.clicks.toLocaleString()}</td>
                                       <td className="py-1.5 pr-2 text-right text-gray-500 tabular-nums">{p.impressions.toLocaleString()}</td>
@@ -6801,6 +7031,156 @@ ${combinedHtml}
                           </div>
                         </ChartCard>
                       </div>
+
+                      {/* ── Element 3: Query Intent (informational / transactional / commercial / navigational) ── */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <ChartCard title="Query Intent Mix" tip="Distribution of your queries by search intent. Informational queries are top-of-funnel research; commercial queries are users comparing options; transactional queries are ready to buy/book/signup; navigational queries are users looking for a specific brand or page. A healthy mix depends on your business — eCommerce sites want more transactional and commercial; publishers want more informational.">
+                          <div className="flex gap-4 items-center">
+                            <ResponsiveContainer width="45%" height={210}>
+                              <PieChart>
+                                <Pie
+                                  data={perfIntentPieData}
+                                  dataKey="value" nameKey="name"
+                                  cx="50%" cy="50%"
+                                  outerRadius={80} innerRadius={44}
+                                  paddingAngle={3}
+                                  onClick={(d: any) => setPerfIntentFilter((c) => c === d.key ? null : d.key)}
+                                  style={{ cursor: "pointer" }}
+                                >
+                                  {perfIntentPieData.map((d) => (
+                                    <Cell
+                                      key={d.key}
+                                      fill={INTENT_COLORS[d.key as QueryIntent]}
+                                      opacity={perfIntentFilter && perfIntentFilter !== d.key ? 0.3 : 1}
+                                      stroke={perfIntentFilter === d.key ? "#374151" : "none"}
+                                      strokeWidth={perfIntentFilter === d.key ? 2 : 0}
+                                    />
+                                  ))}
+                                </Pie>
+                                <Tooltip {...chartTooltipStyle} formatter={(v: number, n: string) => [v.toLocaleString() + " queries", n]} />
+                              </PieChart>
+                            </ResponsiveContainer>
+                            <div className="flex-1 space-y-2">
+                              {perfIntentPieData.map((d) => (
+                                <button key={d.key}
+                                  onClick={() => setPerfIntentFilter((c) => c === d.key ? null : d.key as QueryIntent)}
+                                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border transition-all text-left ${perfIntentFilter === d.key ? "border-gray-400 shadow-sm" : "border-transparent hover:border-gray-200"}`}
+                                  style={{ backgroundColor: INTENT_COLORS[d.key as QueryIntent] + "18" }}
+                                  title={INTENT_DESCRIPTIONS[d.key as QueryIntent]}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: INTENT_COLORS[d.key as QueryIntent] }} />
+                                    <span className="text-xs font-medium text-gray-700">{INTENT_LABELS[d.key as QueryIntent]}</span>
+                                  </div>
+                                  <span className="text-xs font-bold text-gray-900">{d.value.toLocaleString()} queries</span>
+                                </button>
+                              ))}
+                              {perfIntentFilter && (
+                                <button onClick={() => setPerfIntentFilter(null)} className="w-full text-xs text-purple-600 hover:text-purple-800 pt-1 text-center">✕ Clear filter</button>
+                              )}
+                            </div>
+                          </div>
+                        </ChartCard>
+
+                        <ChartCard title="Intent Breakdown" tip="Aggregated metrics by intent type. Compare clicks, impressions, CTR and average position across intent categories to see where your visibility is strongest.">
+                          <div className="overflow-y-auto" style={{ maxHeight: 230 }}>
+                            <table className="w-full text-xs">
+                              <thead className="sticky top-0 bg-white z-10">
+                                <tr className="text-left text-gray-400 border-b border-gray-100">
+                                  <th className="pb-2 pr-2 font-medium">Intent</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">Queries</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">Clicks</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">Impr.</th>
+                                  <th className="pb-2 pr-2 font-medium text-right">CTR</th>
+                                  <th className="pb-2 font-medium text-right">Avg Pos.</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {perfIntentTableData.map((r) => (
+                                  <tr key={r.key} className="border-b border-gray-50 hover:bg-gray-50">
+                                    <td className="py-1.5 pr-2">
+                                      <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${INTENT_BG[r.key]}`}>{r.label}</span>
+                                    </td>
+                                    <td className="py-1.5 pr-2 text-right text-gray-900 font-semibold tabular-nums">{r.queries.toLocaleString()}</td>
+                                    <td className="py-1.5 pr-2 text-right text-gray-900 font-semibold tabular-nums">{r.clicks.toLocaleString()}</td>
+                                    <td className="py-1.5 pr-2 text-right text-gray-500 tabular-nums">{r.impressions.toLocaleString()}</td>
+                                    <td className="py-1.5 pr-2 text-right text-gray-700 tabular-nums">{(r.ctr * 100).toFixed(2)}%</td>
+                                    <td className="py-1.5 text-right text-gray-700 tabular-nums">{r.avgPosition ? r.avgPosition.toFixed(1) : "—"}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </ChartCard>
+                      </div>
+
+                      {/* ── Section: Query Counting (queries per URL + comparison) ── */}
+                      <SectionDivider label="QUERY COUNTING" />
+                      <ChartCard
+                        title={`Queries per URL${hasGscCmp ? " — with comparison" : ""}`}
+                        tip="Count of distinct queries each URL ranks for in the current period, compared with the previous period. A falling count usually means the page is losing topical coverage in Google; a rising count means it's earning visibility for new queries. Pair this with clicks/impressions to spot pages quietly shedding query coverage."
+                      >
+                        <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+                          <input
+                            type="text"
+                            placeholder="Filter URLs…"
+                            value={queryCountSearch}
+                            onChange={(e) => setQueryCountSearch(e.target.value)}
+                            className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-purple-400 focus:ring-1 focus:ring-purple-200 w-64"
+                          />
+                          <div className="text-xs text-gray-400">
+                            {queryCountSort.sorted.length.toLocaleString()} URL{queryCountSort.sorted.length === 1 ? "" : "s"}
+                            {!hasGscCmp && <span className="ml-2 text-amber-600">· Enable a comparison range to see deltas</span>}
+                          </div>
+                        </div>
+                        <div className="overflow-y-auto rounded-xl border border-gray-50" style={{ maxHeight: 460 }}>
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 bg-white z-10">
+                              <tr className="text-left text-gray-400 border-b border-gray-100">
+                                <SortableTh label="URL" sortKey="page" sort={queryCountSort.sort} onToggle={queryCountSort.toggle} className="pb-2 pr-2 font-medium" />
+                                <SortableTh label="Queries" sortKey="queries" sort={queryCountSort.sort} onToggle={queryCountSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                {hasGscCmp && (
+                                  <>
+                                    <SortableTh label="Prev" sortKey="queriesCmp" sort={queryCountSort.sort} onToggle={queryCountSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                    <SortableTh label="Δ" sortKey="delta" sort={queryCountSort.sort} onToggle={queryCountSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                    <SortableTh label="% Chg" sortKey="pct" sort={queryCountSort.sort} onToggle={queryCountSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  </>
+                                )}
+                                <SortableTh label="Clicks" sortKey="clicks" sort={queryCountSort.sort} onToggle={queryCountSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                <SortableTh label="Impr." sortKey="impressions" sort={queryCountSort.sort} onToggle={queryCountSort.toggle} className="pb-2 font-medium text-right" />
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {queryCountSort.sorted.map((r, i) => {
+                                return (
+                                  <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                                    <td className="py-1.5 pr-2" style={{ maxWidth: 0, width: "44%" }}>
+                                      <UrlLink url={r.page} className="text-gray-700 max-w-full" />
+                                    </td>
+                                    <td className="py-1.5 pr-2 text-right text-gray-900 font-semibold tabular-nums">{r.queries.toLocaleString()}</td>
+                                    {hasGscCmp && (
+                                      <>
+                                        <td className="py-1.5 pr-2 text-right text-gray-500 tabular-nums">{r.queriesCmp.toLocaleString()}</td>
+                                        <td className={`py-1.5 pr-2 text-right font-semibold tabular-nums ${r.delta > 0 ? "text-emerald-600" : r.delta < 0 ? "text-red-500" : "text-gray-400"}`}>
+                                          {r.delta > 0 ? `+${r.delta.toLocaleString()}` : r.delta.toLocaleString()}
+                                        </td>
+                                        <td className={`py-1.5 pr-2 text-right font-bold text-[10px] tabular-nums ${r.queriesCmp === 0 ? "text-gray-400" : r.pct > 0 ? "text-emerald-600" : r.pct < 0 ? "text-red-500" : "text-gray-400"}`}>
+                                          {r.queriesCmp === 0 && r.queries > 0 ? "NEW" : r.queriesCmp === 0 ? "—" : `${r.pct >= 0 ? "+" : ""}${r.pct.toFixed(1)}%`}
+                                        </td>
+                                      </>
+                                    )}
+                                    <td className="py-1.5 pr-2 text-right text-gray-700 tabular-nums">{r.clicks.toLocaleString()}</td>
+                                    <td className="py-1.5 text-right text-gray-500 tabular-nums">{r.impressions.toLocaleString()}</td>
+                                  </tr>
+                                );
+                              })}
+                              {queryCountSort.sorted.length === 0 && (
+                                <tr><td colSpan={hasGscCmp ? 7 : 4} className="py-6 text-center text-gray-400">No URLs match this filter.</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </ChartCard>
                     </>
                   )}
                   </div>{/* end data-perf-section */}
