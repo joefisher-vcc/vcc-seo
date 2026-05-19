@@ -152,8 +152,6 @@ const LS_SELECTED_GSC = "vcc_selected_gsc";
 const LS_ACTIVE_VIEW = "vcc_active_view";
 const LS_BRAND_TERMS = "vcc_brand_terms";
 const LS_BRAND_TERMS_HISTORY = "vcc_brand_terms_history";
-const LS_NBSEO_CMP_MODE = "vcc_nbseo_cmp_mode";
-const LS_NBSEO_CATEGORY_RULES = "vcc_nbseo_category_rules";
 
 function persistGoogleToken(r: { access_token?: string; expires_in?: number }) {
   if (!r.access_token) return;
@@ -1670,15 +1668,30 @@ function isBrandQuery(q: string) {
   return BRAND_TERMS_GLOBAL.some((b) => ql.includes(b));
 }
 
-/** Default brand keyword list for the Non-Brand SEO section. Users can edit/extend this in the UI. */
+/**
+ * Default brand keyword list for the Non-Brand SEO section. Users can edit/extend this in the UI.
+ *
+ * IMPORTANT: classification is via substring matching, so terms here should be the actual phrases
+ * that mark a query as brand. The list intentionally biases toward full phrases (e.g. "vintage cash cow")
+ * rather than single words ("cash cow" alone is treated as non-brand because users searching just for
+ * "cash cow" aren't necessarily looking for this brand).
+ *
+ * Typos of "cash cow" itself (e.g. "vintage cas cow", "vintage cash coe") are treated as non-brand —
+ * extend the list manually if your data suggests otherwise.
+ */
 const NBSEO_DEFAULT_BRAND_TERMS = [
+  // Full-phrase variants
   "vintage cash cow",
   "vintagecashcow",
-  "vcc",
   "vintage cashcow",
-  "cash cow vintage",
-  "vintage-cash-cow",
   "vintagecash cow",
+  "vintage-cash-cow",
+  "cash cow vintage",
+  // Domain references
+  "vintagecashcow.co.uk",
+  "vintagecashcow co uk",
+  // Short / abbreviated
+  "vcc",
 ];
 
 /**
@@ -2578,113 +2591,6 @@ interface BrandViewProps {
   selectedGSC: string;
 }
 
-/**
- * Editable weekly-snapshot text export for the Non-Brand SEO section.
- * Builds a paragraph summary the user can tweak (the commentary box is freeform), then copies the whole thing to the clipboard.
- */
-function NbsSnapshot({
-  totals,
-  periodLabel,
-  cmpPeriodLabel,
-  cmpMode,
-  winners,
-  losers,
-  categoryTotals,
-}: {
-  totals: {
-    nbSessions: number; nbSessionsCmp: number | null;
-    nbLeads: number;    nbLeadsCmp:    number | null;
-    nonBrandClicks: number;
-    totalClicks: number;
-  };
-  periodLabel: string;
-  cmpPeriodLabel: string | null;
-  cmpMode: "prev" | "yoy" | "none";
-  winners: { page: string; delta: number; pct: number; cur: number; prev: number }[];
-  losers:  { page: string; delta: number; pct: number; cur: number; prev: number }[];
-  categoryTotals: { category: string; nbSessions: number; sessionsPct: number }[];
-}) {
-  const [commentary, setCommentary] = useState("");
-  const [copied, setCopied] = useState(false);
-
-  const sessPct = totals.nbSessionsCmp && totals.nbSessionsCmp > 0
-    ? ((totals.nbSessions - totals.nbSessionsCmp) / totals.nbSessionsCmp) * 100 : null;
-  const leadsPct = totals.nbLeadsCmp && totals.nbLeadsCmp > 0
-    ? ((totals.nbLeads - totals.nbLeadsCmp) / totals.nbLeadsCmp) * 100 : null;
-  const cmpLabel = cmpMode === "yoy" ? "YoY" : "WoW";
-  const slug = (u: string) => { try { return new URL(u).pathname || "/"; } catch { return u.replace(/^https?:\/\/[^/]+/i, "") || u; } };
-
-  const text = (() => {
-    const lines: string[] = [];
-    lines.push(`Non-Brand SEO — ${periodLabel}${cmpPeriodLabel ? ` (vs ${cmpPeriodLabel})` : ""}`);
-    lines.push("");
-    lines.push(`Headline:`);
-    lines.push(`• Non-brand sessions: ${totals.nbSessions.toLocaleString()}${sessPct != null ? ` (${sessPct >= 0 ? "+" : ""}${sessPct.toFixed(1)}% ${cmpLabel})` : ""}`);
-    lines.push(`• Non-brand leads (modelled): ${totals.nbLeads.toLocaleString()}${leadsPct != null ? ` (${leadsPct >= 0 ? "+" : ""}${leadsPct.toFixed(1)}% ${cmpLabel})` : ""}`);
-    lines.push(`• Non-brand click share: ${totals.totalClicks > 0 ? ((totals.nonBrandClicks / totals.totalClicks) * 100).toFixed(1) : "0.0"}%`);
-    if (winners.length > 0) {
-      lines.push("");
-      lines.push(`Top 5 non-brand winners (by Δ sessions ${cmpLabel}):`);
-      winners.forEach((w, i) => {
-        const pctStr = isFinite(w.pct) ? `${w.pct >= 0 ? "+" : ""}${w.pct.toFixed(0)}%` : "new";
-        lines.push(`${i + 1}. ${slug(w.page)} — ${Math.round(w.cur).toLocaleString()} (${w.delta >= 0 ? "+" : ""}${Math.round(w.delta).toLocaleString()}, ${pctStr})`);
-      });
-    }
-    if (losers.length > 0) {
-      lines.push("");
-      lines.push(`Top 5 non-brand losers (by Δ sessions ${cmpLabel}):`);
-      losers.forEach((l, i) => {
-        const pctStr = isFinite(l.pct) ? `${l.pct >= 0 ? "+" : ""}${l.pct.toFixed(0)}%` : "n/a";
-        lines.push(`${i + 1}. ${slug(l.page)} — ${Math.round(l.cur).toLocaleString()} (${Math.round(l.delta).toLocaleString()}, ${pctStr})`);
-      });
-    }
-    if (categoryTotals.length > 0) {
-      lines.push("");
-      lines.push(`Category breakdown:`);
-      categoryTotals.slice(0, 8).forEach((c) => {
-        const pctStr = c.sessionsPct !== 0 ? ` (${c.sessionsPct >= 0 ? "+" : ""}${c.sessionsPct.toFixed(0)}% ${cmpLabel})` : "";
-        lines.push(`• ${c.category}: ${c.nbSessions.toLocaleString()}${pctStr}`);
-      });
-    }
-    if (commentary.trim()) {
-      lines.push("");
-      lines.push(`Commentary:`);
-      lines.push(commentary.trim());
-    }
-    return lines.join("\n");
-  })();
-
-  const onCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch (e) {
-      console.error("Clipboard write failed", e);
-    }
-  };
-
-  return (
-    <div className="space-y-3">
-      <textarea
-        value={commentary}
-        onChange={(e) => setCommentary(e.target.value)}
-        placeholder="Add commentary for this week (optional) — what's driving the changes, what's coming next…"
-        rows={2}
-        className="w-full px-3 py-2 rounded-lg border border-gray-200 text-xs focus:outline-none focus:border-[#5b4fa8] focus:ring-1 focus:ring-purple-200 resize-none"
-      />
-      <pre className="bg-gray-50 border border-gray-100 rounded-xl p-3 text-[11px] text-gray-700 whitespace-pre-wrap font-mono leading-relaxed max-h-72 overflow-y-auto">{text}</pre>
-      <div className="flex items-center justify-end gap-2">
-        <button
-          onClick={() => void onCopy()}
-          className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#5b4fa8] text-white hover:bg-[#4a3f8e] transition-all"
-        >
-          {copied ? "✓ Copied" : "Copy snapshot"}
-        </button>
-      </div>
-    </div>
-  );
-}
 
 function BrandPct({ branded, nonBranded }: { branded: number; nonBranded: number }) {
   const total = branded + nonBranded || 1;
@@ -3225,76 +3131,55 @@ export default function App() {
     } catch { /* ignore */ }
     return [];
   });
-  /** Comparison mode for the Non-Brand SEO section. */
-  const [nbsCmpMode, setNbsCmpMode] = useState<"prev" | "yoy" | "none">(() =>
-    (localStorage.getItem(LS_NBSEO_CMP_MODE) as "prev"|"yoy"|"none") ?? "prev"
-  );
-  /** Optional URL-pattern → category rules. Kept simple as { match, label } records. Editable in UI. */
-  const [nbsCategoryRules, setNbsCategoryRules] = useState<{ match: string; label: string }[]>(() => {
-    try {
-      const raw = localStorage.getItem(LS_NBSEO_CATEGORY_RULES);
-      if (raw) { const arr = JSON.parse(raw); if (Array.isArray(arr)) return arr; }
-    } catch { /* ignore */ }
-    return [
-      { match: "/sell-watches", label: "Watches" },
-      { match: "/sell-jewellery", label: "Jewellery" },
-      { match: "/sell-coins", label: "Coins" },
-      { match: "/sell-toys", label: "Toys" },
-      { match: "/sell-cameras", label: "Cameras" },
-      { match: "/blog/", label: "Blog" },
-    ];
-  });
   /** Inputs for the brand-classifier editor UI. */
   const [nbsTermInput, setNbsTermInput] = useState("");
   const [nbsTestQuery, setNbsTestQuery] = useState("");
   /** NB SEO data — pre-aggregated per-landing-page numbers for current + previous + YoY periods. */
   interface NbsLandingPageRow {
-    page: string;
-    category: string;
-    // GSC current period
-    clicks: number;
-    brandClicks: number;
-    nonBrandClicks: number;
-    unknownClicks: number;
-    nonBrandRatio: number;       // nb / (b + nb)
-    unknownRatio: number;        // unknown / total
-    confidence: "high" | "medium" | "low";
-    // GA4 current period (joined on landing page)
-    sessions: number;
-    leads: number;
-    modelledNbSessions: number;
-    modelledNbLeads: number;
-    // Previous period (already modelled — null if no comparison)
-    modelledNbSessionsCmp: number | null;
-    modelledNbLeadsCmp: number | null;
+    page: string;             // landing page URL
+    // GSC current period (per landing page, queries aggregated)
+    brandImpressions: number;
+    nonBrandImpressions: number;
+    nonBrandRatio: number;    // impression-weighted: nbImpr / (bImpr + nbImpr)
+    // GA4 current period
+    orgSessions: number;      // total Organic Search sessions where this was the entry page
+    fspReferrers: number;     // sessions on /free-selling-pack that came from this referrer page
+    // Modelled outputs
+    nbReferrers: number;      // fspReferrers × nonBrandRatio
+    brandReferrers: number;   // fspReferrers × (1 - nonBrandRatio)
+    // Comparison period (previous 7 days)
+    orgSessionsCmp: number;
+    fspReferrersCmp: number;
+    nbReferrersCmp: number;
+    brandReferrersCmp: number;
+    nonBrandRatioCmp: number;
     // Flags
-    usedSiteWideRatio: boolean;  // true when this page had no GSC clicks → fell back to site-wide ratio
+    usedSiteWideRatio: boolean;  // true when this page had no GSC impressions → fell back to site-wide ratio
+    confidence: "high" | "medium" | "low";
   }
   interface NbsDataType {
     rows: NbsLandingPageRow[];
     totals: {
-      nbSessions: number; nbSessionsCmp: number | null;
-      nbLeads: number;    nbLeadsCmp:    number | null;
-      totalSessions: number; totalSessionsCmp: number | null;
-      totalLeads:    number; totalLeadsCmp:    number | null;
-      totalClicks:   number;
-      brandClicks:   number;
-      nonBrandClicks:number;
-      unknownClicks: number;
-      siteWideNbRatio: number;
+      orgSessions: number;
+      fspReferrers: number;
+      nbReferrers: number;
+      brandReferrers: number;
+      orgSessionsCmp: number;
+      fspReferrersCmp: number;
+      nbReferrersCmp: number;
+      brandReferrersCmp: number;
+      brandImpressions: number;
+      nonBrandImpressions: number;
+      siteWideNbRatio: number;     // impression-weighted, /items-we-buy/ subset only
     };
-    daily: { date: string; brandClicks: number; nonBrandClicks: number; unknownClicks: number }[];
     period: { start: string; end: string };
-    cmpPeriod: { start: string; end: string } | null;
-    cmpMode: "prev" | "yoy" | "none";
+    cmpPeriod: { start: string; end: string };
     fetchedAt: number;
   }
   const [nbsData, setNbsData] = useState<NbsDataType | null>(null);
   const [nbsLoading, setNbsLoading] = useState(false);
   const [nbsExpandedRow, setNbsExpandedRow] = useState<string | null>(null);
   const [nbsShowTransparency, setNbsShowTransparency] = useState(false);
-  const [nbsTimeseriesMetric, setNbsTimeseriesMetric] = useState<"sessions"|"leads"|"convRate">("sessions");
-  const [nbsTimeseriesGranularity, setNbsTimeseriesGranularity] = useState<"daily"|"weekly">("daily");
   const [queryCopyResults, setQueryCopyResults] = useState<Map<string, { text: string; queryHits: Map<string, boolean> }>>(new Map());
   const [queryCopyLoading, setQueryCopyLoading] = useState<Set<string>>(new Set());
   const [queryCopyPage, setQueryCopyPage] = useState<string>(""); // URL typed/selected by user
@@ -3499,8 +3384,6 @@ export default function App() {
   useEffect(() => { localStorage.setItem(LS_ACTIVE_VIEW, activeView); }, [activeView]);
   useEffect(() => { try { localStorage.setItem(LS_BRAND_TERMS, JSON.stringify(nbsBrandTerms)); } catch { /* ignore quota */ } }, [nbsBrandTerms]);
   useEffect(() => { try { localStorage.setItem(LS_BRAND_TERMS_HISTORY, JSON.stringify(nbsTermsHistory)); } catch { /* ignore quota */ } }, [nbsTermsHistory]);
-  useEffect(() => { try { localStorage.setItem(LS_NBSEO_CMP_MODE, nbsCmpMode); } catch { /* ignore quota */ } }, [nbsCmpMode]);
-  useEffect(() => { try { localStorage.setItem(LS_NBSEO_CATEGORY_RULES, JSON.stringify(nbsCategoryRules)); } catch { /* ignore quota */ } }, [nbsCategoryRules]);
 
   // ── Fetch GA4 ──────────────────────────────────────────────────────────────
   const fetchGA4 = useCallback(async () => {
@@ -4626,306 +4509,237 @@ export default function App() {
   }, [selectedGSC, selectedGA4, accessToken, gscFetchFilters, ga4FetchFilters]);
 
   // ── Non-Brand SEO fetch ────────────────────────────────────────────────────
-  // Pulls GSC [page, query] for the current + comparison windows, GA4 sessions and generate_lead
-  // event counts segmented by sessionLandingPagePlusQueryString (filtered to Organic Search),
-  // classifies queries against the editable brand-term list, and rolls up per-landing-page
-  // non-brand ratios + modelled non-brand sessions and leads.
+  // Per-landing-page non-brand calculation for /items-we-buy/ pages:
+  //   1. Fixed 7-day window vs previous 7 days.
+  //   2. GSC [page, query] data: for each landing page, calculate an IMPRESSION-WEIGHTED
+  //      non-brand ratio. Queries are classified using the editable brand-term list.
+  //   3. GA4 metrics filtered to "Organic Search" channel group:
+  //      - Total Organic Search sessions per landing page (entry-page level)
+  //      - Sessions arriving at /free-selling-pack grouped by pageReferrer (the page that
+  //        sent them onward) — this is the FSP referrer count per landing page.
+  //   4. Apply the per-page non-brand ratio to the FSP referrer count to estimate how many
+  //      of those onward sessions came from non-brand vs brand search intent.
   const fetchNbsData = useCallback(async () => {
-    if (!selectedGSC || !accessToken) return;
+    if (!selectedGSC || !accessToken || !selectedGA4) return;
     setNbsLoading(true);
     setNbsData(null);
     try {
       const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
       const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
+      const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
 
-      // Resolve windows.
-      const { startDate, endDate } = gscDateWindows(gscFetchFilters);
-      let cmpWin: { startDate: string; endDate: string } | null = null;
-      if (nbsCmpMode === "prev") {
-        cmpWin = comparisonWindowBefore(startDate, endDate);
-      } else if (nbsCmpMode === "yoy") {
-        cmpWin = { startDate: addDaysISO(startDate, -365), endDate: addDaysISO(endDate, -365) };
-      }
+      // ── Fixed window: last 7 days (GSC data finalises with a 2-3 day delay so end = today − 3),
+      //    compared against the 7 days before that. ─────────────────────────────────────────────
+      const endDate = addDaysISO(toISODate(new Date()), -3);
+      const startDate = addDaysISO(endDate, -6);
+      const cmpEndDate = addDaysISO(startDate, -1);
+      const cmpStartDate = addDaysISO(cmpEndDate, -6);
 
-      // ── GSC fetches (page+query, daily) ────────────────────────────────────
-      const gscPageQueryBody = (s: string, e: string) => JSON.stringify({
-        startDate: s, endDate: e, dimensions: ["page", "query"], rowLimit: 25000,
-      });
-      const gscDailyBody = (s: string, e: string) => JSON.stringify({
-        startDate: s, endDate: e, dimensions: ["date", "query"], rowLimit: 25000,
-      });
-      const totalsBody = (s: string, e: string) => JSON.stringify({
-        startDate: s, endDate: e, dimensions: [], rowLimit: 1,
-      });
+      const FSP_PATH = "/free-selling-pack";
+      const ITEMS_WE_BUY_PREFIX = "/items-we-buy/";
+      const classify = (q: string) => nbSeoClassify(q, nbsBrandTerms);
+      const normPath = (url: string): string => {
+        try { return new URL(url).pathname.replace(/\/$/, "") || "/"; }
+        catch { return url.replace(/^https?:\/\/[^/]+/, "").replace(/\/$/, "") || "/"; }
+      };
+      const matchesItemsWeBuy = (urlOrPath: string): boolean =>
+        normPath(urlOrPath).toLowerCase().includes(ITEMS_WE_BUY_PREFIX);
 
+      // ── GSC: [page, query] for both windows ───────────────────────────────────────────────
       type GscRow = { keys: string[]; clicks: number; impressions: number };
-      const fetchGsc = async (body: string): Promise<GscRow[]> => {
+      const gscFetch = async (s: string, e: string): Promise<GscRow[]> => {
+        const body = JSON.stringify({ startDate: s, endDate: e, dimensions: ["page", "query"], rowLimit: 25000 });
         const res = await fetch(gscBase, { method: "POST", headers, body }).then((r) => r.json());
         return (res?.rows ?? []) as GscRow[];
       };
-      const fetchGscTotal = async (body: string): Promise<{ clicks: number; impressions: number }> => {
-        const res = await fetch(gscBase, { method: "POST", headers, body }).then((r) => r.json());
-        const r0 = res?.rows?.[0];
-        return r0 ? { clicks: Math.round(r0.clicks), impressions: Math.round(r0.impressions) } : { clicks: 0, impressions: 0 };
-      };
 
-      const [pageQueryCur, pageQueryCmp, dailyByQueryCur, totalsCur] = await Promise.all([
-        fetchGsc(gscPageQueryBody(startDate, endDate)),
-        cmpWin ? fetchGsc(gscPageQueryBody(cmpWin.startDate, cmpWin.endDate)) : Promise.resolve([] as GscRow[]),
-        fetchGsc(gscDailyBody(startDate, endDate)),
-        fetchGscTotal(totalsBody(startDate, endDate)),
+      // ── GA4: total Organic sessions per landing page ─────────────────────────────────────
+      const ga4SessionsByLandingPage = (s: string, e: string) => JSON.stringify({
+        dateRanges: [{ startDate: s, endDate: e }],
+        dimensions: [{ name: "landingPagePlusQueryString" }],
+        metrics: [{ name: "sessions" }],
+        dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } },
+        limit: 10000,
+      });
+
+      // ── GA4: sessions arriving at /free-selling-pack grouped by pageReferrer (Organic Search) ─
+      //    This tells us: for sessions on /free-selling-pack, which page sent them here?
+      //    pageReferrer is the previous-page URL within the same site.
+      const ga4FspByReferrer = (s: string, e: string) => JSON.stringify({
+        dateRanges: [{ startDate: s, endDate: e }],
+        dimensions: [{ name: "pagePath" }, { name: "pageReferrer" }],
+        metrics: [{ name: "sessions" }],
+        dimensionFilter: {
+          andGroup: { expressions: [
+            { filter: { fieldName: "pagePath", stringFilter: { matchType: "BEGINS_WITH", value: FSP_PATH } } },
+            { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } },
+          ]},
+        },
+        limit: 10000,
+      });
+
+      type Ga4Resp = { rows?: { dimensionValues: { value: string }[]; metricValues: { value: string }[] }[] };
+      const ga4Fetch = (body: string): Promise<Ga4Resp> =>
+        fetch(ga4Base, { method: "POST", headers, body }).then((r) => r.json() as Promise<Ga4Resp>);
+
+      // Fire all six requests in parallel.
+      const [pageQueryCur, pageQueryCmp, ga4SessCur, ga4SessCmp, ga4FspCur, ga4FspCmp] = await Promise.all([
+        gscFetch(startDate, endDate),
+        gscFetch(cmpStartDate, cmpEndDate),
+        ga4Fetch(ga4SessionsByLandingPage(startDate, endDate)),
+        ga4Fetch(ga4SessionsByLandingPage(cmpStartDate, cmpEndDate)),
+        ga4Fetch(ga4FspByReferrer(startDate, endDate)),
+        ga4Fetch(ga4FspByReferrer(cmpStartDate, cmpEndDate)),
       ]);
 
-      const classify = (q: string) => nbSeoClassify(q, nbsBrandTerms);
-
-      // Aggregate per landing page (current period).
-      type PerPage = { brand: number; nonBrand: number };
-      const perPageCur = new Map<string, PerPage>();
-      let brandClicksTotal = 0, nonBrandClicksTotal = 0;
-      pageQueryCur.forEach((r) => {
-        const page = r.keys[0];
-        const query = r.keys[1];
-        const c = Math.round(r.clicks);
-        if (c === 0) return;
-        const cls = classify(query);
-        let p = perPageCur.get(page);
-        if (!p) { p = { brand: 0, nonBrand: 0 }; perPageCur.set(page, p); }
-        if (cls === "brand") { p.brand += c; brandClicksTotal += c; }
-        else { p.nonBrand += c; nonBrandClicksTotal += c; }
-      });
-
-      // Aggregate per landing page (comparison period).
-      const perPageCmp = new Map<string, PerPage>();
-      let brandClicksTotalCmp = 0, nonBrandClicksTotalCmp = 0;
-      pageQueryCmp.forEach((r) => {
-        const page = r.keys[0];
-        const query = r.keys[1];
-        const c = Math.round(r.clicks);
-        if (c === 0) return;
-        const cls = classify(query);
-        let p = perPageCmp.get(page);
-        if (!p) { p = { brand: 0, nonBrand: 0 }; perPageCmp.set(page, p); }
-        if (cls === "brand") { p.brand += c; brandClicksTotalCmp += c; }
-        else { p.nonBrand += c; nonBrandClicksTotalCmp += c; }
-      });
-
-      // Unknown clicks = property total clicks − sum of classified clicks (queries hidden by GSC for privacy/low volume).
-      const classifiedClicksCur = brandClicksTotal + nonBrandClicksTotal;
-      const unknownClicksCur = Math.max(0, totalsCur.clicks - classifiedClicksCur);
-      const siteWideNbRatio = (brandClicksTotal + nonBrandClicksTotal) > 0
-        ? nonBrandClicksTotal / (brandClicksTotal + nonBrandClicksTotal)
-        : 0;
-
-      // ── Daily brand vs non-brand from [date, query] rows ──────────────────
-      const dailyMap = new Map<string, { brandClicks: number; nonBrandClicks: number; unknownClicks: number }>();
-      dailyByQueryCur.forEach((r) => {
-        const date = r.keys[0];
-        const query = r.keys[1];
-        const c = Math.round(r.clicks);
-        if (!dailyMap.has(date)) dailyMap.set(date, { brandClicks: 0, nonBrandClicks: 0, unknownClicks: 0 });
-        const d = dailyMap.get(date)!;
-        if (classify(query) === "brand") d.brandClicks += c; else d.nonBrandClicks += c;
-      });
-      // We can't directly know per-day unknowns without an extra fetch — approximate by applying the
-      // overall unknown ratio to each day's classified total.
-      const unknownRatioOverall = totalsCur.clicks > 0 ? unknownClicksCur / totalsCur.clicks : 0;
-      const daily = [...dailyMap.entries()]
-        .map(([date, v]) => {
-          const classified = v.brandClicks + v.nonBrandClicks;
-          const dayTotalApprox = unknownRatioOverall < 1 ? classified / Math.max(0.0001, 1 - unknownRatioOverall) : classified;
-          return { date, brandClicks: v.brandClicks, nonBrandClicks: v.nonBrandClicks, unknownClicks: Math.max(0, Math.round(dayTotalApprox - classified)) };
-        })
-        .sort((a, b) => a.date.localeCompare(b.date));
-
-      // ── GA4 fetches (sessions + leads by landing page, daily) ─────────────
-      // Helper to normalise paths: GA4 returns landingPagePlusQueryString as a path (e.g. "/sell-watches?x=1").
-      const normalisePath = (s: string): string => {
-        if (!s) return "/";
-        try {
-          // sessionLandingPagePlusQueryString is typically already a path; if it's a full URL strip host.
-          if (/^https?:\/\//.test(s)) return new URL(s).pathname + new URL(s).search;
-          return s;
-        } catch { return s; }
-      };
-
-      // Pull GA4 organic sessions + leads, segmented by landing page (current + comparison).
-      let ga4SessionsByPage = new Map<string, number>();
-      let ga4LeadsByPage = new Map<string, number>();
-      let ga4SessionsByPageCmp: Map<string, number> | null = null;
-      let ga4LeadsByPageCmp: Map<string, number> | null = null;
-
-      if (selectedGA4) {
-        const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
-        const sessionsBody = (s: string, e: string) => JSON.stringify({
-          dateRanges: [{ startDate: s, endDate: e }],
-          dimensions: [{ name: "sessionLandingPagePlusQueryString" }],
-          metrics: [{ name: "sessions" }],
-          dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { value: "Organic Search" } } },
-          limit: 1000,
+      // ── Aggregate GSC impressions per landing page, split brand vs non-brand ─────────────
+      // Filter to /items-we-buy/ pages only, here at aggregation time.
+      type PerPage = { brandImpr: number; nonBrandImpr: number };
+      const agg = (rows: GscRow[]): Map<string, PerPage> => {
+        const m = new Map<string, PerPage>();
+        rows.forEach((r) => {
+          const fullPage = r.keys[0];
+          if (!matchesItemsWeBuy(fullPage)) return;
+          const path = normPath(fullPage);
+          const query = r.keys[1];
+          const impr = Math.round(r.impressions);
+          if (impr === 0) return;
+          let p = m.get(path);
+          if (!p) { p = { brandImpr: 0, nonBrandImpr: 0 }; m.set(path, p); }
+          if (classify(query) === "brand") p.brandImpr += impr; else p.nonBrandImpr += impr;
         });
-        const leadsBody = (s: string, e: string) => JSON.stringify({
-          dateRanges: [{ startDate: s, endDate: e }],
-          dimensions: [{ name: "sessionLandingPagePlusQueryString" }],
-          metrics: [{ name: "eventCount" }],
-          dimensionFilter: {
-            andGroup: { expressions: [
-              { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { value: "Organic Search" } } },
-              { filter: { fieldName: "eventName", stringFilter: { value: "generate_lead" } } },
-            ]},
-          },
-          limit: 1000,
-        });
-
-        type Ga4Resp = { rows?: { dimensionValues: { value: string }[]; metricValues: { value: string }[] }[] };
-        const ga4FetchJson = (body: string): Promise<Ga4Resp> =>
-          fetch(ga4Base, { method: "POST", headers, body }).then((r) => r.json() as Promise<Ga4Resp>);
-
-        const [sessCurRes, leadsCurRes, sessCmpRes, leadsCmpRes] = await Promise.all([
-          ga4FetchJson(sessionsBody(startDate, endDate)),
-          ga4FetchJson(leadsBody(startDate, endDate)),
-          cmpWin ? ga4FetchJson(sessionsBody(cmpWin.startDate, cmpWin.endDate)) : Promise.resolve({ rows: [] } as Ga4Resp),
-          cmpWin ? ga4FetchJson(leadsBody(cmpWin.startDate, cmpWin.endDate)) : Promise.resolve({ rows: [] } as Ga4Resp),
-        ]);
-
-        const intoMap = (resp: Ga4Resp) => {
-          const m = new Map<string, number>();
-          (resp.rows ?? []).forEach((r) => {
-            const path = normalisePath(r.dimensionValues[0]?.value ?? "");
-            const v = parseInt(r.metricValues[0]?.value ?? "0", 10);
-            m.set(path, (m.get(path) ?? 0) + v);
-          });
-          return m;
-        };
-        ga4SessionsByPage = intoMap(sessCurRes);
-        ga4LeadsByPage    = intoMap(leadsCurRes);
-        if (cmpWin) {
-          ga4SessionsByPageCmp = intoMap(sessCmpRes);
-          ga4LeadsByPageCmp    = intoMap(leadsCmpRes);
-        }
-      }
-
-      // ── Build per-landing-page rows ───────────────────────────────────────
-      // We use the union of pages seen in GSC and GA4. For pages in GA4 with no GSC data, fall back to
-      // the site-wide non-brand ratio and flag the row.
-      const categorise = (page: string): string => {
-        try {
-          const path = new URL(page, "https://example.com").pathname.toLowerCase();
-          for (const rule of nbsCategoryRules) {
-            if (rule.match && path.includes(rule.match.toLowerCase())) return rule.label;
-          }
-        } catch { /* ignore */ }
-        return "Uncategorised";
+        return m;
       };
+      const perPageCur = agg(pageQueryCur);
+      const perPageCmp = agg(pageQueryCmp);
 
-      const allPages = new Set<string>([
+      // ── Aggregate GA4 sessions per landing page ──────────────────────────────────────────
+      const sessMap = (resp: Ga4Resp): Map<string, number> => {
+        const m = new Map<string, number>();
+        (resp.rows ?? []).forEach((r) => {
+          const path = normPath(r.dimensionValues[0]?.value ?? "");
+          if (!matchesItemsWeBuy(path)) return;
+          const v = parseInt(r.metricValues[0]?.value ?? "0", 10);
+          m.set(path, (m.get(path) ?? 0) + v);
+        });
+        return m;
+      };
+      const sessionsCurMap = sessMap(ga4SessCur);
+      const sessionsCmpMap = sessMap(ga4SessCmp);
+
+      // ── Aggregate FSP referrers: sessions on /free-selling-pack grouped by referrer page ─
+      // For each referring path that matches /items-we-buy/, count sessions that landed on FSP.
+      const fspMap = (resp: Ga4Resp): Map<string, number> => {
+        const m = new Map<string, number>();
+        (resp.rows ?? []).forEach((r) => {
+          const referrer = r.dimensionValues[1]?.value ?? "";
+          if (!referrer || referrer === "(not set)" || referrer === "(direct)") return;
+          const refPath = normPath(referrer);
+          if (!matchesItemsWeBuy(refPath)) return;
+          const v = parseInt(r.metricValues[0]?.value ?? "0", 10);
+          m.set(refPath, (m.get(refPath) ?? 0) + v);
+        });
+        return m;
+      };
+      const fspCurMap = fspMap(ga4FspCur);
+      const fspCmpMap = fspMap(ga4FspCmp);
+
+      // ── Site-wide impression-weighted NB ratio across /items-we-buy/ pages ───────────────
+      let totalBrandImpr = 0, totalNonBrandImpr = 0;
+      perPageCur.forEach((v) => { totalBrandImpr += v.brandImpr; totalNonBrandImpr += v.nonBrandImpr; });
+      const siteWideNbRatio = (totalBrandImpr + totalNonBrandImpr) > 0
+        ? totalNonBrandImpr / (totalBrandImpr + totalNonBrandImpr) : 0;
+
+      // ── Build per-page rows ──────────────────────────────────────────────────────────────
+      const allPaths = new Set<string>([
         ...perPageCur.keys(),
-        ...ga4SessionsByPage.keys(),
-        ...ga4LeadsByPage.keys(),
+        ...sessionsCurMap.keys(),
+        ...fspCurMap.keys(),
       ]);
-
       const rows: NbsLandingPageRow[] = [];
-      let nbSessionsTotal = 0, nbLeadsTotal = 0;
-      let totalSessionsAll = 0, totalLeadsAll = 0;
-      let nbSessionsTotalCmp = 0, nbLeadsTotalCmp = 0;
-      let totalSessionsAllCmp = 0, totalLeadsAllCmp = 0;
+      let totOrgSess = 0, totFsp = 0, totNb = 0, totBrand = 0;
+      let totOrgSessCmp = 0, totFspCmp = 0, totNbCmp = 0, totBrandCmp = 0;
 
-      allPages.forEach((page) => {
-        const gscRow = perPageCur.get(page);
-        const gscRowCmp = perPageCmp.get(page);
-        // Pages in GA4 are stored by path; pages in GSC are full URLs. Try to match either form.
-        const gscPath = (() => {
-          try { const u = new URL(page); return u.pathname + u.search; } catch { return page; }
-        })();
-        const sessions = ga4SessionsByPage.get(page) ?? ga4SessionsByPage.get(gscPath) ?? 0;
-        const leads    = ga4LeadsByPage.get(page)    ?? ga4LeadsByPage.get(gscPath)    ?? 0;
-        const sessionsCmp = ga4SessionsByPageCmp ? (ga4SessionsByPageCmp.get(page) ?? ga4SessionsByPageCmp.get(gscPath) ?? 0) : 0;
-        const leadsCmp    = ga4LeadsByPageCmp    ? (ga4LeadsByPageCmp.get(page)    ?? ga4LeadsByPageCmp.get(gscPath)    ?? 0) : 0;
+      allPaths.forEach((path) => {
+        const cur = perPageCur.get(path);
+        const cmp = perPageCmp.get(path);
 
-        const clicks = (gscRow?.brand ?? 0) + (gscRow?.nonBrand ?? 0);
+        const brandImpr = cur?.brandImpr ?? 0;
+        const nonBrandImpr = cur?.nonBrandImpr ?? 0;
+        const totalImpr = brandImpr + nonBrandImpr;
         let nonBrandRatio = 0;
         let usedSiteWideRatio = false;
-        if (clicks > 0) {
-          nonBrandRatio = (gscRow!.nonBrand) / clicks;
+        if (totalImpr > 0) {
+          nonBrandRatio = nonBrandImpr / totalImpr;
         } else {
           nonBrandRatio = siteWideNbRatio;
           usedSiteWideRatio = true;
         }
-        // Confidence flag: low if either we used the site-wide fallback OR very few clicks (<20) for the page.
-        // (Unknown ratio is global, so a per-page unknown isn't directly computable; we proxy it via click volume.)
-        const unknownRatio = unknownRatioOverall;
+        const cmpTotal = (cmp?.brandImpr ?? 0) + (cmp?.nonBrandImpr ?? 0);
+        const nonBrandRatioCmp = cmpTotal > 0 ? (cmp!.nonBrandImpr / cmpTotal) : nonBrandRatio;
+
+        const orgSessions = sessionsCurMap.get(path) ?? 0;
+        const orgSessionsCmp = sessionsCmpMap.get(path) ?? 0;
+        const fspReferrers = fspCurMap.get(path) ?? 0;
+        const fspReferrersCmp = fspCmpMap.get(path) ?? 0;
+
+        const nbReferrers = fspReferrers * nonBrandRatio;
+        const brandReferrers = fspReferrers * (1 - nonBrandRatio);
+        const nbReferrersCmp = fspReferrersCmp * nonBrandRatioCmp;
+        const brandReferrersCmp = fspReferrersCmp * (1 - nonBrandRatioCmp);
+
+        // Confidence: high if ≥100 impressions for the page, medium if ≥20, low otherwise / fallback used.
         let confidence: "high" | "medium" | "low" = "high";
-        if (usedSiteWideRatio || clicks < 20) confidence = "low";
-        else if (clicks < 100 || unknownRatio > 0.4) confidence = "medium";
+        if (usedSiteWideRatio || totalImpr < 20) confidence = "low";
+        else if (totalImpr < 100) confidence = "medium";
 
-        // Same ratio is used to model the previous period's NB share (modelling assumption: the brand/non-brand mix is stable across the comparison window).
-        const cmpRatio = gscRowCmp && (gscRowCmp.brand + gscRowCmp.nonBrand) > 0
-          ? gscRowCmp.nonBrand / (gscRowCmp.brand + gscRowCmp.nonBrand)
-          : nonBrandRatio; // fallback to current-period ratio when no prev GSC data
-
-        const modelledNbSessions = sessions * nonBrandRatio;
-        const modelledNbLeads    = leads * nonBrandRatio;
-        const modelledNbSessionsCmp = cmpWin ? sessionsCmp * cmpRatio : null;
-        const modelledNbLeadsCmp    = cmpWin ? leadsCmp * cmpRatio    : null;
-
-        nbSessionsTotal += modelledNbSessions;
-        nbLeadsTotal    += modelledNbLeads;
-        totalSessionsAll += sessions;
-        totalLeadsAll    += leads;
-        if (cmpWin) {
-          nbSessionsTotalCmp += modelledNbSessionsCmp ?? 0;
-          nbLeadsTotalCmp    += modelledNbLeadsCmp ?? 0;
-          totalSessionsAllCmp += sessionsCmp;
-          totalLeadsAllCmp    += leadsCmp;
-        }
+        totOrgSess += orgSessions; totFsp += fspReferrers; totNb += nbReferrers; totBrand += brandReferrers;
+        totOrgSessCmp += orgSessionsCmp; totFspCmp += fspReferrersCmp; totNbCmp += nbReferrersCmp; totBrandCmp += brandReferrersCmp;
 
         rows.push({
-          page,
-          category: categorise(page),
-          clicks,
-          brandClicks:    gscRow?.brand ?? 0,
-          nonBrandClicks: gscRow?.nonBrand ?? 0,
-          unknownClicks:  0,    // per-page unknown is not directly available from the GSC API
+          page: path,
+          brandImpressions: brandImpr,
+          nonBrandImpressions: nonBrandImpr,
           nonBrandRatio,
-          unknownRatio,
-          confidence,
-          sessions,
-          leads,
-          modelledNbSessions,
-          modelledNbLeads,
-          modelledNbSessionsCmp,
-          modelledNbLeadsCmp,
+          orgSessions,
+          fspReferrers,
+          nbReferrers,
+          brandReferrers,
+          orgSessionsCmp,
+          fspReferrersCmp,
+          nbReferrersCmp,
+          brandReferrersCmp,
+          nonBrandRatioCmp,
           usedSiteWideRatio,
+          confidence,
         });
       });
 
-      rows.sort((a, b) => b.modelledNbSessions - a.modelledNbSessions);
+      // Sort by non-brand referrers descending (this is the headline metric).
+      rows.sort((a, b) => b.nbReferrers - a.nbReferrers);
 
       setNbsData({
         rows,
         totals: {
-          nbSessions: Math.round(nbSessionsTotal),
-          nbSessionsCmp: cmpWin ? Math.round(nbSessionsTotalCmp) : null,
-          nbLeads: Math.round(nbLeadsTotal),
-          nbLeadsCmp: cmpWin ? Math.round(nbLeadsTotalCmp) : null,
-          totalSessions: totalSessionsAll,
-          totalSessionsCmp: cmpWin ? totalSessionsAllCmp : null,
-          totalLeads: totalLeadsAll,
-          totalLeadsCmp: cmpWin ? totalLeadsAllCmp : null,
-          totalClicks: totalsCur.clicks,
-          brandClicks: brandClicksTotal,
-          nonBrandClicks: nonBrandClicksTotal,
-          unknownClicks: unknownClicksCur,
+          orgSessions: totOrgSess,
+          fspReferrers: totFsp,
+          nbReferrers: totNb,
+          brandReferrers: totBrand,
+          orgSessionsCmp: totOrgSessCmp,
+          fspReferrersCmp: totFspCmp,
+          nbReferrersCmp: totNbCmp,
+          brandReferrersCmp: totBrandCmp,
+          brandImpressions: totalBrandImpr,
+          nonBrandImpressions: totalNonBrandImpr,
           siteWideNbRatio,
         },
-        daily,
         period: { start: startDate, end: endDate },
-        cmpPeriod: cmpWin,
-        cmpMode: nbsCmpMode,
+        cmpPeriod: { start: cmpStartDate, end: cmpEndDate },
         fetchedAt: Date.now(),
       });
     } catch (e) { console.error("fetchNbsData", e); }
     setNbsLoading(false);
-  }, [selectedGSC, selectedGA4, accessToken, gscFetchFilters, nbsCmpMode, nbsBrandTerms, nbsCategoryRules]);
+  }, [selectedGSC, selectedGA4, accessToken, nbsBrandTerms]);
 
 
   const fetchSeoIssues = useCallback(async () => {
@@ -5530,79 +5344,9 @@ export default function App() {
     [nbsTestQuery, nbsBrandTerms]
   );
 
-  /** Rolled-up per-category totals from the NB SEO data. */
-  const nbsCategoryTotals = useMemo(() => {
-    if (!nbsData) return [];
-    const cats = new Map<string, { sessions: number; leads: number; clicks: number; sessionsCmp: number; leadsCmp: number }>();
-    nbsData.rows.forEach((r) => {
-      let c = cats.get(r.category);
-      if (!c) { c = { sessions: 0, leads: 0, clicks: 0, sessionsCmp: 0, leadsCmp: 0 }; cats.set(r.category, c); }
-      c.sessions += r.modelledNbSessions;
-      c.leads    += r.modelledNbLeads;
-      c.clicks   += r.nonBrandClicks;
-      c.sessionsCmp += r.modelledNbSessionsCmp ?? 0;
-      c.leadsCmp    += r.modelledNbLeadsCmp ?? 0;
-    });
-    return [...cats.entries()]
-      .map(([category, v]) => ({
-        category,
-        nbSessions: Math.round(v.sessions),
-        nbLeads:    Math.round(v.leads),
-        nbClicks:   v.clicks,
-        nbSessionsCmp: Math.round(v.sessionsCmp),
-        nbLeadsCmp:    Math.round(v.leadsCmp),
-        sessionsDelta: v.sessions - v.sessionsCmp,
-        sessionsPct:   v.sessionsCmp > 0 ? ((v.sessions - v.sessionsCmp) / v.sessionsCmp) * 100 : (v.sessions > 0 ? 100 : 0),
-      }))
-      .sort((a, b) => b.nbSessions - a.nbSessions);
-  }, [nbsData]);
-
-  /** Daily series rolled up for the time-series chart. */
-  const nbsDailyChartData = useMemo(() => {
-    if (!nbsData) return [];
-    const rows = nbsData.daily.map((d) => ({
-      date: d.date,
-      brand: d.brandClicks,
-      nonBrand: d.nonBrandClicks,
-      total: d.brandClicks + d.nonBrandClicks,
-    }));
-    if (nbsTimeseriesGranularity === "daily") return rows;
-    // Weekly buckets (ISO-ish: group by Sun..Sat starting from the first date in the set)
-    const buckets = new Map<string, { brand: number; nonBrand: number; total: number }>();
-    rows.forEach((d) => {
-      const dt = new Date(d.date + "T12:00:00");
-      const dayOfWeek = dt.getDay();
-      dt.setDate(dt.getDate() - dayOfWeek); // back to Sunday
-      const wk = toISODate(dt);
-      const b = buckets.get(wk) ?? { brand: 0, nonBrand: 0, total: 0 };
-      b.brand += d.brand; b.nonBrand += d.nonBrand; b.total += d.total;
-      buckets.set(wk, b);
-    });
-    return [...buckets.entries()].map(([date, v]) => ({ date, ...v })).sort((a, b) => a.date.localeCompare(b.date));
-  }, [nbsData, nbsTimeseriesGranularity]);
-
-  /** Top 5 winners and losers by non-brand session change — used by the snapshot export. */
-  const nbsWinnersLosers = useMemo(() => {
-    if (!nbsData || nbsData.cmpMode === "none") return { winners: [], losers: [] };
-    const ranked = nbsData.rows
-      .map((r) => ({
-        page: r.page,
-        delta: r.modelledNbSessions - (r.modelledNbSessionsCmp ?? 0),
-        pct: (r.modelledNbSessionsCmp ?? 0) > 0
-          ? ((r.modelledNbSessions - (r.modelledNbSessionsCmp ?? 0)) / Math.abs(r.modelledNbSessionsCmp!)) * 100
-          : (r.modelledNbSessions > 0 ? 100 : 0),
-        cur: r.modelledNbSessions,
-        prev: r.modelledNbSessionsCmp ?? 0,
-      }))
-      .filter((r) => r.cur > 0 || r.prev > 0);
-    const winners = [...ranked].sort((a, b) => b.delta - a.delta).slice(0, 5);
-    const losers  = [...ranked].sort((a, b) => a.delta - b.delta).slice(0, 5);
-    return { winners, losers };
-  }, [nbsData]);
-
   /** Sort hook for the landing-page table. */
   const nbsRowsForSort = useMemo(() => nbsData?.rows ?? [], [nbsData]);
-  const nbsSort = useTableSort(nbsRowsForSort, { key: "modelledNbSessions", dir: "desc" });
+  const nbsSort = useTableSort(nbsRowsForSort, { key: "nbReferrers", dir: "desc" });
 
 
 
@@ -7249,24 +6993,16 @@ ${combinedHtml}
               <>
                 <SectionDivider label="NON-BRAND SEO PERFORMANCE" />
                 <section className="space-y-4">
-                  {/* Header + comparison toggle */}
+                  {/* Header */}
                   <div className="flex items-center justify-between gap-4 flex-wrap">
                     <div className="flex items-center gap-3">
                       <div className="bg-purple-50 border border-purple-100 rounded-xl p-2"><TrendingUp size={16} className="text-[#5b4fa8]" /></div>
                       <div>
                         <h2 className="text-sm font-bold text-gray-900">Non-Brand SEO Performance</h2>
-                        <p className="text-xs text-gray-400">Modelled non-brand share of organic sessions and leads at the landing-page level.</p>
+                        <p className="text-xs text-gray-400">For <code className="bg-gray-100 px-1 rounded">/items-we-buy/</code> landing pages — non-brand share of organic sessions that referred to <code className="bg-gray-100 px-1 rounded">/free-selling-pack</code>. Last 7 days vs previous 7 days.</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
-                        {(["prev","yoy","none"] as const).map((m) => (
-                          <button key={m} onClick={() => setNbsCmpMode(m)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${nbsCmpMode === m ? "bg-white text-[#5b4fa8] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
-                            {m === "prev" ? "vs Previous period" : m === "yoy" ? "vs Same period last year" : "No comparison"}
-                          </button>
-                        ))}
-                      </div>
                       <button
                         onClick={() => void fetchNbsData()}
                         disabled={nbsLoading}
@@ -7282,7 +7018,7 @@ ${combinedHtml}
                   <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-2 text-xs text-amber-800 flex items-start gap-2">
                     <AlertTriangle size={12} className="text-amber-600 mt-0.5 shrink-0" />
                     <span>
-                      <strong>Modelled figures.</strong> Non-brand sessions and leads are GA4 measurements weighted by the non-brand click ratio for each landing page from GSC. They are estimates, not direct measurements.
+                      <strong>Modelled figures.</strong> The non-brand and brand referrer counts are estimates: each landing page's FSP referrer count multiplied by its impression-weighted non-brand query ratio from GSC. Tune the brand classifier below for accuracy.
                     </span>
                   </div>
 
@@ -7302,266 +7038,152 @@ ${combinedHtml}
                   {!nbsLoading && nbsData && (() => {
                     const d = nbsData;
                     const periodLabel = `${formatDisplayDate(d.period.start)} – ${formatDisplayDate(d.period.end)}`;
-                    const cmpPeriodLabel = d.cmpPeriod ? `${formatDisplayDate(d.cmpPeriod.start)} – ${formatDisplayDate(d.cmpPeriod.end)}` : null;
-                    const nbConvRate = d.totals.totalSessions > 0 ? (d.totals.nbLeads / d.totals.nbSessions) * 100 : 0;
-                    const nbConvRateCmp = d.totals.totalSessionsCmp && (d.totals.nbSessionsCmp ?? 0) > 0 ? ((d.totals.nbLeadsCmp ?? 0) / (d.totals.nbSessionsCmp ?? 1)) * 100 : null;
-                    const nbClickShare = d.totals.totalClicks > 0 ? (d.totals.nonBrandClicks / d.totals.totalClicks) * 100 : 0;
-                    const pct = (a: number, b: number | null | undefined) => (b && b > 0 ? ((a - b) / b) * 100 : null);
+                    const cmpPeriodLabel = `${formatDisplayDate(d.cmpPeriod.start)} – ${formatDisplayDate(d.cmpPeriod.end)}`;
+                    const pct = (a: number, b: number) => (b > 0 ? ((a - b) / b) * 100 : (a > 0 ? 100 : 0));
                     const Delta = ({ p }: { p: number | null }) => {
-                      if (p == null) return <span className="text-[10px] text-gray-400">—</span>;
+                      if (p == null || !isFinite(p)) return <span className="text-[10px] text-gray-400">—</span>;
                       const up = p >= 0;
                       return <span className={`text-[11px] font-bold ${up ? "text-emerald-600" : "text-red-500"}`}>{up ? "+" : ""}{p.toFixed(1)}%</span>;
                     };
                     return (
                       <>
+                        {/* Period label */}
+                        <div className="text-[11px] text-gray-500 flex items-center gap-4 flex-wrap">
+                          <span><strong>Current:</strong> {periodLabel}</span>
+                          <span className="text-gray-300">vs</span>
+                          <span><strong>Previous:</strong> {cmpPeriodLabel}</span>
+                        </div>
+
                         {/* KPI cards */}
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                           <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-brand sessions</div>
+                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Organic sessions</div>
                             <div className="flex items-end justify-between gap-2">
-                              <span className="text-2xl font-bold text-gray-900 tabular-nums">{d.totals.nbSessions.toLocaleString()}</span>
-                              <Delta p={pct(d.totals.nbSessions, d.totals.nbSessionsCmp)} />
+                              <span className="text-2xl font-bold text-gray-900 tabular-nums">{Math.round(d.totals.orgSessions).toLocaleString()}</span>
+                              <Delta p={pct(d.totals.orgSessions, d.totals.orgSessionsCmp)} />
                             </div>
-                            {d.totals.nbSessionsCmp != null && <div className="text-[10px] text-gray-400 mt-1">{d.totals.nbSessionsCmp.toLocaleString()} previously</div>}
+                            <div className="text-[10px] text-gray-400 mt-1">{Math.round(d.totals.orgSessionsCmp).toLocaleString()} previously</div>
                           </div>
                           <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-brand leads (modelled)</div>
+                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">FSP referrers</div>
                             <div className="flex items-end justify-between gap-2">
-                              <span className="text-2xl font-bold text-emerald-600 tabular-nums">{d.totals.nbLeads.toLocaleString()}</span>
-                              <Delta p={pct(d.totals.nbLeads, d.totals.nbLeadsCmp)} />
+                              <span className="text-2xl font-bold text-sky-700 tabular-nums">{Math.round(d.totals.fspReferrers).toLocaleString()}</span>
+                              <Delta p={pct(d.totals.fspReferrers, d.totals.fspReferrersCmp)} />
                             </div>
-                            {d.totals.nbLeadsCmp != null && <div className="text-[10px] text-gray-400 mt-1">{d.totals.nbLeadsCmp.toLocaleString()} previously</div>}
+                            <div className="text-[10px] text-gray-400 mt-1">{Math.round(d.totals.fspReferrersCmp).toLocaleString()} previously</div>
                           </div>
                           <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-brand conv. rate</div>
+                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-brand referrers</div>
                             <div className="flex items-end justify-between gap-2">
-                              <span className="text-2xl font-bold text-[#5b4fa8] tabular-nums">{nbConvRate.toFixed(2)}%</span>
-                              <Delta p={nbConvRateCmp != null ? nbConvRate - nbConvRateCmp : null} />
+                              <span className="text-2xl font-bold text-emerald-600 tabular-nums">{Math.round(d.totals.nbReferrers).toLocaleString()}</span>
+                              <Delta p={pct(d.totals.nbReferrers, d.totals.nbReferrersCmp)} />
                             </div>
-                            {nbConvRateCmp != null && <div className="text-[10px] text-gray-400 mt-1">{nbConvRateCmp.toFixed(2)}% previously</div>}
+                            <div className="text-[10px] text-gray-400 mt-1">{Math.round(d.totals.nbReferrersCmp).toLocaleString()} previously · site-wide NB ratio {(d.totals.siteWideNbRatio * 100).toFixed(1)}%</div>
                           </div>
                           <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-brand click share</div>
+                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Brand referrers</div>
                             <div className="flex items-end justify-between gap-2">
-                              <span className="text-2xl font-bold text-sky-600 tabular-nums">{nbClickShare.toFixed(1)}%</span>
+                              <span className="text-2xl font-bold text-[#5b4fa8] tabular-nums">{Math.round(d.totals.brandReferrers).toLocaleString()}</span>
+                              <Delta p={pct(d.totals.brandReferrers, d.totals.brandReferrersCmp)} />
                             </div>
-                            <div className="text-[10px] text-gray-400 mt-1">{d.totals.nonBrandClicks.toLocaleString()} of {d.totals.totalClicks.toLocaleString()} GSC clicks</div>
+                            <div className="text-[10px] text-gray-400 mt-1">{Math.round(d.totals.brandReferrersCmp).toLocaleString()} previously</div>
                           </div>
                         </div>
 
-                        {/* Time series chart */}
-                        <ChartCard title="Brand vs Non-Brand GSC clicks over time" tip="Stacked daily clicks split by brand vs non-brand. Brand is roughly stable; the non-brand line is the one SEO work directly affects.">
-                          <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
-                            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
-                              <button onClick={() => setNbsTimeseriesMetric("sessions")} className={`px-2 py-1 rounded-md text-[11px] font-semibold ${nbsTimeseriesMetric === "sessions" ? "bg-white text-[#5b4fa8] shadow-sm" : "text-gray-500"}`}>Clicks</button>
-                              <button disabled className={`px-2 py-1 rounded-md text-[11px] font-semibold text-gray-300 cursor-not-allowed`} title="Sessions and leads time series require per-day GA4 data; coming next">Sessions</button>
-                              <button disabled className={`px-2 py-1 rounded-md text-[11px] font-semibold text-gray-300 cursor-not-allowed`} title="Sessions and leads time series require per-day GA4 data; coming next">Leads</button>
-                            </div>
-                            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
-                              <button onClick={() => setNbsTimeseriesGranularity("daily")} className={`px-2 py-1 rounded-md text-[11px] font-semibold ${nbsTimeseriesGranularity === "daily" ? "bg-white text-[#5b4fa8] shadow-sm" : "text-gray-500"}`}>Daily</button>
-                              <button onClick={() => setNbsTimeseriesGranularity("weekly")} className={`px-2 py-1 rounded-md text-[11px] font-semibold ${nbsTimeseriesGranularity === "weekly" ? "bg-white text-[#5b4fa8] shadow-sm" : "text-gray-500"}`}>Weekly</button>
-                            </div>
-                          </div>
-                          <ResponsiveContainer width="100%" height={260}>
-                            <AreaChart data={nbsDailyChartData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
-                              <defs>
-                                <linearGradient id="nbsBrand" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#7e22ce" stopOpacity={0.4} /><stop offset="100%" stopColor="#7e22ce" stopOpacity={0.05} /></linearGradient>
-                                <linearGradient id="nbsNonBrand" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#059669" stopOpacity={0.4} /><stop offset="100%" stopColor="#059669" stopOpacity={0.05} /></linearGradient>
-                              </defs>
-                              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
-                              <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
-                              <Tooltip {...chartTooltipStyle} />
-                              <Legend wrapperStyle={{ fontSize: 11 }} />
-                              <Area type="monotone" dataKey="nonBrand" name="Non-brand clicks" stackId="1" stroke="#059669" fill="url(#nbsNonBrand)" strokeWidth={2} />
-                              <Area type="monotone" dataKey="brand" name="Brand clicks" stackId="1" stroke="#7e22ce" fill="url(#nbsBrand)" strokeWidth={2} />
-                            </AreaChart>
-                          </ResponsiveContainer>
-                        </ChartCard>
-
-                        {/* Category roll-up */}
-                        {nbsCategoryTotals.length > 0 && (
-                          <ChartCard title="Category roll-up" tip="Non-brand performance grouped by URL pattern. Edit the rules in the Transparency panel below.">
-                            <table className="w-full text-xs">
-                              <thead>
-                                <tr className="text-left text-gray-400 border-b border-gray-100">
-                                  <th className="pb-2 pr-2 font-medium">Category</th>
-                                  <th className="pb-2 pr-2 font-medium text-right">NB Sessions</th>
-                                  {d.cmpPeriod && <th className="pb-2 pr-2 font-medium text-right">Prev</th>}
-                                  {d.cmpPeriod && <th className="pb-2 pr-2 font-medium text-right">Δ %</th>}
-                                  <th className="pb-2 pr-2 font-medium text-right">NB Leads</th>
-                                  <th className="pb-2 font-medium text-right">NB Clicks</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {nbsCategoryTotals.map((c) => (
-                                  <tr key={c.category} className="border-b border-gray-50 hover:bg-gray-50">
-                                    <td className="py-2 pr-2 font-semibold text-gray-700">{c.category}</td>
-                                    <td className="py-2 pr-2 text-right tabular-nums text-gray-900 font-semibold">{c.nbSessions.toLocaleString()}</td>
-                                    {d.cmpPeriod && <td className="py-2 pr-2 text-right tabular-nums text-gray-500">{c.nbSessionsCmp.toLocaleString()}</td>}
-                                    {d.cmpPeriod && <td className={`py-2 pr-2 text-right tabular-nums font-bold ${c.sessionsPct > 0 ? "text-emerald-600" : c.sessionsPct < 0 ? "text-red-500" : "text-gray-400"}`}>{c.sessionsPct >= 0 ? "+" : ""}{c.sessionsPct.toFixed(1)}%</td>}
-                                    <td className="py-2 pr-2 text-right tabular-nums text-emerald-700 font-semibold">{c.nbLeads.toLocaleString()}</td>
-                                    <td className="py-2 text-right tabular-nums text-sky-600">{c.nbClicks.toLocaleString()}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </ChartCard>
-                        )}
-
-                        {/* Landing page table */}
+                        {/* Landing pages table */}
                         <ChartCard
-                          title="Landing pages — non-brand performance"
-                          tip="Each row is a landing page on which organic sessions started. Non-brand sessions and leads are modelled by multiplying the GA4 measurement by the non-brand click ratio from GSC. Click a row to see the top non-brand queries that page ranks for."
+                          title="/items-we-buy/ landing pages"
+                          tip="One row per landing page under /items-we-buy/. The NB/B ratio is impression-weighted from GSC: brand impressions vs non-brand impressions for queries that page ranked on. Non-brand and Brand FSP referrers split the GA4 FSP-referrer count by that ratio."
                         >
-                          <div className="overflow-y-auto rounded-xl border border-gray-50" style={{ maxHeight: 540 }}>
+                          <div className="overflow-x-auto overflow-y-auto rounded-xl border border-gray-50" style={{ maxHeight: 540 }}>
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 bg-white z-10">
                                 <tr className="text-left text-gray-400 border-b border-gray-100">
-                                  <th className="pb-2 pr-2 font-medium w-6" />
                                   <SortableTh label="Landing page" sortKey="page" sort={nbsSort.sort} onToggle={nbsSort.toggle} className="pb-2 pr-2 font-medium" />
-                                  <SortableTh label="Category" sortKey="category" sort={nbsSort.sort} onToggle={nbsSort.toggle} className="pb-2 pr-2 font-medium" />
-                                  <SortableTh label="NB Sessions" sortKey="modelledNbSessions" sort={nbsSort.sort} onToggle={nbsSort.toggle} className="pb-2 pr-2 font-medium text-right" />
-                                  {d.cmpPeriod && <SortableTh label="Δ Sessions" sortKey="modelledNbSessionsCmp" sort={nbsSort.sort} onToggle={nbsSort.toggle} className="pb-2 pr-2 font-medium text-right" />}
-                                  <SortableTh label="NB Leads" sortKey="modelledNbLeads" sort={nbsSort.sort} onToggle={nbsSort.toggle} className="pb-2 pr-2 font-medium text-right" />
-                                  {d.cmpPeriod && <SortableTh label="Δ Leads" sortKey="modelledNbLeadsCmp" sort={nbsSort.sort} onToggle={nbsSort.toggle} className="pb-2 pr-2 font-medium text-right" />}
-                                  <SortableTh label="NB Ratio" sortKey="nonBrandRatio" sort={nbsSort.sort} onToggle={nbsSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="NB / B ratio" sortKey="nonBrandRatio" sort={nbsSort.sort} onToggle={nbsSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="Org. sessions" sortKey="orgSessions" sort={nbsSort.sort} onToggle={nbsSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="FSP referrers" sortKey="fspReferrers" sort={nbsSort.sort} onToggle={nbsSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="NB referrers" sortKey="nbReferrers" sort={nbsSort.sort} onToggle={nbsSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="Brand referrers" sortKey="brandReferrers" sort={nbsSort.sort} onToggle={nbsSort.toggle} className="pb-2 pr-2 font-medium text-right" />
                                   <th className="pb-2 font-medium text-right">Confidence</th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {nbsSort.sorted.slice(0, 200).map((r, i) => {
-                                  const isOpen = nbsExpandedRow === r.page;
-                                  const sessDelta = r.modelledNbSessionsCmp != null ? r.modelledNbSessions - r.modelledNbSessionsCmp : null;
-                                  const sessPct = r.modelledNbSessionsCmp != null && r.modelledNbSessionsCmp > 0 ? ((r.modelledNbSessions - r.modelledNbSessionsCmp) / r.modelledNbSessionsCmp) * 100 : null;
-                                  const leadDelta = r.modelledNbLeadsCmp != null ? r.modelledNbLeads - r.modelledNbLeadsCmp : null;
-                                  const leadPct = r.modelledNbLeadsCmp != null && r.modelledNbLeadsCmp > 0 ? ((r.modelledNbLeads - r.modelledNbLeadsCmp) / r.modelledNbLeadsCmp) * 100 : null;
+                                {nbsSort.sorted.slice(0, 300).map((r, i) => {
+                                  // Deltas vs previous period for inline display
+                                  const orgPct = r.orgSessionsCmp > 0 ? ((r.orgSessions - r.orgSessionsCmp) / r.orgSessionsCmp) * 100 : null;
+                                  const fspPct = r.fspReferrersCmp > 0 ? ((r.fspReferrers - r.fspReferrersCmp) / r.fspReferrersCmp) * 100 : null;
+                                  const nbPct  = r.nbReferrersCmp > 0 ? ((r.nbReferrers - r.nbReferrersCmp) / r.nbReferrersCmp) * 100 : null;
+                                  const bPct   = r.brandReferrersCmp > 0 ? ((r.brandReferrers - r.brandReferrersCmp) / r.brandReferrersCmp) * 100 : null;
                                   return (
-                                    <Fragment key={i}>
-                                      <tr className="border-b border-gray-50 cursor-pointer hover:bg-purple-50/30 transition-colors"
-                                          onClick={() => setNbsExpandedRow(isOpen ? null : r.page)}>
-                                        <td className="py-2 pr-2 text-gray-400">{isOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}</td>
-                                        <td className="py-2 pr-2 max-w-[300px] truncate" title={r.page}><UrlLink url={r.page} className="text-gray-700" /></td>
-                                        <td className="py-2 pr-2 text-gray-500 text-[10px]">{r.category}</td>
-                                        <td className="py-2 pr-2 text-right tabular-nums text-gray-900 font-semibold">{Math.round(r.modelledNbSessions).toLocaleString()}</td>
-                                        {d.cmpPeriod && (
-                                          <td className="py-2 pr-2 text-right tabular-nums">
-                                            {sessDelta != null ? (
-                                              <span className={`font-bold ${sessDelta > 0 ? "text-emerald-600" : sessDelta < 0 ? "text-red-500" : "text-gray-400"}`}>
-                                                {sessDelta > 0 ? "+" : ""}{Math.round(sessDelta).toLocaleString()}
-                                                <span className="ml-1 text-[10px] opacity-70">{sessPct != null ? `(${sessPct >= 0 ? "+" : ""}${sessPct.toFixed(0)}%)` : ""}</span>
-                                              </span>
-                                            ) : <span className="text-gray-300">—</span>}
-                                          </td>
-                                        )}
-                                        <td className="py-2 pr-2 text-right tabular-nums text-emerald-700 font-semibold">{Math.round(r.modelledNbLeads).toLocaleString()}</td>
-                                        {d.cmpPeriod && (
-                                          <td className="py-2 pr-2 text-right tabular-nums">
-                                            {leadDelta != null ? (
-                                              <span className={`font-bold ${leadDelta > 0 ? "text-emerald-600" : leadDelta < 0 ? "text-red-500" : "text-gray-400"}`}>
-                                                {leadDelta > 0 ? "+" : ""}{Math.round(leadDelta).toLocaleString()}
-                                                <span className="ml-1 text-[10px] opacity-70">{leadPct != null ? `(${leadPct >= 0 ? "+" : ""}${leadPct.toFixed(0)}%)` : ""}</span>
-                                              </span>
-                                            ) : <span className="text-gray-300">—</span>}
-                                          </td>
-                                        )}
-                                        <td className="py-2 pr-2 text-right tabular-nums text-gray-600">{(r.nonBrandRatio * 100).toFixed(0)}%</td>
-                                        <td className="py-2 text-right">
-                                          <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
-                                            r.confidence === "high" ? "bg-emerald-50 text-emerald-700"
-                                            : r.confidence === "medium" ? "bg-amber-50 text-amber-700"
-                                            : "bg-red-50 text-red-600"
-                                          }`}>
-                                            {r.confidence}{r.usedSiteWideRatio ? "*" : ""}
-                                          </span>
-                                        </td>
-                                      </tr>
-                                      {isOpen && (
-                                        <tr className="bg-purple-50/20">
-                                          <td colSpan={d.cmpPeriod ? 9 : 7} className="px-4 py-3">
-                                            <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-2">Top non-brand queries for this page</div>
-                                            {(() => {
-                                              // Find this page's non-brand queries from the existing gscPageQueryAll bulk data.
-                                              const qs = gscPageQueryAll
-                                                .filter((x) => x.page === r.page && nbSeoClassify(x.query, nbsBrandTerms) === "nonBrand")
-                                                .sort((a, b) => b.clicks - a.clicks)
-                                                .slice(0, 10);
-                                              if (qs.length === 0) return <div className="text-xs text-gray-400">No non-brand queries with clicks in this period.</div>;
-                                              return (
-                                                <table className="w-full text-xs">
-                                                  <thead><tr className="text-left text-gray-400 border-b border-gray-100"><th className="pb-1 pr-2 font-medium">Query</th><th className="pb-1 pr-2 font-medium text-right">Clicks</th><th className="pb-1 font-medium text-right">Impressions</th></tr></thead>
-                                                  <tbody>
-                                                    {qs.map((q, qi) => (
-                                                      <tr key={qi} className="border-b border-purple-100/40 last:border-0">
-                                                        <td className="py-1.5 pr-2 text-gray-700">{q.query}</td>
-                                                        <td className="py-1.5 pr-2 text-right tabular-nums text-gray-900 font-semibold">{q.clicks.toLocaleString()}</td>
-                                                        <td className="py-1.5 text-right tabular-nums text-gray-500">{q.impressions.toLocaleString()}</td>
-                                                      </tr>
-                                                    ))}
-                                                  </tbody>
-                                                </table>
-                                              );
-                                            })()}
-                                          </td>
-                                        </tr>
-                                      )}
-                                    </Fragment>
+                                    <tr key={i} className="border-b border-gray-50 hover:bg-purple-50/30">
+                                      <td className="py-2 pr-2 max-w-[280px] truncate" title={r.page}><UrlLink url={r.page} className="text-gray-700" /></td>
+                                      <td className="py-2 pr-2 text-right tabular-nums">
+                                        <span className="text-emerald-700 font-semibold">{(r.nonBrandRatio * 100).toFixed(1)}%</span>
+                                        <span className="text-gray-300"> / </span>
+                                        <span className="text-[#5b4fa8] font-semibold">{((1 - r.nonBrandRatio) * 100).toFixed(1)}%</span>
+                                        <div className="text-[10px] text-gray-400">{r.nonBrandImpressions.toLocaleString()} / {r.brandImpressions.toLocaleString()} impr.</div>
+                                      </td>
+                                      <td className="py-2 pr-2 text-right tabular-nums text-gray-900 font-semibold">
+                                        {r.orgSessions.toLocaleString()}
+                                        {orgPct != null && <div className={`text-[10px] font-bold ${orgPct >= 0 ? "text-emerald-600" : "text-red-500"}`}>{orgPct >= 0 ? "+" : ""}{orgPct.toFixed(0)}%</div>}
+                                      </td>
+                                      <td className="py-2 pr-2 text-right tabular-nums text-sky-700 font-semibold">
+                                        {r.fspReferrers.toLocaleString()}
+                                        {fspPct != null && <div className={`text-[10px] font-bold ${fspPct >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fspPct >= 0 ? "+" : ""}{fspPct.toFixed(0)}%</div>}
+                                      </td>
+                                      <td className="py-2 pr-2 text-right tabular-nums text-emerald-700 font-semibold">
+                                        {Math.round(r.nbReferrers).toLocaleString()}
+                                        {nbPct != null && <div className={`text-[10px] font-bold ${nbPct >= 0 ? "text-emerald-600" : "text-red-500"}`}>{nbPct >= 0 ? "+" : ""}{nbPct.toFixed(0)}%</div>}
+                                      </td>
+                                      <td className="py-2 pr-2 text-right tabular-nums text-[#5b4fa8] font-semibold">
+                                        {Math.round(r.brandReferrers).toLocaleString()}
+                                        {bPct != null && <div className={`text-[10px] font-bold ${bPct >= 0 ? "text-emerald-600" : "text-red-500"}`}>{bPct >= 0 ? "+" : ""}{bPct.toFixed(0)}%</div>}
+                                      </td>
+                                      <td className="py-2 text-right">
+                                        <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+                                          r.confidence === "high" ? "bg-emerald-50 text-emerald-700"
+                                          : r.confidence === "medium" ? "bg-amber-50 text-amber-700"
+                                          : "bg-red-50 text-red-600"
+                                        }`}>
+                                          {r.confidence}{r.usedSiteWideRatio ? "*" : ""}
+                                        </span>
+                                      </td>
+                                    </tr>
                                   );
                                 })}
                                 {nbsSort.sorted.length === 0 && (
-                                  <tr><td colSpan={d.cmpPeriod ? 9 : 7} className="py-6 text-center text-gray-400">No landing pages found.</td></tr>
+                                  <tr><td colSpan={7} className="py-6 text-center text-gray-400">No /items-we-buy/ landing pages with data in this window.</td></tr>
                                 )}
                               </tbody>
                             </table>
                           </div>
-                          <div className="text-[10px] text-gray-400 mt-2">* Page had no GSC click data — site-wide non-brand ratio applied as fallback.</div>
+                          <div className="text-[10px] text-gray-400 mt-2">* Page had no GSC impression data — site-wide non-brand ratio applied as fallback.</div>
                         </ChartCard>
 
-                        {/* Weekly snapshot */}
-                        {d.cmpMode !== "none" && (nbsWinnersLosers.winners.length > 0 || nbsWinnersLosers.losers.length > 0) && (
-                          <ChartCard title="Weekly snapshot — copy & paste" tip="One-paragraph summary for the Monday marketing meeting. Editable commentary, then copy to clipboard.">
-                            <NbsSnapshot
-                              totals={d.totals}
-                              periodLabel={periodLabel}
-                              cmpPeriodLabel={cmpPeriodLabel}
-                              cmpMode={d.cmpMode}
-                              winners={nbsWinnersLosers.winners}
-                              losers={nbsWinnersLosers.losers}
-                              categoryTotals={nbsCategoryTotals}
-                            />
-                          </ChartCard>
-                        )}
-
-                        {/* Transparency panel */}
+                        {/* Transparency + classifier panel */}
                         <ChartCard
                           title={
                             <button onClick={() => setNbsShowTransparency((s) => !s)} className="flex items-center gap-2 text-left w-full">
-                              <span>{nbsShowTransparency ? "▼" : "▶"} Transparency & classifier</span>
-                              <span className="text-[10px] text-gray-400 font-normal">data quality, brand terms, category rules</span>
+                              <span>{nbsShowTransparency ? "▼" : "▶"} Brand classifier & data quality</span>
+                              <span className="text-[10px] text-gray-400 font-normal">edit brand terms, see what's classified how</span>
                             </button>
                           }
-                          tip="Inspect data quality, edit the brand-term list, and tune category URL patterns. Changes are stored locally."
+                          tip="Edit the brand-term list, test how queries get classified, and check data quality. The classifier uses case-insensitive substring matching; for terms ≤3 chars it uses a word-boundary regex to avoid false positives like 'vcc' matching 'vccountry'."
                         >
                           {nbsShowTransparency && (
                             <div className="space-y-4">
                               {/* Quality stats */}
-                              <div className="grid grid-cols-1 md:grid-cols-4 gap-2 text-xs">
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
                                 <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
-                                  <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Classified clicks</div>
-                                  <div className="text-lg font-bold text-gray-900 tabular-nums">{(d.totals.brandClicks + d.totals.nonBrandClicks).toLocaleString()}</div>
-                                  <div className="text-[10px] text-gray-400">of {d.totals.totalClicks.toLocaleString()} total</div>
+                                  <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Brand impressions</div>
+                                  <div className="text-lg font-bold text-[#5b4fa8] tabular-nums">{d.totals.brandImpressions.toLocaleString()}</div>
+                                  <div className="text-[10px] text-gray-400">across /items-we-buy/ pages this period</div>
                                 </div>
                                 <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
-                                  <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Unknown (hidden by GSC)</div>
-                                  <div className={`text-lg font-bold tabular-nums ${d.totals.unknownClicks / Math.max(1, d.totals.totalClicks) > 0.4 ? "text-red-500" : "text-gray-900"}`}>
-                                    {d.totals.unknownClicks.toLocaleString()}
-                                  </div>
-                                  <div className="text-[10px] text-gray-400">{((d.totals.unknownClicks / Math.max(1, d.totals.totalClicks)) * 100).toFixed(1)}% of total</div>
-                                </div>
-                                <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
-                                  <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Site-wide NB ratio</div>
-                                  <div className="text-lg font-bold text-[#5b4fa8] tabular-nums">{(d.totals.siteWideNbRatio * 100).toFixed(1)}%</div>
-                                  <div className="text-[10px] text-gray-400">applied as fallback to pages without GSC data</div>
+                                  <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-brand impressions</div>
+                                  <div className="text-lg font-bold text-emerald-600 tabular-nums">{d.totals.nonBrandImpressions.toLocaleString()}</div>
+                                  <div className="text-[10px] text-gray-400">{(d.totals.siteWideNbRatio * 100).toFixed(1)}% of impressions</div>
                                 </div>
                                 <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
                                   <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Last sync</div>
@@ -7570,7 +7192,7 @@ ${combinedHtml}
                                 </div>
                               </div>
 
-                              {/* Brand classifier editor */}
+                              {/* Brand-term editor */}
                               <div className="bg-white border border-gray-100 rounded-xl p-4">
                                 <div className="text-xs font-bold text-gray-700 mb-2">Brand-term list</div>
                                 <div className="flex flex-wrap gap-1.5 mb-3">
@@ -7626,18 +7248,17 @@ ${combinedHtml}
                                     </span>
                                   )}
                                 </div>
-                                {/* History */}
                                 {nbsTermsHistory.length > 0 && (
                                   <div className="mt-3 text-[10px] text-gray-400">
                                     Last {nbsTermsHistory.length} change{nbsTermsHistory.length === 1 ? "" : "s"}: {nbsTermsHistory.map((h) => new Date(h.ts).toLocaleString()).join(" · ")}
                                   </div>
                                 )}
                                 <div className="mt-2 text-[10px] text-amber-700">
-                                  ⚠ Changing brand terms re-classifies the next fetch only. Cached numbers above are based on the term list at the time of fetch — click Refresh to recompute.
+                                  ⚠ Changing brand terms re-classifies the next fetch only. Click Refresh after editing.
                                 </div>
                               </div>
 
-                              {/* Classifier preview */}
+                              {/* Classifier preview — Top 50 queries */}
                               <div className="bg-white border border-gray-100 rounded-xl p-4">
                                 <div className="text-xs font-bold text-gray-700 mb-2">Top 50 queries — current classification</div>
                                 <div className="text-[10px] text-gray-400 mb-2">Brand: {nbsClassifierPreviewSummary.brand} · Non-brand: {nbsClassifierPreviewSummary.nonBrand}</div>
@@ -7659,48 +7280,6 @@ ${combinedHtml}
                                     </tbody>
                                   </table>
                                 </div>
-                              </div>
-
-                              {/* Category rules editor */}
-                              <div className="bg-white border border-gray-100 rounded-xl p-4">
-                                <div className="text-xs font-bold text-gray-700 mb-2">Category rules — URL pattern → label</div>
-                                <p className="text-[10px] text-gray-400 mb-3">When a landing page's path contains the pattern, it's tagged with that label in the roll-up above. Patterns are matched as case-insensitive substrings of the URL path.</p>
-                                <div className="space-y-1.5">
-                                  {nbsCategoryRules.map((rule, i) => (
-                                    <div key={i} className="flex items-center gap-2">
-                                      <input
-                                        type="text"
-                                        value={rule.match}
-                                        onChange={(e) => {
-                                          const next = [...nbsCategoryRules];
-                                          next[i] = { ...next[i], match: e.target.value };
-                                          setNbsCategoryRules(next);
-                                        }}
-                                        className="flex-1 px-2 py-1 rounded border border-gray-200 text-[11px] focus:outline-none focus:border-[#5b4fa8]"
-                                        placeholder="URL pattern (e.g. /sell-watches)"
-                                      />
-                                      <span className="text-gray-300">→</span>
-                                      <input
-                                        type="text"
-                                        value={rule.label}
-                                        onChange={(e) => {
-                                          const next = [...nbsCategoryRules];
-                                          next[i] = { ...next[i], label: e.target.value };
-                                          setNbsCategoryRules(next);
-                                        }}
-                                        className="w-48 px-2 py-1 rounded border border-gray-200 text-[11px] focus:outline-none focus:border-[#5b4fa8]"
-                                        placeholder="Category label"
-                                      />
-                                      <button onClick={() => setNbsCategoryRules(nbsCategoryRules.filter((_, j) => j !== i))} className="text-gray-300 hover:text-red-500"><X size={12} /></button>
-                                    </div>
-                                  ))}
-                                </div>
-                                <button
-                                  onClick={() => setNbsCategoryRules([...nbsCategoryRules, { match: "", label: "" }])}
-                                  className="mt-2 text-xs text-[#5b4fa8] hover:text-[#4a3f8e] font-semibold"
-                                >
-                                  + Add rule
-                                </button>
                               </div>
                             </div>
                           )}
