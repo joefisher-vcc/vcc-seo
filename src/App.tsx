@@ -205,7 +205,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "conversions" | "seoIssues" | "performance";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -3180,6 +3180,66 @@ export default function App() {
   const [nbsLoading, setNbsLoading] = useState(false);
   const [nbsExpandedRow, setNbsExpandedRow] = useState<string | null>(null);
   const [nbsShowTransparency, setNbsShowTransparency] = useState(false);
+
+  // ── Non-Brand Sign Ups section state ───────────────────────────────────────
+  /** Same brand/non-brand modelling as NB SEO, but click-weighted, whole-site, and
+   *  using GA4 generate_lead key-event sessions involving /free-selling-pack. */
+  interface NbsuLandingPageRow {
+    page: string;             // landing page URL
+    // GSC current period (per landing page, queries aggregated)
+    brandClicks: number;
+    nonBrandClicks: number;
+    nonBrandRatio: number;    // click-weighted: nbClicks / (bClicks + nbClicks)
+    // GA4 current period
+    orgSessions: number;      // total Organic Search sessions where this was the entry page
+    fspLeads: number;         // sessions that landed here, visited /free-selling-pack and fired generate_lead
+    // Modelled outputs
+    nbLeads: number;          // fspLeads × nonBrandRatio
+    brandLeads: number;       // fspLeads × (1 - nonBrandRatio)
+    // Comparison period
+    orgSessionsCmp: number;
+    fspLeadsCmp: number;
+    nbLeadsCmp: number;
+    brandLeadsCmp: number;
+    nonBrandRatioCmp: number;
+    // Flags
+    usedSiteWideRatio: boolean;  // true when this page had no GSC clicks → fell back to site-wide ratio
+    confidence: "high" | "medium" | "low";
+  }
+  interface NbsuDataType {
+    rows: NbsuLandingPageRow[];
+    totals: {
+      orgSessions: number;
+      fspLeads: number;
+      nbLeads: number;
+      brandLeads: number;
+      orgSessionsCmp: number;
+      fspLeadsCmp: number;
+      nbLeadsCmp: number;
+      brandLeadsCmp: number;
+      brandClicks: number;
+      nonBrandClicks: number;
+      siteWideNbRatio: number;     // click-weighted, whole site
+    };
+    period: { start: string; end: string };
+    cmpPeriod: { start: string; end: string };
+    fetchedAt: number;
+  }
+  /** Lightweight date filter for the NB Sign Ups section. Default = last 7 days vs previous 7. */
+  interface NbsuDateFilter {
+    dateRange: "7" | "28" | "90" | "custom";
+    customStart?: string;
+    customEnd?: string;
+    customCompareStart?: string;
+    customCompareEnd?: string;
+    comparison: "prev" | "prevYear" | "none";
+  }
+  const NBSU_DEFAULT_FILTER: NbsuDateFilter = { dateRange: "7", comparison: "prev" };
+  const [nbsuFilters, setNbsuFilters] = useState<NbsuDateFilter>(NBSU_DEFAULT_FILTER);
+  const [nbsuFetchFilters, setNbsuFetchFilters] = useState<NbsuDateFilter>(NBSU_DEFAULT_FILTER);
+  const [nbsuData, setNbsuData] = useState<NbsuDataType | null>(null);
+  const [nbsuLoading, setNbsuLoading] = useState(false);
+  const [nbsuShowTransparency, setNbsuShowTransparency] = useState(false);
   const [queryCopyResults, setQueryCopyResults] = useState<Map<string, { text: string; queryHits: Map<string, boolean> }>>(new Map());
   const [queryCopyLoading, setQueryCopyLoading] = useState<Set<string>>(new Set());
   const [queryCopyPage, setQueryCopyPage] = useState<string>(""); // URL typed/selected by user
@@ -4742,6 +4802,274 @@ export default function App() {
   }, [selectedGSC, selectedGA4, accessToken, nbsBrandTerms]);
 
 
+  // ── Non-Brand Sign Ups fetch ───────────────────────────────────────────────
+  // Per-landing-page non-brand calculation for the whole site:
+  //   1. Configurable window (default last 7 days vs previous 7).
+  //   2. GSC [page, query] data: for each landing page, CLICK-WEIGHTED non-brand ratio.
+  //   3. GA4: total Organic Search sessions per landing page.
+  //   4. GA4: sessions whose journey included /free-selling-pack AND fired the
+  //      generate_lead key event — grouped by the session's landing page.
+  //      Implemented via dimension=landingPagePlusQueryString + metric=keyEvents,
+  //      with `eventName=generate_lead` filter. Because generate_lead fires on the
+  //      FSP form, every counted session by definition involved /free-selling-pack.
+  //   5. Apply per-page NB ratio to the FSP-lead count to estimate non-brand vs brand.
+  const fetchNbsuData = useCallback(async () => {
+    if (!selectedGSC || !accessToken || !selectedGA4) return;
+    setNbsuLoading(true);
+    setNbsuData(null);
+    try {
+      const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+      const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
+      const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
+
+      // ── Resolve the date windows from nbsuFetchFilters ──────────────────────
+      const today = toISODate(new Date());
+      // GSC has a ~3-day delay; clamp window end accordingly for fair comparison.
+      const gscEndCap = addDaysISO(today, -3);
+      const resolveWindow = (): { start: string; end: string; cmpStart: string; cmpEnd: string } => {
+        const f = nbsuFetchFilters;
+        if (f.dateRange === "custom" && f.customStart && f.customEnd) {
+          const start = f.customStart;
+          const end = f.customEnd;
+          let cmpStart: string, cmpEnd: string;
+          if (f.comparison === "none") {
+            cmpStart = ""; cmpEnd = "";
+          } else if (f.comparison === "prevYear") {
+            cmpStart = addDaysISO(start, -365);
+            cmpEnd = addDaysISO(end, -365);
+          } else if (f.customCompareStart && f.customCompareEnd) {
+            cmpStart = f.customCompareStart; cmpEnd = f.customCompareEnd;
+          } else {
+            const dStart = new Date(start), dEnd = new Date(end);
+            const len = Math.round((dEnd.getTime() - dStart.getTime()) / 86400000) + 1;
+            cmpEnd = addDaysISO(start, -1);
+            cmpStart = addDaysISO(cmpEnd, -(len - 1));
+          }
+          return { start, end, cmpStart, cmpEnd };
+        }
+        // Preset windows always end at gscEndCap so GSC + GA4 align.
+        const n = parseInt(f.dateRange, 10) || 7;
+        const end = gscEndCap;
+        const start = addDaysISO(end, -(n - 1));
+        let cmpStart = "", cmpEnd = "";
+        if (f.comparison === "prev") {
+          cmpEnd = addDaysISO(start, -1);
+          cmpStart = addDaysISO(cmpEnd, -(n - 1));
+        } else if (f.comparison === "prevYear") {
+          cmpStart = addDaysISO(start, -365);
+          cmpEnd = addDaysISO(end, -365);
+        }
+        return { start, end, cmpStart, cmpEnd };
+      };
+      const { start: startDate, end: endDate, cmpStart: cmpStartDate, cmpEnd: cmpEndDate } = resolveWindow();
+      const hasCmp = !!cmpStartDate && !!cmpEndDate;
+
+      const classify = (q: string) => nbSeoClassify(q, nbsBrandTerms);
+      const normPath = (url: string): string => {
+        try { return new URL(url).pathname.replace(/\/$/, "") || "/"; }
+        catch { return url.replace(/^https?:\/\/[^/]+/, "").replace(/\/$/, "") || "/"; }
+      };
+
+      // ── GSC: [page, query] for current + comparison windows ─────────────────
+      type GscRow = { keys: string[]; clicks: number; impressions: number };
+      const gscFetch = async (s: string, e: string): Promise<GscRow[]> => {
+        const body = JSON.stringify({ startDate: s, endDate: e, dimensions: ["page", "query"], rowLimit: 25000 });
+        const res = await fetch(gscBase, { method: "POST", headers, body }).then((r) => r.json());
+        return (res?.rows ?? []) as GscRow[];
+      };
+
+      // ── GA4: total Organic Search sessions per landing page ────────────────
+      const ga4SessionsByLandingPage = (s: string, e: string) => JSON.stringify({
+        dateRanges: [{ startDate: s, endDate: e }],
+        dimensions: [{ name: "landingPagePlusQueryString" }],
+        metrics: [{ name: "sessions" }],
+        dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } },
+        limit: 10000,
+      });
+
+      // ── GA4: generate_lead key-event count per landing page (Organic Search) ─
+      //    keyEvents respects the event-name filter, so this is the # of
+      //    generate_lead events fired in sessions starting at each landing page.
+      //    Since generate_lead fires on the FSP form, this captures sessions
+      //    that involved /free-selling-pack and converted.
+      const ga4FspLeadsByLandingPage = (s: string, e: string) => JSON.stringify({
+        dateRanges: [{ startDate: s, endDate: e }],
+        dimensions: [{ name: "landingPagePlusQueryString" }],
+        metrics: [{ name: "keyEvents" }],
+        dimensionFilter: {
+          andGroup: { expressions: [
+            { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
+            { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } },
+          ]},
+        },
+        limit: 10000,
+      });
+
+      type Ga4Resp = { rows?: { dimensionValues: { value: string }[]; metricValues: { value: string }[] }[] };
+      const ga4Fetch = (body: string): Promise<Ga4Resp> =>
+        fetch(ga4Base, { method: "POST", headers, body }).then((r) => r.json() as Promise<Ga4Resp>);
+
+      // Empty-resolver for the no-comparison case keeps the parallel array simple.
+      const emptyGsc: Promise<GscRow[]> = Promise.resolve([]);
+      const emptyGa4: Promise<Ga4Resp> = Promise.resolve({ rows: [] });
+
+      const [pageQueryCur, pageQueryCmp, ga4SessCur, ga4SessCmp, ga4FspCur, ga4FspCmp] = await Promise.all([
+        gscFetch(startDate, endDate),
+        hasCmp ? gscFetch(cmpStartDate, cmpEndDate) : emptyGsc,
+        ga4Fetch(ga4SessionsByLandingPage(startDate, endDate)),
+        hasCmp ? ga4Fetch(ga4SessionsByLandingPage(cmpStartDate, cmpEndDate)) : emptyGa4,
+        ga4Fetch(ga4FspLeadsByLandingPage(startDate, endDate)),
+        hasCmp ? ga4Fetch(ga4FspLeadsByLandingPage(cmpStartDate, cmpEndDate)) : emptyGa4,
+      ]);
+
+      // ── Aggregate GSC CLICKS per landing page, split brand vs non-brand ────
+      // Whole-site (no /items-we-buy/ filter here).
+      type PerPage = { brandClicks: number; nonBrandClicks: number };
+      const agg = (rows: GscRow[]): Map<string, PerPage> => {
+        const m = new Map<string, PerPage>();
+        rows.forEach((r) => {
+          const fullPage = r.keys[0];
+          const path = normPath(fullPage);
+          const query = r.keys[1];
+          const clicks = Math.round(r.clicks);
+          if (clicks === 0) return;
+          let p = m.get(path);
+          if (!p) { p = { brandClicks: 0, nonBrandClicks: 0 }; m.set(path, p); }
+          if (classify(query) === "brand") p.brandClicks += clicks; else p.nonBrandClicks += clicks;
+        });
+        return m;
+      };
+      const perPageCur = agg(pageQueryCur);
+      const perPageCmp = agg(pageQueryCmp);
+
+      // ── Aggregate GA4 sessions per landing page ────────────────────────────
+      const sessMap = (resp: Ga4Resp): Map<string, number> => {
+        const m = new Map<string, number>();
+        (resp.rows ?? []).forEach((r) => {
+          const path = normPath(r.dimensionValues[0]?.value ?? "");
+          const v = parseInt(r.metricValues[0]?.value ?? "0", 10);
+          m.set(path, (m.get(path) ?? 0) + v);
+        });
+        return m;
+      };
+      const sessionsCurMap = sessMap(ga4SessCur);
+      const sessionsCmpMap = sessMap(ga4SessCmp);
+
+      // ── Aggregate generate_lead key-event count per landing page ───────────
+      const leadsMap = (resp: Ga4Resp): Map<string, number> => {
+        const m = new Map<string, number>();
+        (resp.rows ?? []).forEach((r) => {
+          const path = normPath(r.dimensionValues[0]?.value ?? "");
+          const v = parseInt(r.metricValues[0]?.value ?? "0", 10);
+          if (v === 0) return;
+          m.set(path, (m.get(path) ?? 0) + v);
+        });
+        return m;
+      };
+      const fspCurMap = leadsMap(ga4FspCur);
+      const fspCmpMap = leadsMap(ga4FspCmp);
+
+      // ── Site-wide click-weighted NB ratio across the whole site ────────────
+      let totalBrandClicks = 0, totalNonBrandClicks = 0;
+      perPageCur.forEach((v) => { totalBrandClicks += v.brandClicks; totalNonBrandClicks += v.nonBrandClicks; });
+      const siteWideNbRatio = (totalBrandClicks + totalNonBrandClicks) > 0
+        ? totalNonBrandClicks / (totalBrandClicks + totalNonBrandClicks) : 0;
+
+      // ── Build per-page rows ────────────────────────────────────────────────
+      const allPaths = new Set<string>([
+        ...perPageCur.keys(),
+        ...sessionsCurMap.keys(),
+        ...fspCurMap.keys(),
+      ]);
+      const rows: NbsuLandingPageRow[] = [];
+      let totOrgSess = 0, totFsp = 0, totNb = 0, totBrand = 0;
+      let totOrgSessCmp = 0, totFspCmp = 0, totNbCmp = 0, totBrandCmp = 0;
+
+      allPaths.forEach((path) => {
+        const cur = perPageCur.get(path);
+        const cmp = perPageCmp.get(path);
+
+        const brandClicks = cur?.brandClicks ?? 0;
+        const nonBrandClicks = cur?.nonBrandClicks ?? 0;
+        const totalClicks = brandClicks + nonBrandClicks;
+        let nonBrandRatio = 0;
+        let usedSiteWideRatio = false;
+        if (totalClicks > 0) {
+          nonBrandRatio = nonBrandClicks / totalClicks;
+        } else {
+          nonBrandRatio = siteWideNbRatio;
+          usedSiteWideRatio = true;
+        }
+        const cmpTotal = (cmp?.brandClicks ?? 0) + (cmp?.nonBrandClicks ?? 0);
+        const nonBrandRatioCmp = cmpTotal > 0 ? (cmp!.nonBrandClicks / cmpTotal) : nonBrandRatio;
+
+        const orgSessions = sessionsCurMap.get(path) ?? 0;
+        const orgSessionsCmp = sessionsCmpMap.get(path) ?? 0;
+        const fspLeads = fspCurMap.get(path) ?? 0;
+        const fspLeadsCmp = fspCmpMap.get(path) ?? 0;
+
+        // Skip pages with absolutely nothing relevant to surface.
+        if (orgSessions === 0 && fspLeads === 0 && totalClicks === 0) return;
+
+        const nbLeads = fspLeads * nonBrandRatio;
+        const brandLeads = fspLeads * (1 - nonBrandRatio);
+        const nbLeadsCmp = fspLeadsCmp * nonBrandRatioCmp;
+        const brandLeadsCmp = fspLeadsCmp * (1 - nonBrandRatioCmp);
+
+        // Confidence based on click volume — high if ≥50 clicks, medium ≥10, else low.
+        let confidence: "high" | "medium" | "low" = "high";
+        if (usedSiteWideRatio || totalClicks < 10) confidence = "low";
+        else if (totalClicks < 50) confidence = "medium";
+
+        totOrgSess += orgSessions; totFsp += fspLeads; totNb += nbLeads; totBrand += brandLeads;
+        totOrgSessCmp += orgSessionsCmp; totFspCmp += fspLeadsCmp; totNbCmp += nbLeadsCmp; totBrandCmp += brandLeadsCmp;
+
+        rows.push({
+          page: path,
+          brandClicks,
+          nonBrandClicks,
+          nonBrandRatio,
+          orgSessions,
+          fspLeads,
+          nbLeads,
+          brandLeads,
+          orgSessionsCmp,
+          fspLeadsCmp,
+          nbLeadsCmp,
+          brandLeadsCmp,
+          nonBrandRatioCmp,
+          usedSiteWideRatio,
+          confidence,
+        });
+      });
+
+      // Sort by non-brand leads desc — the headline metric.
+      rows.sort((a, b) => b.nbLeads - a.nbLeads);
+
+      setNbsuData({
+        rows,
+        totals: {
+          orgSessions: totOrgSess,
+          fspLeads: totFsp,
+          nbLeads: totNb,
+          brandLeads: totBrand,
+          orgSessionsCmp: totOrgSessCmp,
+          fspLeadsCmp: totFspCmp,
+          nbLeadsCmp: totNbCmp,
+          brandLeadsCmp: totBrandCmp,
+          brandClicks: totalBrandClicks,
+          nonBrandClicks: totalNonBrandClicks,
+          siteWideNbRatio,
+        },
+        period: { start: startDate, end: endDate },
+        cmpPeriod: { start: cmpStartDate, end: cmpEndDate },
+        fetchedAt: Date.now(),
+      });
+    } catch (e) { console.error("fetchNbsuData", e); }
+    setNbsuLoading(false);
+  }, [selectedGSC, selectedGA4, accessToken, nbsBrandTerms, nbsuFetchFilters]);
+
+
   const fetchSeoIssues = useCallback(async () => {
     if (!selectedGA4 || !accessToken) return;
     setSeoIssuesLoading(true);
@@ -4812,6 +5140,15 @@ export default function App() {
   useEffect(() => {
     if (activeView === "nbSeo" && selectedGSC && accessToken) void fetchNbsData();
   }, [activeView, selectedGSC, accessToken, fetchNbsData]);
+
+  // Debounce nbsuFilters changes into nbsuFetchFilters (which is the actual fetch trigger).
+  useEffect(() => {
+    const t = setTimeout(() => setNbsuFetchFilters(nbsuFilters), 350);
+    return () => clearTimeout(t);
+  }, [nbsuFilters]);
+  useEffect(() => {
+    if (activeView === "nbSignUps" && selectedGSC && selectedGA4 && accessToken) void fetchNbsuData();
+  }, [activeView, selectedGSC, selectedGA4, accessToken, fetchNbsuData]);
 
   // ── Auto-check mentions: for every page in gscPages, fetch copy and check query presence ──
   useEffect(() => {
@@ -5348,6 +5685,10 @@ export default function App() {
   const nbsRowsForSort = useMemo(() => nbsData?.rows ?? [], [nbsData]);
   const nbsSort = useTableSort(nbsRowsForSort, { key: "nbReferrers", dir: "desc" });
 
+  /** Sort hook for the NB Sign Ups landing-page table. */
+  const nbsuRowsForSort = useMemo(() => nbsuData?.rows ?? [], [nbsuData]);
+  const nbsuSort = useTableSort(nbsuRowsForSort, { key: "nbLeads", dir: "desc" });
+
 
 
   // ── Sort state for non-sortable tables ──────────────────────────────────────
@@ -5507,6 +5848,7 @@ export default function App() {
     { key: "productCategories", label: "Product Categories", icon: Layers },
     { key: "brandVsNonBrand", label: "Brand vs Non-Brand", icon: BarChart2 },
     { key: "nbSeo", label: "Non-Brand SEO", icon: TrendingUp },
+    { key: "nbSignUps", label: "Non-Brand Sign Ups", icon: ShoppingCart },
     { key: "conversions", label: "Conversions", icon: ShoppingCart },
     { key: "seoIssues", label: "SEO Issues", icon: AlertTriangle },
     { key: "performance", label: "Performance", icon: BarChart2 },
@@ -5522,6 +5864,7 @@ export default function App() {
     productCategories: "Product Categories — SEO and conversion performance grouped by site category, with trending and GA4 lead data.",
     brandVsNonBrand: "Brand vs Non-Brand — split your GSC clicks, pages, and lead conversions between branded (Vintage Cash Cow) and non-branded queries.",
     nbSeo: "Non-Brand SEO — model the non-brand share of organic sessions and leads at the landing-page level, with editable brand classifier and WoW/YoY comparisons.",
+    nbSignUps: "Non-Brand Sign Ups — model the non-brand share of generate_lead key events from organic sessions that involved /free-selling-pack, click-weighted across the whole site.",
     conversions: "Conversions — monitor key conversion events and goal completions tracked in GA4.",
     seoIssues: "SEO Issues — surface technical and on-page problems that may be hurting your rankings.",
     performance: "Performance — analyse Core Web Vitals and page speed signals from your Search Console data.",
@@ -7280,6 +7623,286 @@ ${combinedHtml}
                                     </tbody>
                                   </table>
                                 </div>
+                              </div>
+                            </div>
+                          )}
+                        </ChartCard>
+                      </>
+                    );
+                  })()}
+                </section>
+              </>
+            )}
+
+            {/* ── Non-Brand Sign Ups ───────────────────────────────────────── */}
+            {activeView === "nbSignUps" && (
+              <>
+                <SectionDivider label="NON-BRAND SIGN UPS" />
+                <section className="space-y-4">
+                  {/* Header */}
+                  <div className="flex items-center justify-between gap-4 flex-wrap">
+                    <div className="flex items-center gap-3">
+                      <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-2"><ShoppingCart size={16} className="text-emerald-600" /></div>
+                      <div>
+                        <h2 className="text-sm font-bold text-gray-900">Non-Brand Sign Ups</h2>
+                        <p className="text-xs text-gray-400">Whole-site landing pages — non-brand share of organic sessions that involved <code className="bg-gray-100 px-1 rounded">/free-selling-pack</code> and fired the <code className="bg-gray-100 px-1 rounded">generate_lead</code> key event. Click-weighted ratio per page.</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => void fetchNbsuData()}
+                        disabled={nbsuLoading}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                      >
+                        <RefreshCw size={12} className={nbsuLoading ? "animate-spin" : ""} />
+                        {nbsuLoading ? "Loading…" : "Refresh"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Date filter panel */}
+                  <div className="bg-emerald-50/60 border border-emerald-100 rounded-2xl p-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1.5 font-medium">Date Range</label>
+                        <Select
+                          value={nbsuFilters.dateRange}
+                          onChange={(v) => setNbsuFilters((f) => ({ ...f, dateRange: v as NbsuDateFilter["dateRange"] }))}
+                          options={[
+                            { value: "7",  label: "Last 7 days" },
+                            { value: "28", label: "Last 28 days" },
+                            { value: "90", label: "Last 90 days" },
+                            { value: "custom", label: "Custom range" },
+                          ]}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1.5 font-medium">Compare To</label>
+                        <Select
+                          value={nbsuFilters.comparison}
+                          onChange={(v) => setNbsuFilters((f) => ({ ...f, comparison: v as NbsuDateFilter["comparison"] }))}
+                          options={[
+                            { value: "prev",     label: "Previous period" },
+                            { value: "prevYear", label: "Same period last year" },
+                            { value: "none",     label: "No comparison" },
+                          ]}
+                        />
+                      </div>
+                    </div>
+                    {nbsuFilters.dateRange === "custom" && (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3 pt-3 border-t border-emerald-100">
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1 font-medium">Start (current)</label>
+                          <input type="date" value={nbsuFilters.customStart ?? ""} onChange={(e) => setNbsuFilters((f) => ({ ...f, customStart: e.target.value }))}
+                            className="w-full bg-white border border-gray-200 rounded-xl px-2 py-2 text-sm text-gray-700" />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1 font-medium">End (current)</label>
+                          <input type="date" value={nbsuFilters.customEnd ?? ""} onChange={(e) => setNbsuFilters((f) => ({ ...f, customEnd: e.target.value }))}
+                            className="w-full bg-white border border-gray-200 rounded-xl px-2 py-2 text-sm text-gray-700" />
+                        </div>
+                        {nbsuFilters.comparison !== "none" && nbsuFilters.comparison !== "prevYear" && (
+                          <>
+                            <div>
+                              <label className="block text-xs text-gray-500 mb-1 font-medium">Compare start</label>
+                              <input type="date" value={nbsuFilters.customCompareStart ?? ""} onChange={(e) => setNbsuFilters((f) => ({ ...f, customCompareStart: e.target.value }))}
+                                className="w-full bg-white border border-gray-200 rounded-xl px-2 py-2 text-sm text-gray-700" />
+                            </div>
+                            <div>
+                              <label className="block text-xs text-gray-500 mb-1 font-medium">Compare end</label>
+                              <input type="date" value={nbsuFilters.customCompareEnd ?? ""} onChange={(e) => setNbsuFilters((f) => ({ ...f, customCompareEnd: e.target.value }))}
+                                className="w-full bg-white border border-gray-200 rounded-xl px-2 py-2 text-sm text-gray-700" />
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Modelled-figure caveat */}
+                  <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-2 text-xs text-amber-800 flex items-start gap-2">
+                    <AlertTriangle size={12} className="text-amber-600 mt-0.5 shrink-0" />
+                    <span>
+                      <strong>Modelled figures.</strong> Non-brand and brand sign-up counts are estimates — each landing page's <code className="bg-amber-100 px-1 rounded">generate_lead</code> count from organic sessions multiplied by its <strong>click-weighted</strong> non-brand query ratio from GSC. Brand-term list lives in the Non-Brand SEO section.
+                    </span>
+                  </div>
+
+                  {nbsuLoading && (
+                    <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center text-sm text-gray-400">
+                      <div className="inline-block w-6 h-6 border-2 border-gray-200 border-t-emerald-600 rounded-full animate-spin mb-3" />
+                      <p>Pulling GSC + GA4 data and modelling the split…</p>
+                    </div>
+                  )}
+
+                  {!nbsuLoading && !nbsuData && (
+                    <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center text-sm text-gray-400">
+                      <p>{selectedGSC && selectedGA4 ? "Click Refresh to load data." : "Connect both a GA4 and a GSC property to use this section."}</p>
+                    </div>
+                  )}
+
+                  {!nbsuLoading && nbsuData && (() => {
+                    const d = nbsuData;
+                    const hasCmp = !!d.cmpPeriod.start && !!d.cmpPeriod.end;
+                    const periodLabel = `${formatDisplayDate(d.period.start)} – ${formatDisplayDate(d.period.end)}`;
+                    const cmpPeriodLabel = hasCmp ? `${formatDisplayDate(d.cmpPeriod.start)} – ${formatDisplayDate(d.cmpPeriod.end)}` : "—";
+                    const pct = (a: number, b: number) => (b > 0 ? ((a - b) / b) * 100 : (a > 0 ? 100 : 0));
+                    const Delta = ({ p }: { p: number | null }) => {
+                      if (p == null || !isFinite(p)) return <span className="text-[10px] text-gray-400">—</span>;
+                      const up = p >= 0;
+                      return <span className={`text-[11px] font-bold ${up ? "text-emerald-600" : "text-red-500"}`}>{up ? "+" : ""}{p.toFixed(1)}%</span>;
+                    };
+                    return (
+                      <>
+                        {/* Period label */}
+                        <div className="text-[11px] text-gray-500 flex items-center gap-4 flex-wrap">
+                          <span><strong>Current:</strong> {periodLabel}</span>
+                          {hasCmp && <span className="text-gray-300">vs</span>}
+                          {hasCmp && <span><strong>{nbsuFetchFilters.comparison === "prevYear" ? "Last year:" : "Previous:"}</strong> {cmpPeriodLabel}</span>}
+                        </div>
+
+                        {/* KPI cards */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                          <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Organic sessions</div>
+                            <div className="flex items-end justify-between gap-2">
+                              <span className="text-2xl font-bold text-gray-900 tabular-nums">{Math.round(d.totals.orgSessions).toLocaleString()}</span>
+                              {hasCmp && <Delta p={pct(d.totals.orgSessions, d.totals.orgSessionsCmp)} />}
+                            </div>
+                            <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.orgSessionsCmp).toLocaleString()} previously` : "whole site · organic"}</div>
+                          </div>
+                          <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">FSP sign-ups</div>
+                            <div className="flex items-end justify-between gap-2">
+                              <span className="text-2xl font-bold text-sky-700 tabular-nums">{Math.round(d.totals.fspLeads).toLocaleString()}</span>
+                              {hasCmp && <Delta p={pct(d.totals.fspLeads, d.totals.fspLeadsCmp)} />}
+                            </div>
+                            <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.fspLeadsCmp).toLocaleString()} previously` : "generate_lead events"}</div>
+                          </div>
+                          <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-brand sign-ups</div>
+                            <div className="flex items-end justify-between gap-2">
+                              <span className="text-2xl font-bold text-emerald-600 tabular-nums">{Math.round(d.totals.nbLeads).toLocaleString()}</span>
+                              {hasCmp && <Delta p={pct(d.totals.nbLeads, d.totals.nbLeadsCmp)} />}
+                            </div>
+                            <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.nbLeadsCmp).toLocaleString()} previously · ` : ""}site-wide NB ratio {(d.totals.siteWideNbRatio * 100).toFixed(1)}%</div>
+                          </div>
+                          <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Brand sign-ups</div>
+                            <div className="flex items-end justify-between gap-2">
+                              <span className="text-2xl font-bold text-[#5b4fa8] tabular-nums">{Math.round(d.totals.brandLeads).toLocaleString()}</span>
+                              {hasCmp && <Delta p={pct(d.totals.brandLeads, d.totals.brandLeadsCmp)} />}
+                            </div>
+                            <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.brandLeadsCmp).toLocaleString()} previously` : "click-weighted brand share"}</div>
+                          </div>
+                        </div>
+
+                        {/* Landing pages table */}
+                        <ChartCard
+                          title="Landing pages (whole site)"
+                          tip="One row per landing page. The NB/B ratio is click-weighted from GSC: brand clicks vs non-brand clicks for queries that page ranked on. NB and Brand sign-ups split the GA4 generate_lead key-event count from organic sessions by that ratio."
+                        >
+                          <div className="overflow-x-auto overflow-y-auto rounded-xl border border-gray-50" style={{ maxHeight: 540 }}>
+                            <table className="w-full text-xs">
+                              <thead className="sticky top-0 bg-white z-10">
+                                <tr className="text-left text-gray-400 border-b border-gray-100">
+                                  <SortableTh label="Landing page" sortKey="page" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium" />
+                                  <SortableTh label="NB / B ratio" sortKey="nonBrandRatio" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="Org. sessions" sortKey="orgSessions" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="FSP sign-ups" sortKey="fspLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="NB sign-ups" sortKey="nbLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="Brand sign-ups" sortKey="brandLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <th className="pb-2 font-medium text-right">Confidence</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {nbsuSort.sorted.slice(0, 300).map((r, i) => {
+                                  const orgPct = hasCmp && r.orgSessionsCmp > 0 ? ((r.orgSessions - r.orgSessionsCmp) / r.orgSessionsCmp) * 100 : null;
+                                  const fspPct = hasCmp && r.fspLeadsCmp > 0 ? ((r.fspLeads - r.fspLeadsCmp) / r.fspLeadsCmp) * 100 : null;
+                                  const nbPct  = hasCmp && r.nbLeadsCmp > 0 ? ((r.nbLeads - r.nbLeadsCmp) / r.nbLeadsCmp) * 100 : null;
+                                  const bPct   = hasCmp && r.brandLeadsCmp > 0 ? ((r.brandLeads - r.brandLeadsCmp) / r.brandLeadsCmp) * 100 : null;
+                                  return (
+                                    <tr key={i} className="border-b border-gray-50 hover:bg-emerald-50/30">
+                                      <td className="py-2 pr-2 max-w-[280px] truncate" title={r.page}><UrlLink url={r.page} className="text-gray-700" /></td>
+                                      <td className="py-2 pr-2 text-right tabular-nums">
+                                        <span className="text-emerald-700 font-semibold">{(r.nonBrandRatio * 100).toFixed(1)}%</span>
+                                        <span className="text-gray-300"> / </span>
+                                        <span className="text-[#5b4fa8] font-semibold">{((1 - r.nonBrandRatio) * 100).toFixed(1)}%</span>
+                                        <div className="text-[10px] text-gray-400">{r.nonBrandClicks.toLocaleString()} / {r.brandClicks.toLocaleString()} clicks</div>
+                                      </td>
+                                      <td className="py-2 pr-2 text-right tabular-nums text-gray-900 font-semibold">
+                                        {r.orgSessions.toLocaleString()}
+                                        {orgPct != null && <div className={`text-[10px] font-bold ${orgPct >= 0 ? "text-emerald-600" : "text-red-500"}`}>{orgPct >= 0 ? "+" : ""}{orgPct.toFixed(0)}%</div>}
+                                      </td>
+                                      <td className="py-2 pr-2 text-right tabular-nums text-sky-700 font-semibold">
+                                        {r.fspLeads.toLocaleString()}
+                                        {fspPct != null && <div className={`text-[10px] font-bold ${fspPct >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fspPct >= 0 ? "+" : ""}{fspPct.toFixed(0)}%</div>}
+                                      </td>
+                                      <td className="py-2 pr-2 text-right tabular-nums text-emerald-700 font-semibold">
+                                        {Math.round(r.nbLeads).toLocaleString()}
+                                        {nbPct != null && <div className={`text-[10px] font-bold ${nbPct >= 0 ? "text-emerald-600" : "text-red-500"}`}>{nbPct >= 0 ? "+" : ""}{nbPct.toFixed(0)}%</div>}
+                                      </td>
+                                      <td className="py-2 pr-2 text-right tabular-nums text-[#5b4fa8] font-semibold">
+                                        {Math.round(r.brandLeads).toLocaleString()}
+                                        {bPct != null && <div className={`text-[10px] font-bold ${bPct >= 0 ? "text-emerald-600" : "text-red-500"}`}>{bPct >= 0 ? "+" : ""}{bPct.toFixed(0)}%</div>}
+                                      </td>
+                                      <td className="py-2 text-right">
+                                        <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+                                          r.confidence === "high" ? "bg-emerald-50 text-emerald-700"
+                                          : r.confidence === "medium" ? "bg-amber-50 text-amber-700"
+                                          : "bg-red-50 text-red-600"
+                                        }`}>
+                                          {r.confidence}{r.usedSiteWideRatio ? "*" : ""}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                                {nbsuSort.sorted.length === 0 && (
+                                  <tr><td colSpan={7} className="py-6 text-center text-gray-400">No landing pages with data in this window.</td></tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                          <div className="text-[10px] text-gray-400 mt-2">* Page had no GSC click data — site-wide click-weighted non-brand ratio applied as fallback.</div>
+                        </ChartCard>
+
+                        {/* Transparency panel */}
+                        <ChartCard
+                          title={
+                            <button onClick={() => setNbsuShowTransparency((s) => !s)} className="flex items-center gap-2 text-left w-full">
+                              <span>{nbsuShowTransparency ? "▼" : "▶"} Data quality & methodology</span>
+                              <span className="text-[10px] text-gray-400 font-normal">click totals, fallback share, methodology</span>
+                            </button>
+                          }
+                          tip="Click totals split by brand/non-brand for the period, plus methodology notes. Edit brand terms in the Non-Brand SEO section."
+                        >
+                          {nbsuShowTransparency && (
+                            <div className="space-y-4">
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
+                                <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+                                  <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Brand clicks</div>
+                                  <div className="text-lg font-bold text-[#5b4fa8] tabular-nums">{d.totals.brandClicks.toLocaleString()}</div>
+                                  <div className="text-[10px] text-gray-400">across all pages this period</div>
+                                </div>
+                                <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+                                  <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-brand clicks</div>
+                                  <div className="text-lg font-bold text-emerald-600 tabular-nums">{d.totals.nonBrandClicks.toLocaleString()}</div>
+                                  <div className="text-[10px] text-gray-400">{(d.totals.siteWideNbRatio * 100).toFixed(1)}% of clicks</div>
+                                </div>
+                                <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+                                  <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Last sync</div>
+                                  <div className="text-lg font-bold text-gray-700">{new Date(d.fetchedAt).toLocaleTimeString()}</div>
+                                  <div className="text-[10px] text-gray-400">{nbsuSort.sorted.filter((r) => r.usedSiteWideRatio).length} pages on fallback ratio</div>
+                                </div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-xl p-4 text-xs text-gray-600 space-y-2">
+                                <div className="font-bold text-gray-700">Methodology</div>
+                                <ol className="list-decimal pl-5 space-y-1">
+                                  <li>GSC [page, query] pulled for the window — queries classified using the brand-term list from the Non-Brand SEO section.</li>
+                                  <li>For each landing page, a <strong>click-weighted</strong> non-brand ratio is computed: NB clicks ÷ (NB clicks + Brand clicks).</li>
+                                  <li>GA4 returns <code className="bg-gray-100 px-1 rounded">generate_lead</code> key-event counts from organic sessions, grouped by landing page. Because <code className="bg-gray-100 px-1 rounded">generate_lead</code> fires on the FSP form, every counted session by definition involved <code className="bg-gray-100 px-1 rounded">/free-selling-pack</code>.</li>
+                                  <li>Each page's lead count is split by its NB ratio. Pages with no GSC clicks fall back to the site-wide ratio.</li>
+                                </ol>
                               </div>
                             </div>
                           )}
