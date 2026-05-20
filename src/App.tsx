@@ -3221,6 +3221,10 @@ export default function App() {
       nonBrandClicks: number;
       siteWideNbRatio: number;     // click-weighted, whole site
     };
+    /** Raw [page, query] GSC rows for the period, already filtered to exclude ? URLs.
+     *  Used to compute query-level winners/losers and per-page query-count movement. */
+    queryPageRowsCur: { page: string; query: string; clicks: number; impressions: number; position: number; cls: "brand" | "nonBrand" }[];
+    queryPageRowsCmp: { page: string; query: string; clicks: number; impressions: number; position: number; cls: "brand" | "nonBrand" }[];
     period: { start: string; end: string };
     cmpPeriod: { start: string; end: string };
     fetchedAt: number;
@@ -3240,6 +3244,8 @@ export default function App() {
   const [nbsuData, setNbsuData] = useState<NbsuDataType | null>(null);
   const [nbsuLoading, setNbsuLoading] = useState(false);
   const [nbsuShowTransparency, setNbsuShowTransparency] = useState(false);
+  /** Expanded-row tracker for the query/url movement tables. Key format: `${tableId}::${rowKey}`. */
+  const [nbsuExpanded, setNbsuExpanded] = useState<Set<string>>(new Set());
   const [queryCopyResults, setQueryCopyResults] = useState<Map<string, { text: string; queryHits: Map<string, boolean> }>>(new Map());
   const [queryCopyLoading, setQueryCopyLoading] = useState<Set<string>>(new Set());
   const [queryCopyPage, setQueryCopyPage] = useState<string>(""); // URL typed/selected by user
@@ -4877,7 +4883,7 @@ export default function App() {
       const hasQueryString = (s: string): boolean => s.includes("?");
 
       // ── GSC: [page, query] for current + comparison windows ─────────────────
-      type GscRow = { keys: string[]; clicks: number; impressions: number };
+      type GscRow = { keys: string[]; clicks: number; impressions: number; ctr: number; position: number };
       const gscFetch = async (s: string, e: string): Promise<GscRow[]> => {
         const body = JSON.stringify({ startDate: s, endDate: e, dimensions: ["page", "query"], rowLimit: 25000 });
         const res = await fetch(gscBase, { method: "POST", headers, body }).then((r) => r.json());
@@ -4935,7 +4941,6 @@ export default function App() {
         const m = new Map<string, PerPage>();
         rows.forEach((r) => {
           const fullPage = r.keys[0];
-          if (hasQueryString(fullPage)) return;
           const path = normPath(fullPage);
           const query = r.keys[1];
           const clicks = Math.round(r.clicks);
@@ -4954,7 +4959,6 @@ export default function App() {
         const m = new Map<string, number>();
         (resp.rows ?? []).forEach((r) => {
           const raw = r.dimensionValues[0]?.value ?? "";
-          if (hasQueryString(raw)) return;
           const path = normPath(raw);
           const v = parseInt(r.metricValues[0]?.value ?? "0", 10);
           m.set(path, (m.get(path) ?? 0) + v);
@@ -4969,7 +4973,6 @@ export default function App() {
         const m = new Map<string, number>();
         (resp.rows ?? []).forEach((r) => {
           const raw = r.dimensionValues[0]?.value ?? "";
-          if (hasQueryString(raw)) return;
           const path = normPath(raw);
           const v = parseInt(r.metricValues[0]?.value ?? "0", 10);
           if (v === 0) return;
@@ -5057,6 +5060,23 @@ export default function App() {
       // Sort by non-brand leads desc — the headline metric.
       rows.sort((a, b) => b.nbLeads - a.nbLeads);
 
+      // Project the raw GSC [page, query] rows into a compact shape for the
+      // query-level winners/losers tables. ? URLs and zero-impression rows already
+      // filtered out; classification done up-front so the UI doesn't repeat it.
+      const projectGsc = (gscRows: GscRow[]) =>
+        gscRows
+          .filter((r) => !hasQueryString(r.keys[0]) && (r.impressions ?? 0) > 0)
+          .map((r) => ({
+            page: normPath(r.keys[0]),
+            query: r.keys[1] ?? "",
+            clicks: Math.round(r.clicks ?? 0),
+            impressions: Math.round(r.impressions ?? 0),
+            position: r.position ?? 0,
+            cls: classify(r.keys[1] ?? "") as "brand" | "nonBrand",
+          }));
+      const queryPageRowsCur = projectGsc(pageQueryCur);
+      const queryPageRowsCmp = projectGsc(pageQueryCmp);
+
       setNbsuData({
         rows,
         totals: {
@@ -5072,6 +5092,8 @@ export default function App() {
           nonBrandClicks: totalNonBrandClicks,
           siteWideNbRatio,
         },
+        queryPageRowsCur,
+        queryPageRowsCmp,
         period: { start: startDate, end: endDate },
         cmpPeriod: { start: cmpStartDate, end: cmpEndDate },
         fetchedAt: Date.now(),
@@ -7782,7 +7804,7 @@ ${combinedHtml}
                             <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.orgSessionsCmp).toLocaleString()} previously` : "whole site · organic"}</div>
                           </div>
                           <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">FSP sign-ups</div>
+                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Total SEO sign-ups</div>
                             <div className="flex items-end justify-between gap-2">
                               <span className="text-2xl font-bold text-sky-700 tabular-nums">{Math.round(d.totals.fspLeads).toLocaleString()}</span>
                               {hasCmp && <Delta p={pct(d.totals.fspLeads, d.totals.fspLeadsCmp)} />}
@@ -7790,7 +7812,7 @@ ${combinedHtml}
                             <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.fspLeadsCmp).toLocaleString()} previously` : "generate_lead events"}</div>
                           </div>
                           <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-brand sign-ups</div>
+                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-brand SEO sign-ups</div>
                             <div className="flex items-end justify-between gap-2">
                               <span className="text-2xl font-bold text-emerald-600 tabular-nums">{Math.round(d.totals.nbLeads).toLocaleString()}</span>
                               {hasCmp && <Delta p={pct(d.totals.nbLeads, d.totals.nbLeadsCmp)} />}
@@ -7798,7 +7820,7 @@ ${combinedHtml}
                             <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.nbLeadsCmp).toLocaleString()} previously · ` : ""}site-wide NB ratio {(d.totals.siteWideNbRatio * 100).toFixed(1)}%</div>
                           </div>
                           <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Brand sign-ups</div>
+                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Brand SEO sign-ups</div>
                             <div className="flex items-end justify-between gap-2">
                               <span className="text-2xl font-bold text-[#5b4fa8] tabular-nums">{Math.round(d.totals.brandLeads).toLocaleString()}</span>
                               {hasCmp && <Delta p={pct(d.totals.brandLeads, d.totals.brandLeadsCmp)} />}
@@ -7819,18 +7841,28 @@ ${combinedHtml}
                                   <SortableTh label="Landing page" sortKey="page" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium" />
                                   <SortableTh label="NB / B ratio" sortKey="nonBrandRatio" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
                                   <SortableTh label="Org. sessions" sortKey="orgSessions" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
-                                  <SortableTh label="FSP sign-ups" sortKey="fspLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
-                                  <SortableTh label="NB sign-ups" sortKey="nbLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
-                                  <SortableTh label="Brand sign-ups" sortKey="brandLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
-                                  <th className="pb-2 font-medium text-right">Confidence</th>
+                                  <SortableTh label="Total SEO sign-ups" sortKey="fspLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="NB SEO sign-ups" sortKey="nbLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  <SortableTh label="Brand SEO sign-ups" sortKey="brandLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
                                 </tr>
                               </thead>
                               <tbody>
                                 {nbsuSort.sorted.slice(0, 300).map((r, i) => {
-                                  const orgPct = hasCmp && r.orgSessionsCmp > 0 ? ((r.orgSessions - r.orgSessionsCmp) / r.orgSessionsCmp) * 100 : null;
-                                  const fspPct = hasCmp && r.fspLeadsCmp > 0 ? ((r.fspLeads - r.fspLeadsCmp) / r.fspLeadsCmp) * 100 : null;
-                                  const nbPct  = hasCmp && r.nbLeadsCmp > 0 ? ((r.nbLeads - r.nbLeadsCmp) / r.nbLeadsCmp) * 100 : null;
-                                  const bPct   = hasCmp && r.brandLeadsCmp > 0 ? ((r.brandLeads - r.brandLeadsCmp) / r.brandLeadsCmp) * 100 : null;
+                                  // Inline change badge: show % when previous>0; show "new" tag when previous==0 but current>0; "—" when both zero
+                                  const changeBadge = (cur: number, prev: number, isInt: boolean) => {
+                                    const curR = isInt ? Math.round(cur) : cur;
+                                    const prevR = isInt ? Math.round(prev) : prev;
+                                    if (!hasCmp) return null;
+                                    if (prevR <= 0 && curR <= 0) return null;
+                                    if (prevR <= 0 && curR > 0) {
+                                      return <div className="text-[10px] font-bold text-emerald-600">new</div>;
+                                    }
+                                    if (prevR > 0 && curR <= 0) {
+                                      return <div className="text-[10px] font-bold text-red-500">−100%</div>;
+                                    }
+                                    const p = ((curR - prevR) / prevR) * 100;
+                                    return <div className={`text-[10px] font-bold ${p >= 0 ? "text-emerald-600" : "text-red-500"}`}>{p >= 0 ? "+" : ""}{p.toFixed(0)}%</div>;
+                                  };
                                   return (
                                     <tr key={i} className="border-b border-gray-50 hover:bg-emerald-50/30">
                                       <td className="py-2 pr-2 max-w-[280px] truncate" title={r.page}><UrlLink url={r.page} className="text-gray-700" /></td>
@@ -7838,43 +7870,34 @@ ${combinedHtml}
                                         <span className="text-emerald-700 font-semibold">{(r.nonBrandRatio * 100).toFixed(1)}%</span>
                                         <span className="text-gray-300"> / </span>
                                         <span className="text-[#5b4fa8] font-semibold">{((1 - r.nonBrandRatio) * 100).toFixed(1)}%</span>
-                                        <div className="text-[10px] text-gray-400">{r.nonBrandClicks.toLocaleString()} / {r.brandClicks.toLocaleString()} clicks</div>
+                                        <div className="text-[10px] text-gray-400">{r.nonBrandClicks.toLocaleString()} / {r.brandClicks.toLocaleString()} clicks{r.usedSiteWideRatio ? " · fallback" : ""}</div>
                                       </td>
                                       <td className="py-2 pr-2 text-right tabular-nums text-gray-900 font-semibold">
                                         {r.orgSessions.toLocaleString()}
-                                        {orgPct != null && <div className={`text-[10px] font-bold ${orgPct >= 0 ? "text-emerald-600" : "text-red-500"}`}>{orgPct >= 0 ? "+" : ""}{orgPct.toFixed(0)}%</div>}
+                                        {changeBadge(r.orgSessions, r.orgSessionsCmp, true)}
                                       </td>
                                       <td className="py-2 pr-2 text-right tabular-nums text-sky-700 font-semibold">
                                         {r.fspLeads.toLocaleString()}
-                                        {fspPct != null && <div className={`text-[10px] font-bold ${fspPct >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fspPct >= 0 ? "+" : ""}{fspPct.toFixed(0)}%</div>}
+                                        {changeBadge(r.fspLeads, r.fspLeadsCmp, true)}
                                       </td>
                                       <td className="py-2 pr-2 text-right tabular-nums text-emerald-700 font-semibold">
                                         {Math.round(r.nbLeads).toLocaleString()}
-                                        {nbPct != null && <div className={`text-[10px] font-bold ${nbPct >= 0 ? "text-emerald-600" : "text-red-500"}`}>{nbPct >= 0 ? "+" : ""}{nbPct.toFixed(0)}%</div>}
+                                        {changeBadge(r.nbLeads, r.nbLeadsCmp, true)}
                                       </td>
                                       <td className="py-2 pr-2 text-right tabular-nums text-[#5b4fa8] font-semibold">
                                         {Math.round(r.brandLeads).toLocaleString()}
-                                        {bPct != null && <div className={`text-[10px] font-bold ${bPct >= 0 ? "text-emerald-600" : "text-red-500"}`}>{bPct >= 0 ? "+" : ""}{bPct.toFixed(0)}%</div>}
-                                      </td>
-                                      <td className="py-2 text-right">
-                                        <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
-                                          r.confidence === "high" ? "bg-emerald-50 text-emerald-700"
-                                          : r.confidence === "medium" ? "bg-amber-50 text-amber-700"
-                                          : "bg-red-50 text-red-600"
-                                        }`}>
-                                          {r.confidence}{r.usedSiteWideRatio ? "*" : ""}
-                                        </span>
+                                        {changeBadge(r.brandLeads, r.brandLeadsCmp, true)}
                                       </td>
                                     </tr>
                                   );
                                 })}
                                 {nbsuSort.sorted.length === 0 && (
-                                  <tr><td colSpan={7} className="py-6 text-center text-gray-400">No landing pages with data in this window.</td></tr>
+                                  <tr><td colSpan={6} className="py-6 text-center text-gray-400">No landing pages with data in this window.</td></tr>
                                 )}
                               </tbody>
                             </table>
                           </div>
-                          <div className="text-[10px] text-gray-400 mt-2">* Page had no GSC click data — site-wide click-weighted non-brand ratio applied as fallback.</div>
+                          <div className="text-[10px] text-gray-400 mt-2">"fallback" = page had no GSC click data for the period, so the site-wide click-weighted non-brand ratio was applied.</div>
                         </ChartCard>
 
                         {/* Winners & Losers — only shown when a comparison period exists */}
@@ -7883,11 +7906,15 @@ ${combinedHtml}
                           // activity in either the current or previous period for the metric
                           // we're ranking, so we don't surface noise from zero-zero rows.
                           type DeltaRow = NbsuLandingPageRow & { nbDelta: number; orgDelta: number };
-                          const withDeltas: DeltaRow[] = d.rows.map((r) => ({
-                            ...r,
-                            nbDelta: r.nbLeads - r.nbLeadsCmp,
-                            orgDelta: r.orgSessions - r.orgSessionsCmp,
-                          }));
+                          // Movement tables exclude URLs containing "?" (parameterised variants)
+                          // so they don't dominate the rankings. Top table + KPIs keep them.
+                          const withDeltas: DeltaRow[] = d.rows
+                            .filter((r) => !r.page.includes("?"))
+                            .map((r) => ({
+                              ...r,
+                              nbDelta: r.nbLeads - r.nbLeadsCmp,
+                              orgDelta: r.orgSessions - r.orgSessionsCmp,
+                            }));
                           const nbActivity = (r: DeltaRow) => r.nbLeads > 0 || r.nbLeadsCmp > 0;
                           const orgActivity = (r: DeltaRow) => r.orgSessions > 0 || r.orgSessionsCmp > 0;
 
@@ -7953,15 +7980,15 @@ ${combinedHtml}
                           return (
                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                               <MovementTable
-                                title="NB sign-ups — biggest drops"
-                                tip="Landing pages where modelled non-brand sign-ups fell the most vs the comparison period (absolute change, largest decline first)."
+                                title="NB SEO sign-ups — biggest drops"
+                                tip="Landing pages where modelled non-brand SEO sign-ups fell the most vs the comparison period (absolute change, largest decline first)."
                                 rows={nbLosers}
                                 metricKey="nb"
                                 accent="down"
                               />
                               <MovementTable
-                                title="NB sign-ups — biggest gains"
-                                tip="Landing pages where modelled non-brand sign-ups grew the most vs the comparison period (absolute change, largest gain first)."
+                                title="NB SEO sign-ups — biggest gains"
+                                tip="Landing pages where modelled non-brand SEO sign-ups grew the most vs the comparison period (absolute change, largest gain first)."
                                 rows={nbWinners}
                                 metricKey="nb"
                                 accent="up"
@@ -7978,6 +8005,430 @@ ${combinedHtml}
                                 tip="Landing pages where Organic Search sessions grew the most vs the comparison period (absolute change, largest gain first)."
                                 rows={orgWinners}
                                 metricKey="org"
+                                accent="up"
+                              />
+                            </div>
+                          );
+                        })()}
+
+                        {/* Non-brand query-level and per-page query-count movement tables */}
+                        {hasCmp && (() => {
+                          const cur = d.queryPageRowsCur;
+                          const cmp = d.queryPageRowsCmp;
+
+                          // ── Per-query aggregates (non-brand only) ──────────────────────────
+                          // For each query, sum clicks + impressions across pages, and compute
+                          // impression-weighted average position. Track contributing pages so we
+                          // can show them in the drilldown.
+                          type QueryAgg = {
+                            clicks: number;
+                            impressions: number;
+                            posWeightedSum: number; // Σ position × impressions
+                            pages: Map<string, { clicks: number; impressions: number; position: number }>;
+                          };
+                          const aggByQuery = (rows: typeof cur, onlyNonBrand = true) => {
+                            const m = new Map<string, QueryAgg>();
+                            rows.forEach((r) => {
+                              if (onlyNonBrand && r.cls !== "nonBrand") return;
+                              let q = m.get(r.query);
+                              if (!q) { q = { clicks: 0, impressions: 0, posWeightedSum: 0, pages: new Map() }; m.set(r.query, q); }
+                              q.clicks += r.clicks;
+                              q.impressions += r.impressions;
+                              q.posWeightedSum += r.position * r.impressions;
+                              q.pages.set(r.page, { clicks: r.clicks, impressions: r.impressions, position: r.position });
+                            });
+                            return m;
+                          };
+                          const queryCur = aggByQuery(cur);
+                          const queryCmp = aggByQuery(cmp);
+                          const allNbQueries = new Set<string>([...queryCur.keys(), ...queryCmp.keys()]);
+
+                          // Build a unified per-query record with deltas
+                          type QueryMovementRow = {
+                            query: string;
+                            clicks: number; clicksCmp: number;
+                            impressions: number; impressionsCmp: number;
+                            position: number; positionCmp: number; // 0 if no impressions
+                            pages: Map<string, { clicks: number; impressions: number; position: number }>;
+                            pagesCmp: Map<string, { clicks: number; impressions: number; position: number }>;
+                          };
+                          const queryMovements: QueryMovementRow[] = [];
+                          allNbQueries.forEach((q) => {
+                            const c = queryCur.get(q);
+                            const p = queryCmp.get(q);
+                            queryMovements.push({
+                              query: q,
+                              clicks: c?.clicks ?? 0,
+                              clicksCmp: p?.clicks ?? 0,
+                              impressions: c?.impressions ?? 0,
+                              impressionsCmp: p?.impressions ?? 0,
+                              position: (c && c.impressions > 0) ? c.posWeightedSum / c.impressions : 0,
+                              positionCmp: (p && p.impressions > 0) ? p.posWeightedSum / p.impressions : 0,
+                              pages: c?.pages ?? new Map(),
+                              pagesCmp: p?.pages ?? new Map(),
+                            });
+                          });
+
+                          // Click winners/losers — only meaningful where there were clicks in at least one period
+                          const clickActivity = (r: QueryMovementRow) => r.clicks > 0 || r.clicksCmp > 0;
+                          const clickLosers  = queryMovements.filter(clickActivity).map((r) => ({ ...r, delta: r.clicks - r.clicksCmp })).filter((r) => r.delta < 0).sort((a, b) => a.delta - b.delta).slice(0, 15);
+                          const clickWinners = queryMovements.filter(clickActivity).map((r) => ({ ...r, delta: r.clicks - r.clicksCmp })).filter((r) => r.delta > 0).sort((a, b) => b.delta - a.delta).slice(0, 15);
+
+                          // Position winners/losers — only where the query had impressions in BOTH periods
+                          // (a query newly appearing has no "from" position to compare).
+                          // Lower position number = better. "Dropping in position" (worse) = delta > 0.
+                          const posActivity = (r: QueryMovementRow) => r.impressions > 0 && r.impressionsCmp > 0;
+                          // Require some impression volume so noise queries with 1 impression don't dominate
+                          const posMinImpr = 10;
+                          const posCandidates = queryMovements
+                            .filter(posActivity)
+                            .filter((r) => r.impressions >= posMinImpr && r.impressionsCmp >= posMinImpr)
+                            .map((r) => ({ ...r, delta: r.position - r.positionCmp }));
+                          const posLosers   = posCandidates.filter((r) => r.delta > 0.5).sort((a, b) => b.delta - a.delta).slice(0, 15); // got WORSE
+                          const posWinners  = posCandidates.filter((r) => r.delta < -0.5).sort((a, b) => a.delta - b.delta).slice(0, 15);  // got BETTER
+
+                          // ── Per-URL distinct non-brand query counts ────────────────────────
+                          const queriesByUrl = (rows: typeof cur) => {
+                            const m = new Map<string, Set<string>>();
+                            rows.forEach((r) => {
+                              if (r.cls !== "nonBrand") return;
+                              if (r.clicks <= 0 && r.impressions <= 0) return;
+                              let s = m.get(r.page);
+                              if (!s) { s = new Set<string>(); m.set(r.page, s); }
+                              s.add(r.query);
+                            });
+                            return m;
+                          };
+                          const urlQueriesCur = queriesByUrl(cur);
+                          const urlQueriesCmp = queriesByUrl(cmp);
+                          const allUrls = new Set<string>([...urlQueriesCur.keys(), ...urlQueriesCmp.keys()]);
+                          type UrlQueryCountRow = {
+                            page: string;
+                            count: number; countCmp: number; delta: number;
+                            wonQueries: string[];   // in cur, not in cmp
+                            lostQueries: string[];  // in cmp, not in cur
+                          };
+                          const urlMovements: UrlQueryCountRow[] = [];
+                          allUrls.forEach((url) => {
+                            const c = urlQueriesCur.get(url) ?? new Set<string>();
+                            const p = urlQueriesCmp.get(url) ?? new Set<string>();
+                            const won: string[] = [];
+                            const lost: string[] = [];
+                            c.forEach((q) => { if (!p.has(q)) won.push(q); });
+                            p.forEach((q) => { if (!c.has(q)) lost.push(q); });
+                            urlMovements.push({
+                              page: url,
+                              count: c.size, countCmp: p.size,
+                              delta: c.size - p.size,
+                              wonQueries: won,
+                              lostQueries: lost,
+                            });
+                          });
+                          const urlCountLosers  = urlMovements.filter((r) => r.delta < 0).sort((a, b) => a.delta - b.delta).slice(0, 15);
+                          const urlCountWinners = urlMovements.filter((r) => r.delta > 0).sort((a, b) => b.delta - a.delta).slice(0, 15);
+
+                          // ── Shared helpers ────────────────────────────────────────────────
+                          const toggleExpand = (id: string) => setNbsuExpanded((s) => {
+                            const next = new Set(s);
+                            if (next.has(id)) next.delete(id); else next.add(id);
+                            return next;
+                          });
+                          const sign = (n: number) => (n >= 0 ? "+" : "");
+                          const pctDelta = (a: number, b: number) => (b > 0 ? ((a - b) / b) * 100 : null);
+
+                          // ── Query click movement table ─────────────────────────────────────
+                          const QueryClickMovement = ({ tableId, title, tip, rows, accent }: {
+                            tableId: string; title: string; tip: string;
+                            rows: (QueryMovementRow & { delta: number })[]; accent: "down" | "up";
+                          }) => {
+                            const isDown = accent === "down";
+                            const headerColor = isDown ? "text-red-600" : "text-emerald-600";
+                            const deltaColor = isDown ? "text-red-500" : "text-emerald-600";
+                            return (
+                              <ChartCard title={<span className="flex items-center gap-2"><span className={headerColor}>{isDown ? "▼" : "▲"}</span>{title}</span>} tip={tip}>
+                                <div className="overflow-x-auto overflow-y-auto rounded-xl border border-gray-50" style={{ maxHeight: 380 }}>
+                                  <table className="w-full text-xs">
+                                    <thead className="sticky top-0 bg-white z-10">
+                                      <tr className="text-left text-gray-400 border-b border-gray-100">
+                                        <th className="pb-2 pr-2 font-medium w-6"></th>
+                                        <th className="pb-2 pr-2 font-medium">Query (non-brand)</th>
+                                        <th className="pb-2 pr-2 font-medium text-right">Current</th>
+                                        <th className="pb-2 pr-2 font-medium text-right">Previous</th>
+                                        <th className="pb-2 font-medium text-right">Change</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {rows.map((r, i) => {
+                                        const id = `${tableId}::${r.query}`;
+                                        const open = nbsuExpanded.has(id);
+                                        const p = pctDelta(r.clicks, r.clicksCmp);
+                                        // Build union of pages from both periods for the drilldown
+                                        const pageSet = new Set<string>([...r.pages.keys(), ...r.pagesCmp.keys()]);
+                                        const pageRows = Array.from(pageSet).map((page) => {
+                                          const a = r.pages.get(page);
+                                          const b = r.pagesCmp.get(page);
+                                          return {
+                                            page,
+                                            clicks: a?.clicks ?? 0,
+                                            clicksCmp: b?.clicks ?? 0,
+                                            position: a?.position ?? 0,
+                                            positionCmp: b?.position ?? 0,
+                                          };
+                                        }).sort((x, y) => (y.clicks - y.clicksCmp) - (x.clicks - x.clicksCmp));
+                                        return (
+                                          <Fragment key={i}>
+                                            <tr className="border-b border-gray-50 hover:bg-gray-50">
+                                              <td className="py-2 pr-2 text-center">
+                                                <button onClick={() => toggleExpand(id)} className="text-gray-400 hover:text-gray-700">
+                                                  {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                                                </button>
+                                              </td>
+                                              <td className="py-2 pr-2 max-w-[260px] truncate text-gray-700" title={r.query}>{r.query}</td>
+                                              <td className="py-2 pr-2 text-right tabular-nums text-gray-900 font-semibold">{r.clicks.toLocaleString()}</td>
+                                              <td className="py-2 pr-2 text-right tabular-nums text-gray-500">{r.clicksCmp.toLocaleString()}</td>
+                                              <td className={`py-2 text-right tabular-nums font-bold ${deltaColor}`}>
+                                                {sign(r.delta)}{r.delta.toLocaleString()}
+                                                {p != null && <div className="text-[10px] font-bold">{sign(p)}{p.toFixed(0)}%</div>}
+                                              </td>
+                                            </tr>
+                                            {open && (
+                                              <tr className="bg-gray-50/50">
+                                                <td colSpan={5} className="py-2 px-3">
+                                                  <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Contributing URLs</div>
+                                                  <table className="w-full text-[11px]">
+                                                    <thead><tr className="text-left text-gray-400"><th className="py-1 pr-2 font-medium">URL</th><th className="py-1 pr-2 font-medium text-right">Clicks (cur / prev)</th><th className="py-1 font-medium text-right">Avg position (cur / prev)</th></tr></thead>
+                                                    <tbody>
+                                                      {pageRows.map((pr, j) => (
+                                                        <tr key={j} className="border-t border-gray-100">
+                                                          <td className="py-1 pr-2 max-w-[280px] truncate" title={pr.page}><UrlLink url={pr.page} className="text-gray-600" /></td>
+                                                          <td className="py-1 pr-2 text-right tabular-nums text-gray-700">{pr.clicks.toLocaleString()} <span className="text-gray-400">/ {pr.clicksCmp.toLocaleString()}</span></td>
+                                                          <td className="py-1 text-right tabular-nums text-gray-700">{pr.position > 0 ? pr.position.toFixed(1) : "—"} <span className="text-gray-400">/ {pr.positionCmp > 0 ? pr.positionCmp.toFixed(1) : "—"}</span></td>
+                                                        </tr>
+                                                      ))}
+                                                    </tbody>
+                                                  </table>
+                                                </td>
+                                              </tr>
+                                            )}
+                                          </Fragment>
+                                        );
+                                      })}
+                                      {rows.length === 0 && (
+                                        <tr><td colSpan={5} className="py-6 text-center text-gray-400">No movement to report in this window.</td></tr>
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </ChartCard>
+                            );
+                          };
+
+                          // ── Query position movement table ──────────────────────────────────
+                          const QueryPositionMovement = ({ tableId, title, tip, rows, accent }: {
+                            tableId: string; title: string; tip: string;
+                            rows: (QueryMovementRow & { delta: number })[]; accent: "down" | "up";
+                          }) => {
+                            const isDown = accent === "down"; // dropping = got WORSE = delta > 0
+                            const headerColor = isDown ? "text-red-600" : "text-emerald-600";
+                            const deltaColor = isDown ? "text-red-500" : "text-emerald-600";
+                            return (
+                              <ChartCard title={<span className="flex items-center gap-2"><span className={headerColor}>{isDown ? "▼" : "▲"}</span>{title}</span>} tip={tip}>
+                                <div className="overflow-x-auto overflow-y-auto rounded-xl border border-gray-50" style={{ maxHeight: 380 }}>
+                                  <table className="w-full text-xs">
+                                    <thead className="sticky top-0 bg-white z-10">
+                                      <tr className="text-left text-gray-400 border-b border-gray-100">
+                                        <th className="pb-2 pr-2 font-medium w-6"></th>
+                                        <th className="pb-2 pr-2 font-medium">Query (non-brand)</th>
+                                        <th className="pb-2 pr-2 font-medium text-right">Current pos</th>
+                                        <th className="pb-2 pr-2 font-medium text-right">Previous pos</th>
+                                        <th className="pb-2 font-medium text-right">Change</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {rows.map((r, i) => {
+                                        const id = `${tableId}::${r.query}`;
+                                        const open = nbsuExpanded.has(id);
+                                        // For position display, negative delta is GOOD (improved). The sign on screen
+                                        // mirrors the raw number so the user can read it as "moved from X to Y".
+                                        const pageSet = new Set<string>([...r.pages.keys(), ...r.pagesCmp.keys()]);
+                                        const pageRows = Array.from(pageSet).map((page) => {
+                                          const a = r.pages.get(page);
+                                          const b = r.pagesCmp.get(page);
+                                          return {
+                                            page,
+                                            position: a?.position ?? 0,
+                                            positionCmp: b?.position ?? 0,
+                                            impressions: a?.impressions ?? 0,
+                                            impressionsCmp: b?.impressions ?? 0,
+                                          };
+                                        }).sort((x, y) => y.impressions - x.impressions);
+                                        return (
+                                          <Fragment key={i}>
+                                            <tr className="border-b border-gray-50 hover:bg-gray-50">
+                                              <td className="py-2 pr-2 text-center">
+                                                <button onClick={() => toggleExpand(id)} className="text-gray-400 hover:text-gray-700">
+                                                  {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                                                </button>
+                                              </td>
+                                              <td className="py-2 pr-2 max-w-[260px] truncate text-gray-700" title={r.query}>{r.query}</td>
+                                              <td className="py-2 pr-2 text-right tabular-nums text-gray-900 font-semibold">{r.position.toFixed(1)}</td>
+                                              <td className="py-2 pr-2 text-right tabular-nums text-gray-500">{r.positionCmp.toFixed(1)}</td>
+                                              <td className={`py-2 text-right tabular-nums font-bold ${deltaColor}`}>
+                                                {sign(r.delta)}{r.delta.toFixed(1)}
+                                                <div className="text-[10px] text-gray-400 font-normal">{r.impressions.toLocaleString()} impr.</div>
+                                              </td>
+                                            </tr>
+                                            {open && (
+                                              <tr className="bg-gray-50/50">
+                                                <td colSpan={5} className="py-2 px-3">
+                                                  <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Contributing URLs</div>
+                                                  <table className="w-full text-[11px]">
+                                                    <thead><tr className="text-left text-gray-400"><th className="py-1 pr-2 font-medium">URL</th><th className="py-1 pr-2 font-medium text-right">Position (cur / prev)</th><th className="py-1 font-medium text-right">Impressions (cur / prev)</th></tr></thead>
+                                                    <tbody>
+                                                      {pageRows.map((pr, j) => (
+                                                        <tr key={j} className="border-t border-gray-100">
+                                                          <td className="py-1 pr-2 max-w-[280px] truncate" title={pr.page}><UrlLink url={pr.page} className="text-gray-600" /></td>
+                                                          <td className="py-1 pr-2 text-right tabular-nums text-gray-700">{pr.position > 0 ? pr.position.toFixed(1) : "—"} <span className="text-gray-400">/ {pr.positionCmp > 0 ? pr.positionCmp.toFixed(1) : "—"}</span></td>
+                                                          <td className="py-1 text-right tabular-nums text-gray-700">{pr.impressions.toLocaleString()} <span className="text-gray-400">/ {pr.impressionsCmp.toLocaleString()}</span></td>
+                                                        </tr>
+                                                      ))}
+                                                    </tbody>
+                                                  </table>
+                                                </td>
+                                              </tr>
+                                            )}
+                                          </Fragment>
+                                        );
+                                      })}
+                                      {rows.length === 0 && (
+                                        <tr><td colSpan={5} className="py-6 text-center text-gray-400">No position movement of ≥0.5 with ≥{posMinImpr} impressions in both periods.</td></tr>
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </ChartCard>
+                            );
+                          };
+
+                          // ── URL query-count movement table ─────────────────────────────────
+                          const UrlQueryCountMovement = ({ tableId, title, tip, rows, accent }: {
+                            tableId: string; title: string; tip: string;
+                            rows: UrlQueryCountRow[]; accent: "down" | "up";
+                          }) => {
+                            const isDown = accent === "down";
+                            const headerColor = isDown ? "text-red-600" : "text-emerald-600";
+                            const deltaColor = isDown ? "text-red-500" : "text-emerald-600";
+                            return (
+                              <ChartCard title={<span className="flex items-center gap-2"><span className={headerColor}>{isDown ? "▼" : "▲"}</span>{title}</span>} tip={tip}>
+                                <div className="overflow-x-auto overflow-y-auto rounded-xl border border-gray-50" style={{ maxHeight: 380 }}>
+                                  <table className="w-full text-xs">
+                                    <thead className="sticky top-0 bg-white z-10">
+                                      <tr className="text-left text-gray-400 border-b border-gray-100">
+                                        <th className="pb-2 pr-2 font-medium w-6"></th>
+                                        <th className="pb-2 pr-2 font-medium">URL</th>
+                                        <th className="pb-2 pr-2 font-medium text-right">Current</th>
+                                        <th className="pb-2 pr-2 font-medium text-right">Previous</th>
+                                        <th className="pb-2 font-medium text-right">Change</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {rows.map((r, i) => {
+                                        const id = `${tableId}::${r.page}`;
+                                        const open = nbsuExpanded.has(id);
+                                        return (
+                                          <Fragment key={i}>
+                                            <tr className="border-b border-gray-50 hover:bg-gray-50">
+                                              <td className="py-2 pr-2 text-center">
+                                                <button onClick={() => toggleExpand(id)} className="text-gray-400 hover:text-gray-700">
+                                                  {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                                                </button>
+                                              </td>
+                                              <td className="py-2 pr-2 max-w-[280px] truncate" title={r.page}><UrlLink url={r.page} className="text-gray-700" /></td>
+                                              <td className="py-2 pr-2 text-right tabular-nums text-gray-900 font-semibold">{r.count.toLocaleString()}</td>
+                                              <td className="py-2 pr-2 text-right tabular-nums text-gray-500">{r.countCmp.toLocaleString()}</td>
+                                              <td className={`py-2 text-right tabular-nums font-bold ${deltaColor}`}>
+                                                {sign(r.delta)}{r.delta.toLocaleString()}
+                                              </td>
+                                            </tr>
+                                            {open && (
+                                              <tr className="bg-gray-50/50">
+                                                <td colSpan={5} className="py-2 px-3">
+                                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                    <div>
+                                                      <div className="text-[10px] uppercase tracking-wider text-emerald-700 font-semibold mb-1">Newly ranking queries ({r.wonQueries.length})</div>
+                                                      {r.wonQueries.length === 0 ? <div className="text-[11px] text-gray-400">None.</div> : (
+                                                        <ul className="text-[11px] text-gray-700 list-disc pl-4 max-h-40 overflow-y-auto">
+                                                          {r.wonQueries.map((q, j) => <li key={j}>{q}</li>)}
+                                                        </ul>
+                                                      )}
+                                                    </div>
+                                                    <div>
+                                                      <div className="text-[10px] uppercase tracking-wider text-red-600 font-semibold mb-1">Lost queries ({r.lostQueries.length})</div>
+                                                      {r.lostQueries.length === 0 ? <div className="text-[11px] text-gray-400">None.</div> : (
+                                                        <ul className="text-[11px] text-gray-700 list-disc pl-4 max-h-40 overflow-y-auto">
+                                                          {r.lostQueries.map((q, j) => <li key={j}>{q}</li>)}
+                                                        </ul>
+                                                      )}
+                                                    </div>
+                                                  </div>
+                                                </td>
+                                              </tr>
+                                            )}
+                                          </Fragment>
+                                        );
+                                      })}
+                                      {rows.length === 0 && (
+                                        <tr><td colSpan={5} className="py-6 text-center text-gray-400">No change in distinct non-brand query counts.</td></tr>
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </ChartCard>
+                            );
+                          };
+
+                          return (
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                              <QueryClickMovement
+                                tableId="qclk-down"
+                                title="Non-brand queries — biggest click drops"
+                                tip="Non-brand queries that lost the most GSC clicks vs the comparison period. Expand a row to see which URLs contributed."
+                                rows={clickLosers}
+                                accent="down"
+                              />
+                              <QueryClickMovement
+                                tableId="qclk-up"
+                                title="Non-brand queries — biggest click gains"
+                                tip="Non-brand queries that gained the most GSC clicks vs the comparison period. Expand a row to see which URLs contributed."
+                                rows={clickWinners}
+                                accent="up"
+                              />
+                              <QueryPositionMovement
+                                tableId="qpos-down"
+                                title="Non-brand queries — biggest position drops"
+                                tip={`Non-brand queries whose average GSC position got WORSE (number went up) vs the comparison period. Filtered to queries with ≥${posMinImpr} impressions in both periods. Expand to see URL-level position changes.`}
+                                rows={posLosers}
+                                accent="down"
+                              />
+                              <QueryPositionMovement
+                                tableId="qpos-up"
+                                title="Non-brand queries — biggest position gains"
+                                tip={`Non-brand queries whose average GSC position IMPROVED (number went down) vs the comparison period. Filtered to queries with ≥${posMinImpr} impressions in both periods. Expand to see URL-level position changes.`}
+                                rows={posWinners}
+                                accent="up"
+                              />
+                              <UrlQueryCountMovement
+                                tableId="urlq-down"
+                                title="URLs — biggest drop in non-brand query count"
+                                tip="URLs that rank for fewer distinct non-brand queries than in the comparison period. Expand to see which queries were lost."
+                                rows={urlCountLosers}
+                                accent="down"
+                              />
+                              <UrlQueryCountMovement
+                                tableId="urlq-up"
+                                title="URLs — biggest gain in non-brand query count"
+                                tip="URLs that now rank for more distinct non-brand queries than in the comparison period. Expand to see which queries were won."
+                                rows={urlCountWinners}
                                 accent="up"
                               />
                             </div>
