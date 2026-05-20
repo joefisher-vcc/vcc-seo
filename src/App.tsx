@@ -4823,9 +4823,12 @@ export default function App() {
       const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
 
       // ── Resolve the date windows from nbsuFetchFilters ──────────────────────
+      // End at yesterday (today is partial). We deliberately do NOT clamp for GSC's
+      // 2-3 day lag here: the GSC data is only used for a click-weighted RATIO per
+      // page, which is stable even with slightly under-reported recent days, and
+      // "last 7 days" should mean what the user expects (e.g. 13-19 May, not 10-16).
       const today = toISODate(new Date());
-      // GSC has a ~3-day delay; clamp window end accordingly for fair comparison.
-      const gscEndCap = addDaysISO(today, -3);
+      const gscEndCap = addDaysISO(today, -1);
       const resolveWindow = (): { start: string; end: string; cmpStart: string; cmpEnd: string } => {
         const f = nbsuFetchFilters;
         if (f.dateRange === "custom" && f.customStart && f.customEnd) {
@@ -7865,6 +7868,113 @@ ${combinedHtml}
                           </div>
                           <div className="text-[10px] text-gray-400 mt-2">* Page had no GSC click data — site-wide click-weighted non-brand ratio applied as fallback.</div>
                         </ChartCard>
+
+                        {/* Winners & Losers — only shown when a comparison period exists */}
+                        {hasCmp && (() => {
+                          // Build delta-augmented rows. Only consider pages that have some
+                          // activity in either the current or previous period for the metric
+                          // we're ranking, so we don't surface noise from zero-zero rows.
+                          type DeltaRow = NbsuLandingPageRow & { nbDelta: number; orgDelta: number };
+                          const withDeltas: DeltaRow[] = d.rows.map((r) => ({
+                            ...r,
+                            nbDelta: r.nbLeads - r.nbLeadsCmp,
+                            orgDelta: r.orgSessions - r.orgSessionsCmp,
+                          }));
+                          const nbActivity = (r: DeltaRow) => r.nbLeads > 0 || r.nbLeadsCmp > 0;
+                          const orgActivity = (r: DeltaRow) => r.orgSessions > 0 || r.orgSessionsCmp > 0;
+
+                          const nbLosers   = withDeltas.filter(nbActivity).filter((r) => r.nbDelta < 0).sort((a, b) => a.nbDelta - b.nbDelta).slice(0, 15);
+                          const nbWinners  = withDeltas.filter(nbActivity).filter((r) => r.nbDelta > 0).sort((a, b) => b.nbDelta - a.nbDelta).slice(0, 15);
+                          const orgLosers  = withDeltas.filter(orgActivity).filter((r) => r.orgDelta < 0).sort((a, b) => a.orgDelta - b.orgDelta).slice(0, 15);
+                          const orgWinners = withDeltas.filter(orgActivity).filter((r) => r.orgDelta > 0).sort((a, b) => b.orgDelta - a.orgDelta).slice(0, 15);
+
+                          // Tiny shared renderer for a winners/losers table.
+                          const MovementTable = ({
+                            title, tip, rows, metricKey, accent,
+                          }: {
+                            title: string;
+                            tip: string;
+                            rows: DeltaRow[];
+                            metricKey: "nb" | "org";
+                            accent: "down" | "up";
+                          }) => {
+                            const isDown = accent === "down";
+                            const headerColor = isDown ? "text-red-600" : "text-emerald-600";
+                            const deltaColor  = isDown ? "text-red-500" : "text-emerald-600";
+                            const sign = (n: number) => (n >= 0 ? "+" : "");
+                            return (
+                              <ChartCard title={<span className="flex items-center gap-2"><span className={headerColor}>{isDown ? "▼" : "▲"}</span>{title}</span>} tip={tip}>
+                                <div className="overflow-x-auto overflow-y-auto rounded-xl border border-gray-50" style={{ maxHeight: 360 }}>
+                                  <table className="w-full text-xs">
+                                    <thead className="sticky top-0 bg-white z-10">
+                                      <tr className="text-left text-gray-400 border-b border-gray-100">
+                                        <th className="pb-2 pr-2 font-medium">Landing page</th>
+                                        <th className="pb-2 pr-2 font-medium text-right">Current</th>
+                                        <th className="pb-2 pr-2 font-medium text-right">Previous</th>
+                                        <th className="pb-2 font-medium text-right">Change</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {rows.map((r, i) => {
+                                        const cur = metricKey === "nb" ? Math.round(r.nbLeads) : r.orgSessions;
+                                        const prev = metricKey === "nb" ? Math.round(r.nbLeadsCmp) : r.orgSessionsCmp;
+                                        const delta = metricKey === "nb" ? Math.round(r.nbDelta) : r.orgDelta;
+                                        const pct = prev > 0 ? (delta / prev) * 100 : null;
+                                        return (
+                                          <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                                            <td className="py-2 pr-2 max-w-[280px] truncate" title={r.page}><UrlLink url={r.page} className="text-gray-700" /></td>
+                                            <td className="py-2 pr-2 text-right tabular-nums text-gray-900 font-semibold">{cur.toLocaleString()}</td>
+                                            <td className="py-2 pr-2 text-right tabular-nums text-gray-500">{prev.toLocaleString()}</td>
+                                            <td className={`py-2 text-right tabular-nums font-bold ${deltaColor}`}>
+                                              {sign(delta)}{delta.toLocaleString()}
+                                              {pct != null && <div className="text-[10px] font-bold">{sign(pct)}{pct.toFixed(0)}%</div>}
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                      {rows.length === 0 && (
+                                        <tr><td colSpan={4} className="py-6 text-center text-gray-400">No movement to report in this window.</td></tr>
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </ChartCard>
+                            );
+                          };
+
+                          return (
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                              <MovementTable
+                                title="NB sign-ups — biggest drops"
+                                tip="Landing pages where modelled non-brand sign-ups fell the most vs the comparison period (absolute change, largest decline first)."
+                                rows={nbLosers}
+                                metricKey="nb"
+                                accent="down"
+                              />
+                              <MovementTable
+                                title="NB sign-ups — biggest gains"
+                                tip="Landing pages where modelled non-brand sign-ups grew the most vs the comparison period (absolute change, largest gain first)."
+                                rows={nbWinners}
+                                metricKey="nb"
+                                accent="up"
+                              />
+                              <MovementTable
+                                title="Organic sessions — biggest drops"
+                                tip="Landing pages where Organic Search sessions fell the most vs the comparison period (absolute change, largest decline first)."
+                                rows={orgLosers}
+                                metricKey="org"
+                                accent="down"
+                              />
+                              <MovementTable
+                                title="Organic sessions — biggest gains"
+                                tip="Landing pages where Organic Search sessions grew the most vs the comparison period (absolute change, largest gain first)."
+                                rows={orgWinners}
+                                metricKey="org"
+                                accent="up"
+                              />
+                            </div>
+                          );
+                        })()}
 
                         {/* Transparency panel */}
                         <ChartCard
