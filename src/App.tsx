@@ -4872,6 +4872,9 @@ export default function App() {
         try { return new URL(url).pathname.replace(/\/$/, "") || "/"; }
         catch { return url.replace(/^https?:\/\/[^/]+/, "").replace(/\/$/, "") || "/"; }
       };
+      // Skip any URL/path containing a query string — keeps the report focused on
+      // canonical landing pages and avoids parameterised variants polluting totals.
+      const hasQueryString = (s: string): boolean => s.includes("?");
 
       // ── GSC: [page, query] for current + comparison windows ─────────────────
       type GscRow = { keys: string[]; clicks: number; impressions: number };
@@ -4932,6 +4935,7 @@ export default function App() {
         const m = new Map<string, PerPage>();
         rows.forEach((r) => {
           const fullPage = r.keys[0];
+          if (hasQueryString(fullPage)) return;
           const path = normPath(fullPage);
           const query = r.keys[1];
           const clicks = Math.round(r.clicks);
@@ -4949,7 +4953,9 @@ export default function App() {
       const sessMap = (resp: Ga4Resp): Map<string, number> => {
         const m = new Map<string, number>();
         (resp.rows ?? []).forEach((r) => {
-          const path = normPath(r.dimensionValues[0]?.value ?? "");
+          const raw = r.dimensionValues[0]?.value ?? "";
+          if (hasQueryString(raw)) return;
+          const path = normPath(raw);
           const v = parseInt(r.metricValues[0]?.value ?? "0", 10);
           m.set(path, (m.get(path) ?? 0) + v);
         });
@@ -4962,7 +4968,9 @@ export default function App() {
       const leadsMap = (resp: Ga4Resp): Map<string, number> => {
         const m = new Map<string, number>();
         (resp.rows ?? []).forEach((r) => {
-          const path = normPath(r.dimensionValues[0]?.value ?? "");
+          const raw = r.dimensionValues[0]?.value ?? "";
+          if (hasQueryString(raw)) return;
+          const path = normPath(raw);
           const v = parseInt(r.metricValues[0]?.value ?? "0", 10);
           if (v === 0) return;
           m.set(path, (m.get(path) ?? 0) + v);
