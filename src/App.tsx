@@ -1692,6 +1692,9 @@ const NBSEO_DEFAULT_BRAND_TERMS = [
   "vintagecashcow co uk",
   // Short / abbreviated
   "vcc",
+  // Misspellings / alternate brand renderings
+  "arcavindi",
+  "arca vindi",
 ];
 
 /**
