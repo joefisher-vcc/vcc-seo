@@ -7724,6 +7724,16 @@ ${combinedHtml}
                           ]}
                         />
                       </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1.5 font-medium">GA4 Property</label>
+                        <Select
+                          value={selectedGA4}
+                          onChange={setSelectedGA4}
+                          options={ga4Properties}
+                          placeholder="Select GA4 Property"
+                          disabled={ga4Properties.length === 0}
+                        />
+                      </div>
                     </div>
                     {nbsuFilters.dateRange === "custom" && (
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3 pt-3 border-t border-emerald-100">
