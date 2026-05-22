@@ -3234,7 +3234,21 @@ export default function App() {
   }
   /** Lightweight date filter for the NB Sign Ups section. Default = last 7 days vs previous 7. */
   interface NbsuDateFilter {
-    dateRange: "7" | "28" | "90" | "custom";
+    dateRange:
+      | "today"
+      | "yesterday"
+      | "thisWeek"      // this week (Sun → today)
+      | "7"             // last 7 days
+      | "lastWeek"      // last week (Sun → Sat)
+      | "28"            // last 28 days
+      | "30"            // last 30 days
+      | "thisMonth"     // this month (1st → today)
+      | "lastMonth"     // last calendar month
+      | "90"            // last 90 days
+      | "qtd"           // quarter to date
+      | "thisYear"      // this year (Jan 1 → today)
+      | "lastYear"      // last calendar year
+      | "custom";
     customStart?: string;
     customEnd?: string;
     customCompareStart?: string;
@@ -4832,14 +4846,18 @@ export default function App() {
       const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
 
       // ── Resolve the date windows from nbsuFetchFilters ──────────────────────
-      // End at yesterday (today is partial). We deliberately do NOT clamp for GSC's
-      // 2-3 day lag here: the GSC data is only used for a click-weighted RATIO per
-      // page, which is stable even with slightly under-reported recent days, and
-      // "last 7 days" should mean what the user expects (e.g. 13-19 May, not 10-16).
+      // For rolling day-count presets (last 7/28/30/90), we end at yesterday so
+      // GSC (which lags 2-3 days) + GA4 align — and "last 7 days" means what the
+      // user expects (e.g. 13-19 May, not 10-16). For calendar-aligned presets
+      // (this week, this month, this year, qtd, today) we use the literal
+      // calendar boundary the user asked for.
       const today = toISODate(new Date());
-      const gscEndCap = addDaysISO(today, -1);
+      const yesterday = addDaysISO(today, -1);
+      const gscEndCap = yesterday;
       const resolveWindow = (): { start: string; end: string; cmpStart: string; cmpEnd: string } => {
         const f = nbsuFetchFilters;
+
+        // ── Custom range ────────────────────────────────────────────────────
         if (f.dateRange === "custom" && f.customStart && f.customEnd) {
           const start = f.customStart;
           const end = f.customEnd;
@@ -4859,18 +4877,124 @@ export default function App() {
           }
           return { start, end, cmpStart, cmpEnd };
         }
-        // Preset windows always end at gscEndCap so GSC + GA4 align.
-        const n = parseInt(f.dateRange, 10) || 7;
-        const end = gscEndCap;
-        const start = addDaysISO(end, -(n - 1));
+
+        // ── Resolve the current window for each preset ──────────────────────
+        const todayD = new Date(today + "T12:00:00");
+        let start: string, end: string;
+
+        switch (f.dateRange) {
+          case "today": {
+            start = today; end = today; break;
+          }
+          case "yesterday": {
+            start = yesterday; end = yesterday; break;
+          }
+          case "thisWeek": {
+            // Sunday of this week → today
+            const dow = todayD.getDay(); // 0 = Sunday
+            start = addDaysISO(today, -dow);
+            end = today;
+            break;
+          }
+          case "lastWeek": {
+            // Last full week: Sunday → Saturday
+            const dow = todayD.getDay(); // 0 = Sunday
+            // Last Saturday
+            const lastSat = addDaysISO(today, -(dow + 1));
+            const lastSun = addDaysISO(lastSat, -6);
+            start = lastSun; end = lastSat; break;
+          }
+          case "thisMonth": {
+            const y = todayD.getFullYear(), m = todayD.getMonth();
+            start = toISODate(new Date(y, m, 1));
+            end = today;
+            break;
+          }
+          case "lastMonth": {
+            const y = todayD.getFullYear(), m = todayD.getMonth();
+            start = toISODate(new Date(y, m - 1, 1));
+            end = toISODate(new Date(y, m, 0)); // day 0 of this month = last day of prev month
+            break;
+          }
+          case "qtd": {
+            const y = todayD.getFullYear(), m = todayD.getMonth();
+            const qStartMonth = Math.floor(m / 3) * 3;
+            start = toISODate(new Date(y, qStartMonth, 1));
+            end = today;
+            break;
+          }
+          case "thisYear": {
+            const y = todayD.getFullYear();
+            start = toISODate(new Date(y, 0, 1));
+            end = today;
+            break;
+          }
+          case "lastYear": {
+            const y = todayD.getFullYear() - 1;
+            start = `${y}-01-01`;
+            end = `${y}-12-31`;
+            break;
+          }
+          default: {
+            // Rolling day-count: "7", "28", "30", "90". End at yesterday for GSC/GA4 alignment.
+            const n = parseInt(f.dateRange, 10) || 7;
+            end = gscEndCap;
+            start = addDaysISO(end, -(n - 1));
+          }
+        }
+
+        // ── Resolve the comparison window ───────────────────────────────────
         let cmpStart = "", cmpEnd = "";
-        if (f.comparison === "prev") {
-          cmpEnd = addDaysISO(start, -1);
-          cmpStart = addDaysISO(cmpEnd, -(n - 1));
-        } else if (f.comparison === "prevYear") {
+        if (f.comparison === "prevYear") {
           cmpStart = addDaysISO(start, -365);
           cmpEnd = addDaysISO(end, -365);
+        } else if (f.comparison === "prev") {
+          // For calendar-aligned presets, the "previous" period is the equivalent
+          // prior calendar unit. For rolling/day-count presets, it's the same number
+          // of days immediately before the current window.
+          if (f.dateRange === "lastMonth") {
+            const startD = new Date(start + "T12:00:00");
+            const y = startD.getFullYear(), m = startD.getMonth();
+            cmpStart = toISODate(new Date(y, m - 1, 1));
+            cmpEnd = toISODate(new Date(y, m, 0));
+          } else if (f.dateRange === "thisMonth") {
+            const startD = new Date(start + "T12:00:00");
+            const y = startD.getFullYear(), m = startD.getMonth();
+            cmpStart = toISODate(new Date(y, m - 1, 1));
+            // Same day-of-month as current end, but in the previous month (clamped to month length).
+            const endD = new Date(end + "T12:00:00");
+            const dom = endD.getDate();
+            const prevMonthLastDay = new Date(y, m, 0).getDate();
+            cmpEnd = toISODate(new Date(y, m - 1, Math.min(dom, prevMonthLastDay)));
+          } else if (f.dateRange === "lastYear") {
+            const y = new Date(start + "T12:00:00").getFullYear() - 1;
+            cmpStart = `${y}-01-01`;
+            cmpEnd = `${y}-12-31`;
+          } else if (f.dateRange === "thisYear") {
+            const y = new Date(start + "T12:00:00").getFullYear() - 1;
+            cmpStart = `${y}-01-01`;
+            const endD = new Date(end + "T12:00:00");
+            // Same day-of-year position in previous year
+            cmpEnd = toISODate(new Date(y, endD.getMonth(), endD.getDate()));
+          } else if (f.dateRange === "qtd") {
+            const startD = new Date(start + "T12:00:00");
+            const y = startD.getFullYear(), m = startD.getMonth();
+            cmpStart = toISODate(new Date(y, m - 3, 1));
+            const endD = new Date(end + "T12:00:00");
+            const offset = Math.round((endD.getTime() - startD.getTime()) / 86400000);
+            cmpEnd = addDaysISO(cmpStart, offset);
+          } else if (f.dateRange === "lastWeek" || f.dateRange === "thisWeek") {
+            // Previous 7 days immediately before the current window
+            cmpEnd = addDaysISO(start, -1);
+            cmpStart = addDaysISO(cmpEnd, -6);
+          } else {
+            // Rolling day-counts + today + yesterday: previous period of same length.
+            const len = Math.round((new Date(end + "T12:00:00").getTime() - new Date(start + "T12:00:00").getTime()) / 86400000) + 1;
+            cmpEnd = addDaysISO(start, -1);
+            cmpStart = addDaysISO(cmpEnd, -(len - 1));
+          }
         }
+
         return { start, end, cmpStart, cmpEnd };
       };
       const { start: startDate, end: endDate, cmpStart: cmpStartDate, cmpEnd: cmpEndDate } = resolveWindow();
@@ -6074,15 +6198,30 @@ ${combinedHtml}
           <>
             {/* ── View Switcher ── */}
             <div className="flex items-center gap-1.5 bg-white border border-gray-100 rounded-2xl p-1.5 shadow-sm w-fit flex-wrap max-w-full">
-              {VIEWS.map(({ key, label, icon: Icon }) => (
-                <HoverTooltip key={key} tip={VIEW_TOOLTIPS[key as ActiveView]} className="">
-                  <button onClick={() => setActiveView(key)}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${activeView === key ? "bg-purple-700 text-white shadow-sm" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"}`}>
-                    <Icon size={14} />
-                    {label}
-                  </button>
-                </HoverTooltip>
-              ))}
+              {VIEWS.map(({ key, label, icon: Icon }) => {
+                const isActive = activeView === key;
+                const isNbSignUps = key === "nbSignUps";
+                let btnClass: string;
+                if (isNbSignUps) {
+                  // Always-on green highlight, slightly darker when active.
+                  btnClass = isActive
+                    ? "bg-emerald-700 text-white shadow-sm"
+                    : "bg-emerald-600 text-white hover:bg-emerald-700";
+                } else {
+                  btnClass = isActive
+                    ? "bg-purple-700 text-white shadow-sm"
+                    : "text-gray-500 hover:text-gray-900 hover:bg-gray-50";
+                }
+                return (
+                  <HoverTooltip key={key} tip={VIEW_TOOLTIPS[key as ActiveView]} className="">
+                    <button onClick={() => setActiveView(key)}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${btnClass}`}>
+                      <Icon size={14} />
+                      {label}
+                    </button>
+                  </HoverTooltip>
+                );
+              })}
             </div>
 
             {/* ── GA4 Section ── */}
@@ -7705,10 +7844,20 @@ ${combinedHtml}
                           value={nbsuFilters.dateRange}
                           onChange={(v) => setNbsuFilters((f) => ({ ...f, dateRange: v as NbsuDateFilter["dateRange"] }))}
                           options={[
-                            { value: "7",  label: "Last 7 days" },
-                            { value: "28", label: "Last 28 days" },
-                            { value: "90", label: "Last 90 days" },
-                            { value: "custom", label: "Custom range" },
+                            { value: "today",     label: "Today" },
+                            { value: "yesterday", label: "Yesterday" },
+                            { value: "thisWeek",  label: "This week (Sun–today)" },
+                            { value: "7",         label: "Last 7 days" },
+                            { value: "lastWeek",  label: "Last week (Sun–Sat)" },
+                            { value: "28",        label: "Last 28 days" },
+                            { value: "30",        label: "Last 30 days" },
+                            { value: "thisMonth", label: "This month" },
+                            { value: "lastMonth", label: "Last month" },
+                            { value: "90",        label: "Last 90 days" },
+                            { value: "qtd",       label: "Quarter to date" },
+                            { value: "thisYear",  label: "This year (Jan–today)" },
+                            { value: "lastYear",  label: "Last calendar year" },
+                            { value: "custom",    label: "Custom range" },
                           ]}
                         />
                       </div>
