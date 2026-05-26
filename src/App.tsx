@@ -150,8 +150,8 @@ const LS_GOOGLE_TOKEN_EXP = "vcc_google_token_expires_at";
 const LS_SELECTED_GA4 = "vcc_selected_ga4";
 const LS_SELECTED_GSC = "vcc_selected_gsc";
 const LS_ACTIVE_VIEW = "vcc_active_view";
-const LS_BRAND_TERMS = "vcc_brand_terms_v4";
-const LS_BRAND_TERMS_HISTORY = "vcc_brand_terms_history_v4";
+const LS_BRAND_TERMS = "vcc_brand_terms_v5";
+const LS_BRAND_TERMS_HISTORY = "vcc_brand_terms_history_v5";
 
 function persistGoogleToken(r: { access_token?: string; expires_in?: number }) {
   if (!r.access_token) return;
@@ -1678,26 +1678,45 @@ function isBrandQuery(q: string) {
  *     so "occasion" / "cccam" / "vccountry" stay non-brand).
  *   - Terms prefixed with "=" require the *entire query* to equal the term (e.g. "=vintage"
  *     matches the bare query "vintage" but NOT "vintage clothing" or "vintage cars").
+ *   - Terms prefixed with "&" do a word-boundary match on the rest (e.g. "&cow" matches
+ *     "cash cow" and "vintage cow" but NOT "scarecrow", "cowboy", or "coward").
+ *   - Terms containing "+" require ALL parts as substrings, any order (e.g. "cash+cow"
+ *     matches "cash cow", "cow and cash", "vintage cash big cow"; "cash+vintage" matches
+ *     "vintage cash cow" and "vintage things for cash").
  *
- * The list intentionally biases toward full phrases (e.g. "vintage cash cow") rather than single
- * words ("cash cow" alone is treated as non-brand because users searching just for "cash cow"
- * aren't necessarily looking for this brand).
- *
- * Typos of "cash cow" itself (e.g. "vintage cas cow", "vintage cash coe") are treated as non-brand —
- * extend the list manually if your data suggests otherwise.
+ * Plus a built-in rule: any query containing 7+ consecutive digits (phone numbers) is brand.
  */
 const NBSEO_DEFAULT_BRAND_TERMS = [
-  // Broad core-phrase substrings — any query containing one of these is brand.
-  // These three alone cover the vast majority of brand searches (e.g. "vintage cash cow",
-  // "cash cow review", "vintagecashcow.co.uk", "vintage cash sell", etc.).
+  // ── Broad rules — these three alone catch the vast majority of brand traffic ─────────
+  // Word-boundary "cow": "cash cow", "vintage cow", "moo cow", "cow for cash" → brand.
+  //   Does NOT match "scarecrow", "coward", "cowboy", "cowork".
+  "&cow",
+  // AND-of-substrings: query must contain BOTH tokens (any order, any distance).
+  // Catches all typo combos of "cash cow" / "vintage cash X" the explicit list might miss.
+  "cash+cow",
+  "cash+vintage",
+  // Broad core-phrase substrings — kept for compatibility with the rules above; any one of
+  // these alone is enough to mark a query as brand even if the broader rules didn't fire.
   "cash cow",
   "cashcow",
   "vintage cash",
   // Hyphenated / punctuated variants the substrings above don't catch.
   "vintage-cash-cow",
   "cash-cow",
-  // Misspellings of "cash cow" / "cashcow" — only the ones tightly tied to the brand
-  // (i.e. they include enough context to not be ambiguous on their own).
+  // Misspellings of "cash cow" / "cashcow" — these are belt-and-braces: the broad rules
+  // above already catch most of them, but listing them explicitly makes the classifier
+  // self-documenting in the UI and protects against the broad rules being removed.
+  "cadh cow",
+  "cas cow",
+  "cash and cow",
+  "cash for cow",
+  "casj cow",
+  "vintage cow",
+  // These two typos don't contain "cow" at all, so they're NOT caught by &cow or cash+cow.
+  // They must stay as explicit substring entries.
+  "cash ciw",
+  "cash cpw",
+  // Pre-existing misspellings (kept for documentation / fallback)
   "cach cow",
   "cach-cow",
   "cashcoe",
@@ -1752,14 +1771,20 @@ function looksLikePhoneNumber(ql: string): boolean {
 
 /**
  * Classify a query against a list of brand terms.
- * - Case-insensitive substring match by default.
- * - For very short terms (≤3 chars) like "vcc" or "cc", use a word-boundary regex so we don't
- *   match "vccountry", "vccs", "occasion", "cccam", etc.
- * - For terms prefixed with "=" (e.g. "=vintage"), require the query to equal the term exactly
- *   (after trim + lowercase). This lets us flag a bare "vintage" as brand without sweeping up
- *   every query that contains the word "vintage" (e.g. "vintage clothing", "vintage cars").
- * - Built-in: any query containing a phone-number-shaped digit sequence (7+ digits after stripping
- *   separators) is treated as brand — see `looksLikePhoneNumber`.
+ *
+ * Term conventions supported (all case-insensitive):
+ *   - Plain phrase (≥ 4 chars): substring match. e.g. "vintage cash" matches "vintage cash cow".
+ *   - Plain short token (≤ 3 chars, e.g. "vcc" / "cc"): word-boundary match, so "occasion" /
+ *     "cccam" / "vccountry" don't get flagged.
+ *   - "=phrase": exact-match-only. e.g. "=vintage" matches the bare query "vintage" but NOT
+ *     "vintage clothing".
+ *   - "&word": word-boundary match for words of any length. e.g. "&cow" matches "cash cow",
+ *     "vintage cow", "moo cow"; does NOT match "scarecrow", "coward", "cowboy".
+ *   - "a+b" (or "a+b+c"): AND match. The query must contain every token as a substring (in any
+ *     order). e.g. "cash+cow" matches "cash cow", "cow for cash", "cash and cow", "cash ciw cow".
+ *
+ * Built-in (not configurable): any query containing a phone-number-shaped digit sequence
+ * (7+ digits after stripping separators) is treated as brand — see `looksLikePhoneNumber`.
  */
 function nbSeoClassify(query: string, terms: string[]): "brand" | "nonBrand" {
   const ql = query.toLowerCase().trim();
@@ -1768,18 +1793,33 @@ function nbSeoClassify(query: string, terms: string[]): "brand" | "nonBrand" {
   for (const raw of terms) {
     const t = raw.toLowerCase().trim();
     if (!t) continue;
+    // — Exact-match-only ("=phrase") —
     if (t.startsWith("=")) {
-      // Exact-match-only term
       const exact = t.slice(1).trim();
       if (exact && ql === exact) return "brand";
       continue;
     }
+    // — Word-boundary on a single word ("&word") —
+    if (t.startsWith("&")) {
+      const word = t.slice(1).trim();
+      if (!word) continue;
+      const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      try { if (new RegExp(`\\b${escaped}\\b`, "i").test(ql)) return "brand"; } catch { /* fall through */ }
+      continue;
+    }
+    // — AND of substrings ("a+b" / "a+b+c") —
+    if (t.includes("+")) {
+      const parts = t.split("+").map((p) => p.trim()).filter(Boolean);
+      if (parts.length >= 2 && parts.every((p) => ql.includes(p))) return "brand";
+      continue;
+    }
+    // — Short tokens: word-boundary by default to avoid acronym collisions —
     if (t.length <= 3) {
-      // word-boundary check for short acronyms — escape regex specials
       const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       try {
         if (new RegExp(`\\b${escaped}\\b`, "i").test(ql)) return "brand";
       } catch { /* fall through */ }
+    // — Default: case-insensitive substring —
     } else if (ql.includes(t)) {
       return "brand";
     }
