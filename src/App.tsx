@@ -150,8 +150,8 @@ const LS_GOOGLE_TOKEN_EXP = "vcc_google_token_expires_at";
 const LS_SELECTED_GA4 = "vcc_selected_ga4";
 const LS_SELECTED_GSC = "vcc_selected_gsc";
 const LS_ACTIVE_VIEW = "vcc_active_view";
-const LS_BRAND_TERMS = "vcc_brand_terms_v3";
-const LS_BRAND_TERMS_HISTORY = "vcc_brand_terms_history_v3";
+const LS_BRAND_TERMS = "vcc_brand_terms_v4";
+const LS_BRAND_TERMS_HISTORY = "vcc_brand_terms_history_v4";
 
 function persistGoogleToken(r: { access_token?: string; expires_in?: number }) {
   if (!r.access_token) return;
@@ -1703,11 +1703,16 @@ const NBSEO_DEFAULT_BRAND_TERMS = [
   "cashcoe",
   "cashcoa",
   "cashcou",
+  "cashciw",
   "cash coe",
   "cash cou",
+  "ash cow",
+  "cash ow",
+  "xash cow",
   "vintage cach",
   "vintage cashc",
   "vintage cas cow",
+  "vintage cow cash",
   "vintige cash",
   "vintge cash",
   "vintge cashcow",
@@ -1731,6 +1736,21 @@ const NBSEO_DEFAULT_BRAND_TERMS = [
 ];
 
 /**
+ * Built-in rule (not part of the user-editable list): any query containing a phone-number-shaped
+ * sequence — 7 or more consecutive digits, ignoring common separators (spaces, dashes, dots,
+ * parentheses, and a leading +) — is classified as brand. Rationale: people searching for a
+ * specific phone number are almost always trying to identify or contact a known company.
+ *
+ * Examples that match: "0800 123 4567", "+44 1234 567890", "08001234567", "(0114) 1234567".
+ * Examples that don't: "top 10 vintage cars", "iphone 15", "2024 prices".
+ */
+function looksLikePhoneNumber(ql: string): boolean {
+  // Strip whitespace, dashes, dots, parentheses, and a leading +. Then look for a run of 7+ digits.
+  const stripped = ql.replace(/[\s().+\-]/g, "");
+  return /\d{7,}/.test(stripped);
+}
+
+/**
  * Classify a query against a list of brand terms.
  * - Case-insensitive substring match by default.
  * - For very short terms (≤3 chars) like "vcc" or "cc", use a word-boundary regex so we don't
@@ -1738,10 +1758,13 @@ const NBSEO_DEFAULT_BRAND_TERMS = [
  * - For terms prefixed with "=" (e.g. "=vintage"), require the query to equal the term exactly
  *   (after trim + lowercase). This lets us flag a bare "vintage" as brand without sweeping up
  *   every query that contains the word "vintage" (e.g. "vintage clothing", "vintage cars").
+ * - Built-in: any query containing a phone-number-shaped digit sequence (7+ digits after stripping
+ *   separators) is treated as brand — see `looksLikePhoneNumber`.
  */
 function nbSeoClassify(query: string, terms: string[]): "brand" | "nonBrand" {
   const ql = query.toLowerCase().trim();
   if (!ql) return "nonBrand";
+  if (looksLikePhoneNumber(ql)) return "brand";
   for (const raw of terms) {
     const t = raw.toLowerCase().trim();
     if (!t) continue;
