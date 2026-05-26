@@ -150,8 +150,8 @@ const LS_GOOGLE_TOKEN_EXP = "vcc_google_token_expires_at";
 const LS_SELECTED_GA4 = "vcc_selected_ga4";
 const LS_SELECTED_GSC = "vcc_selected_gsc";
 const LS_ACTIVE_VIEW = "vcc_active_view";
-const LS_BRAND_TERMS = "vcc_brand_terms";
-const LS_BRAND_TERMS_HISTORY = "vcc_brand_terms_history";
+const LS_BRAND_TERMS = "vcc_brand_terms_v2";
+const LS_BRAND_TERMS_HISTORY = "vcc_brand_terms_history_v2";
 
 function persistGoogleToken(r: { access_token?: string; expires_in?: number }) {
   if (!r.access_token) return;
@@ -1671,10 +1671,17 @@ function isBrandQuery(q: string) {
 /**
  * Default brand keyword list for the Non-Brand SEO section. Users can edit/extend this in the UI.
  *
- * IMPORTANT: classification is via substring matching, so terms here should be the actual phrases
- * that mark a query as brand. The list intentionally biases toward full phrases (e.g. "vintage cash cow")
- * rather than single words ("cash cow" alone is treated as non-brand because users searching just for
- * "cash cow" aren't necessarily looking for this brand).
+ * IMPORTANT: classification rules (see `nbSeoClassify` for the implementation):
+ *   - Terms ≥ 4 chars use case-insensitive substring matching (e.g. "vinted" matches
+ *     "vinted", "vinted app", "is vinted safe", etc.).
+ *   - Terms ≤ 3 chars use a word-boundary regex (e.g. "vcc" and "cc" match as whole words only,
+ *     so "occasion" / "cccam" / "vccountry" stay non-brand).
+ *   - Terms prefixed with "=" require the *entire query* to equal the term (e.g. "=vintage"
+ *     matches the bare query "vintage" but NOT "vintage clothing" or "vintage cars").
+ *
+ * The list intentionally biases toward full phrases (e.g. "vintage cash cow") rather than single
+ * words ("cash cow" alone is treated as non-brand because users searching just for "cash cow"
+ * aren't necessarily looking for this brand).
  *
  * Typos of "cash cow" itself (e.g. "vintage cas cow", "vintage cash coe") are treated as non-brand —
  * extend the list manually if your data suggests otherwise.
@@ -1690,8 +1697,16 @@ const NBSEO_DEFAULT_BRAND_TERMS = [
   // Domain references
   "vintagecashcow.co.uk",
   "vintagecashcow co uk",
-  // Short / abbreviated
+  // Short / abbreviated (word-boundary matched because length ≤ 3)
   "vcc",
+  "cc",
+  // Common confusions / competitor / look-alike terms users search alongside the brand
+  "vinted",
+  "vintage cc",
+  "vintage trading",
+  // Exact-match-only: a query that is *literally* the word "vintage" on its own is treated as brand,
+  // but "vintage clothing", "vintage cars", etc. stay non-brand. Leading "=" marks exact-match.
+  "=vintage",
   // Misspellings / alternate brand renderings
   "arcavindi",
   "arca vindi",
@@ -1699,8 +1714,12 @@ const NBSEO_DEFAULT_BRAND_TERMS = [
 
 /**
  * Classify a query against a list of brand terms.
- * - Case-insensitive substring match.
- * - For very short terms (≤3 chars) like "vcc", use a word-boundary regex so we don't match "vccountry" or "vccs".
+ * - Case-insensitive substring match by default.
+ * - For very short terms (≤3 chars) like "vcc" or "cc", use a word-boundary regex so we don't
+ *   match "vccountry", "vccs", "occasion", "cccam", etc.
+ * - For terms prefixed with "=" (e.g. "=vintage"), require the query to equal the term exactly
+ *   (after trim + lowercase). This lets us flag a bare "vintage" as brand without sweeping up
+ *   every query that contains the word "vintage" (e.g. "vintage clothing", "vintage cars").
  */
 function nbSeoClassify(query: string, terms: string[]): "brand" | "nonBrand" {
   const ql = query.toLowerCase().trim();
@@ -1708,6 +1727,12 @@ function nbSeoClassify(query: string, terms: string[]): "brand" | "nonBrand" {
   for (const raw of terms) {
     const t = raw.toLowerCase().trim();
     if (!t) continue;
+    if (t.startsWith("=")) {
+      // Exact-match-only term
+      const exact = t.slice(1).trim();
+      if (exact && ql === exact) return "brand";
+      continue;
+    }
     if (t.length <= 3) {
       // word-boundary check for short acronyms — escape regex specials
       const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
