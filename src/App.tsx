@@ -150,8 +150,8 @@ const LS_GOOGLE_TOKEN_EXP = "vcc_google_token_expires_at";
 const LS_SELECTED_GA4 = "vcc_selected_ga4";
 const LS_SELECTED_GSC = "vcc_selected_gsc";
 const LS_ACTIVE_VIEW = "vcc_active_view";
-const LS_BRAND_TERMS = "vcc_brand_terms_v2";
-const LS_BRAND_TERMS_HISTORY = "vcc_brand_terms_history_v2";
+const LS_BRAND_TERMS = "vcc_brand_terms_v3";
+const LS_BRAND_TERMS_HISTORY = "vcc_brand_terms_history_v3";
 
 function persistGoogleToken(r: { access_token?: string; expires_in?: number }) {
   if (!r.access_token) return;
@@ -1687,17 +1687,35 @@ function isBrandQuery(q: string) {
  * extend the list manually if your data suggests otherwise.
  */
 const NBSEO_DEFAULT_BRAND_TERMS = [
-  // Full-phrase variants
-  "vintage cash cow",
-  "vintagecashcow",
-  "vintage cashcow",
-  "vintagecash cow",
+  // Broad core-phrase substrings — any query containing one of these is brand.
+  // These three alone cover the vast majority of brand searches (e.g. "vintage cash cow",
+  // "cash cow review", "vintagecashcow.co.uk", "vintage cash sell", etc.).
+  "cash cow",
+  "cashcow",
+  "vintage cash",
+  // Hyphenated / punctuated variants the substrings above don't catch.
   "vintage-cash-cow",
-  "cash cow vintage",
-  // Domain references
-  "vintagecashcow.co.uk",
-  "vintagecashcow co uk",
-  // Short / abbreviated (word-boundary matched because length ≤ 3)
+  "cash-cow",
+  // Misspellings of "cash cow" / "cashcow" — only the ones tightly tied to the brand
+  // (i.e. they include enough context to not be ambiguous on their own).
+  "cach cow",
+  "cach-cow",
+  "cashcoe",
+  "cashcoa",
+  "cashcou",
+  "cash coe",
+  "cash cou",
+  "vintage cach",
+  "vintage cashc",
+  "vintage cas cow",
+  "vintige cash",
+  "vintge cash",
+  "vintge cashcow",
+  "vinatge cash",
+  "vinatage cash",
+  "vintaecashcow",
+  "vintagcashcow",
+  // Short / abbreviated (word-boundary matched because length ≤ 3, so "occasion" / "cccam" stay non-brand)
   "vcc",
   "cc",
   // Common confusions / competitor / look-alike terms users search alongside the brand
@@ -1707,7 +1725,7 @@ const NBSEO_DEFAULT_BRAND_TERMS = [
   // Exact-match-only: a query that is *literally* the word "vintage" on its own is treated as brand,
   // but "vintage clothing", "vintage cars", etc. stay non-brand. Leading "=" marks exact-match.
   "=vintage",
-  // Misspellings / alternate brand renderings
+  // Misspellings / alternate brand renderings of the company name itself
   "arcavindi",
   "arca vindi",
 ];
