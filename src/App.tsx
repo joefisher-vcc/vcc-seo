@@ -651,7 +651,7 @@ function ChartCard({ title, children, className = "", tip }: { title: React.Reac
 /** Scrollable table body area (~10 table rows visible). */
 function ScrollTable({ children, className = "", maxH }: { children: React.ReactNode; className?: string; maxH?: string }) {
   return (
-    <div className={`overflow-x-auto overflow-y-auto rounded-xl border border-gray-50 ${className}`} style={{ maxHeight: maxH ?? "17.5rem" }}>
+    <div className={`overflow-x-auto overflow-y-auto overscroll-contain rounded-xl border border-gray-50 ${className}`} style={{ maxHeight: maxH ?? "17.5rem", WebkitOverflowScrolling: "touch" }}>
       {children}
     </div>
   );
@@ -3294,6 +3294,9 @@ export default function App() {
      *  Used to compute query-level winners/losers and per-page query-count movement. */
     queryPageRowsCur: { page: string; query: string; clicks: number; impressions: number; position: number; cls: "brand" | "nonBrand" }[];
     queryPageRowsCmp: { page: string; query: string; clicks: number; impressions: number; position: number; cls: "brand" | "nonBrand" }[];
+    /** Daily series for the current period — clicks and sign-ups split by site-wide brand ratio.
+     *  Used to render the brand vs non-brand trend chart. */
+    daily: { date: string; brandClicks: number; nonBrandClicks: number; brandLeads: number; nonBrandLeads: number }[];
     period: { start: string; end: string };
     cmpPeriod: { start: string; end: string };
     fetchedAt: number;
@@ -3327,6 +3330,11 @@ export default function App() {
   const [nbsuData, setNbsuData] = useState<NbsuDataType | null>(null);
   const [nbsuLoading, setNbsuLoading] = useState(false);
   const [nbsuShowTransparency, setNbsuShowTransparency] = useState(false);
+  /** Toggle for the trend chart — clicks vs sign-ups. */
+  const [nbsuTrendMetric, setNbsuTrendMetric] = useState<"clicks" | "leads">("clicks");
+  /** Drill-down: when set, the landing-pages table is hidden and a query-list for this page
+   *  is shown instead. `cls` controls whether brand or non-brand queries are listed. */
+  const [nbsuDrill, setNbsuDrill] = useState<{ page: string; cls: "brand" | "nonBrand" } | null>(null);
   /** Expanded-row tracker for the query/url movement tables. Key format: `${tableId}::${rowKey}`. */
   const [nbsuExpanded, setNbsuExpanded] = useState<Set<string>>(new Set());
   const [queryCopyResults, setQueryCopyResults] = useState<Map<string, { text: string; queryHits: Map<string, boolean> }>>(new Map());
@@ -4906,6 +4914,7 @@ export default function App() {
     if (!selectedGSC || !accessToken || !selectedGA4) return;
     setNbsuLoading(true);
     setNbsuData(null);
+    setNbsuDrill(null);
     try {
       const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
       const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
@@ -5118,13 +5127,46 @@ export default function App() {
       const emptyGsc: Promise<GscRow[]> = Promise.resolve([]);
       const emptyGa4: Promise<Ga4Resp> = Promise.resolve({ rows: [] });
 
-      const [pageQueryCur, pageQueryCmp, ga4SessCur, ga4SessCmp, ga4FspCur, ga4FspCmp] = await Promise.all([
+      // ── GSC: daily total clicks for the current period (no comparison) ─────
+      // Used to build the brand vs non-brand time series in the UI. We split each
+      // day's clicks by the period-wide brand/non-brand ratio (same approximation
+      // as the Brand-vs-NonBrand section). For a more accurate per-day split we
+      // would need a [date, query] fetch, but that runs into rowLimit issues on
+      // long windows and the period-wide ratio is a reasonable trend proxy.
+      const gscDaySpan = Math.max(
+        1,
+        Math.round((new Date(endDate).getTime() - new Date(startDate).getTime()) / 86400000) + 1,
+      );
+      const gscDailyFetch = async (s: string, e: string): Promise<{ date: string; clicks: number }[]> => {
+        const body = JSON.stringify({ startDate: s, endDate: e, dimensions: ["date"], rowLimit: Math.max(gscDaySpan, 25) });
+        const res = await fetch(gscBase, { method: "POST", headers, body }).then((r) => r.json());
+        return ((res?.rows ?? []) as GscRow[]).map((r) => ({ date: r.keys[0], clicks: Math.round(r.clicks ?? 0) }));
+      };
+
+      // ── GA4: daily generate_lead key-event count (Organic Search) ──────────
+      const ga4FspDaily = (s: string, e: string) => JSON.stringify({
+        dateRanges: [{ startDate: s, endDate: e }],
+        dimensions: [{ name: "date" }],
+        metrics: [{ name: "keyEvents" }],
+        dimensionFilter: {
+          andGroup: { expressions: [
+            { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
+            { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } },
+          ]},
+        },
+        orderBys: [{ dimension: { dimensionName: "date" } }],
+        limit: 1000,
+      });
+
+      const [pageQueryCur, pageQueryCmp, ga4SessCur, ga4SessCmp, ga4FspCur, ga4FspCmp, gscDailyCur, ga4FspDailyCur] = await Promise.all([
         gscFetch(startDate, endDate),
         hasCmp ? gscFetch(cmpStartDate, cmpEndDate) : emptyGsc,
         ga4Fetch(ga4SessionsByLandingPage(startDate, endDate)),
         hasCmp ? ga4Fetch(ga4SessionsByLandingPage(cmpStartDate, cmpEndDate)) : emptyGa4,
         ga4Fetch(ga4FspLeadsByLandingPage(startDate, endDate)),
         hasCmp ? ga4Fetch(ga4FspLeadsByLandingPage(cmpStartDate, cmpEndDate)) : emptyGa4,
+        gscDailyFetch(startDate, endDate),
+        ga4Fetch(ga4FspDaily(startDate, endDate)),
       ]);
 
       // ── Aggregate GSC CLICKS per landing page, split brand vs non-brand ────
@@ -5270,6 +5312,39 @@ export default function App() {
       const queryPageRowsCur = projectGsc(pageQueryCur);
       const queryPageRowsCmp = projectGsc(pageQueryCmp);
 
+      // ── Build daily time series ─────────────────────────────────────────────
+      // Index GA4 daily generate_lead by date (YYYYMMDD format from the API).
+      // Then for each GSC daily clicks row, split brand/non-brand using the
+      // period-wide site ratio, and also split that day's GA4 leads by the
+      // same ratio. This is the same approximation used by the existing
+      // Brand-vs-Non-Brand trend chart elsewhere in the app.
+      const ga4DailyLeadMap = new Map<string, number>();
+      ((ga4FspDailyCur as Ga4Resp).rows ?? []).forEach((r) => {
+        const ymd = r.dimensionValues?.[0]?.value ?? ""; // e.g. "20250515"
+        const iso = ymd.length === 8 ? `${ymd.slice(0,4)}-${ymd.slice(4,6)}-${ymd.slice(6,8)}` : ymd;
+        const v = Number(r.metricValues?.[0]?.value ?? 0);
+        if (iso) ga4DailyLeadMap.set(iso, (ga4DailyLeadMap.get(iso) ?? 0) + v);
+      });
+      // GSC dates come as "YYYY-MM-DD" already.
+      const brandShare = 1 - siteWideNbRatio;
+      const dailyDates = new Set<string>();
+      gscDailyCur.forEach((r) => dailyDates.add(r.date));
+      ga4DailyLeadMap.forEach((_, k) => dailyDates.add(k));
+      const dailyClicksMap = new Map(gscDailyCur.map((r) => [r.date, r.clicks]));
+      const daily = Array.from(dailyDates)
+        .sort()
+        .map((date) => {
+          const clicks = dailyClicksMap.get(date) ?? 0;
+          const leads = ga4DailyLeadMap.get(date) ?? 0;
+          return {
+            date,
+            brandClicks: Math.round(clicks * brandShare),
+            nonBrandClicks: Math.round(clicks * siteWideNbRatio),
+            brandLeads: leads * brandShare,
+            nonBrandLeads: leads * siteWideNbRatio,
+          };
+        });
+
       setNbsuData({
         rows,
         totals: {
@@ -5287,6 +5362,7 @@ export default function App() {
         },
         queryPageRowsCur,
         queryPageRowsCmp,
+        daily,
         period: { start: startDate, end: endDate },
         cmpPeriod: { start: cmpStartDate, end: cmpEndDate },
         fetchedAt: Date.now(),
@@ -7679,7 +7755,7 @@ ${combinedHtml}
                           title="/items-we-buy/ landing pages"
                           tip="One row per landing page under /items-we-buy/. The NB/B ratio is impression-weighted from GSC: brand impressions vs non-brand impressions for queries that page ranked on. Non-brand and Brand FSP referrers split the GA4 FSP-referrer count by that ratio."
                         >
-                          <div className="overflow-x-auto overflow-y-auto rounded-xl border border-gray-50" style={{ maxHeight: 540 }}>
+                          <div className="overflow-x-auto overflow-y-auto overscroll-contain rounded-xl border border-gray-50" style={{ maxHeight: 540, WebkitOverflowScrolling: "touch" }}>
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 bg-white z-10">
                                 <tr className="text-left text-gray-400 border-b border-gray-100">
@@ -7846,7 +7922,7 @@ ${combinedHtml}
                               <div className="bg-white border border-gray-100 rounded-xl p-4">
                                 <div className="text-xs font-bold text-gray-700 mb-2">Top 50 queries — current classification</div>
                                 <div className="text-[10px] text-gray-400 mb-2">Brand: {nbsClassifierPreviewSummary.brand} · Non-brand: {nbsClassifierPreviewSummary.nonBrand}</div>
-                                <div className="overflow-y-auto rounded-lg border border-gray-50" style={{ maxHeight: 240 }}>
+                                <div className="overflow-y-auto overscroll-contain rounded-lg border border-gray-50" style={{ maxHeight: 240, WebkitOverflowScrolling: "touch" }}>
                                   <table className="w-full text-xs">
                                     <thead className="sticky top-0 bg-white"><tr className="text-left text-gray-400 border-b border-gray-100"><th className="pb-1 pr-2 font-medium">Query</th><th className="pb-1 pr-2 font-medium text-right">Clicks</th><th className="pb-1 font-medium text-right">Class.</th></tr></thead>
                                     <tbody>
@@ -8057,76 +8133,287 @@ ${combinedHtml}
                           </div>
                         </div>
 
-                        {/* Landing pages table */}
-                        <ChartCard
-                          title="Landing pages (whole site)"
-                          tip="One row per landing page. The NB/B ratio is click-weighted from GSC: brand clicks vs non-brand clicks for queries that page ranked on. NB and Brand sign-ups split the GA4 generate_lead key-event count from organic sessions by that ratio."
-                        >
-                          <div className="overflow-x-auto overflow-y-auto rounded-xl border border-gray-50" style={{ maxHeight: 540 }}>
-                            <table className="w-full text-xs">
-                              <thead className="sticky top-0 bg-white z-10">
-                                <tr className="text-left text-gray-400 border-b border-gray-100">
-                                  <SortableTh label="Landing page" sortKey="page" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium" />
-                                  <SortableTh label="NB / B ratio" sortKey="nonBrandRatio" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
-                                  <SortableTh label="Org. sessions" sortKey="orgSessions" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
-                                  <SortableTh label="Total SEO sign-ups" sortKey="fspLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
-                                  <SortableTh label="NB SEO sign-ups" sortKey="nbLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
-                                  <SortableTh label="Brand SEO sign-ups" sortKey="brandLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {nbsuSort.sorted.slice(0, 300).map((r, i) => {
-                                  // Inline change badge: show % when previous>0; show "new" tag when previous==0 but current>0; "—" when both zero
-                                  const changeBadge = (cur: number, prev: number, isInt: boolean) => {
-                                    const curR = isInt ? Math.round(cur) : cur;
-                                    const prevR = isInt ? Math.round(prev) : prev;
-                                    if (!hasCmp) return null;
-                                    if (prevR <= 0 && curR <= 0) return null;
-                                    if (prevR <= 0 && curR > 0) {
-                                      return <div className="text-[10px] font-bold text-emerald-600">new</div>;
-                                    }
-                                    if (prevR > 0 && curR <= 0) {
-                                      return <div className="text-[10px] font-bold text-red-500">−100%</div>;
-                                    }
-                                    const p = ((curR - prevR) / prevR) * 100;
-                                    return <div className={`text-[10px] font-bold ${p >= 0 ? "text-emerald-600" : "text-red-500"}`}>{p >= 0 ? "+" : ""}{p.toFixed(0)}%</div>;
-                                  };
-                                  return (
-                                    <tr key={i} className="border-b border-gray-50 hover:bg-emerald-50/30">
-                                      <td className="py-2 pr-2 max-w-[280px] truncate" title={r.page}><UrlLink url={r.page} className="text-gray-700" /></td>
-                                      <td className="py-2 pr-2 text-right tabular-nums">
-                                        <span className="text-emerald-700 font-semibold">{(r.nonBrandRatio * 100).toFixed(1)}%</span>
-                                        <span className="text-gray-300"> / </span>
-                                        <span className="text-[#5b4fa8] font-semibold">{((1 - r.nonBrandRatio) * 100).toFixed(1)}%</span>
-                                        <div className="text-[10px] text-gray-400">{r.nonBrandClicks.toLocaleString()} / {r.brandClicks.toLocaleString()} clicks{r.usedSiteWideRatio ? " · fallback" : ""}</div>
-                                      </td>
-                                      <td className="py-2 pr-2 text-right tabular-nums text-gray-900 font-semibold">
-                                        {r.orgSessions.toLocaleString()}
-                                        {changeBadge(r.orgSessions, r.orgSessionsCmp, true)}
-                                      </td>
-                                      <td className="py-2 pr-2 text-right tabular-nums text-sky-700 font-semibold">
-                                        {r.fspLeads.toLocaleString()}
-                                        {changeBadge(r.fspLeads, r.fspLeadsCmp, true)}
-                                      </td>
-                                      <td className="py-2 pr-2 text-right tabular-nums text-emerald-700 font-semibold">
-                                        {Math.round(r.nbLeads).toLocaleString()}
-                                        {changeBadge(r.nbLeads, r.nbLeadsCmp, true)}
-                                      </td>
-                                      <td className="py-2 pr-2 text-right tabular-nums text-[#5b4fa8] font-semibold">
-                                        {Math.round(r.brandLeads).toLocaleString()}
-                                        {changeBadge(r.brandLeads, r.brandLeadsCmp, true)}
-                                      </td>
+                        {/* Brand vs Non-brand trend chart ── shows daily clicks + sign-ups */}
+                        {d.daily.length > 0 && (() => {
+                          const chartData = d.daily.map((r) => ({
+                            date: formatDisplayDate(r.date),
+                            nonBrandClicks: r.nonBrandClicks,
+                            brandClicks: r.brandClicks,
+                            nonBrandLeads: Math.round(r.nonBrandLeads * 100) / 100,
+                            brandLeads: Math.round(r.brandLeads * 100) / 100,
+                          }));
+                          const metricOptions: { key: "clicks" | "leads"; label: string }[] = [
+                            { key: "clicks", label: "Organic traffic (clicks)" },
+                            { key: "leads",  label: "Sign-ups (generate_lead)" },
+                          ];
+                          return (
+                            <ChartCard
+                              title={
+                                <div className="flex items-center justify-between gap-3 flex-wrap w-full">
+                                  <span>Brand vs Non-brand — daily trend</span>
+                                  <div className="flex items-center gap-1 bg-gray-50 border border-gray-100 rounded-lg p-0.5">
+                                    {metricOptions.map((m) => (
+                                      <button
+                                        key={m.key}
+                                        type="button"
+                                        onClick={() => setNbsuTrendMetric(m.key)}
+                                        className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${nbsuTrendMetric === m.key ? "bg-white text-gray-900 shadow-sm border border-gray-200" : "text-gray-500 hover:text-gray-700"}`}
+                                      >
+                                        {m.label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              }
+                              tip="Daily split for the whole site over the selected period. Each day's clicks (or modelled sign-ups) is split brand vs non-brand using the site-wide click-weighted ratio — same approach as the headline KPIs. Toggle to switch metric. Sign-ups can be fractional because they're modelled."
+                            >
+                              <div style={{ width: "100%", height: 260 }}>
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                                    <CartesianGrid stroke="#f3f4f6" vertical={false} />
+                                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={{ stroke: "#e5e7eb" }} tickLine={false} />
+                                    <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={{ stroke: "#e5e7eb" }} tickLine={false} />
+                                    <Tooltip
+                                      contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e5e7eb" }}
+                                      formatter={((v: number) => Number.isFinite(v) ? v.toLocaleString(undefined, { maximumFractionDigits: 1 }) : v) as never}
+                                    />
+                                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                                    {nbsuTrendMetric === "clicks" ? (
+                                      <>
+                                        <Line type="monotone" dataKey="nonBrandClicks" name="Non-brand clicks" stroke="#059669" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                                        <Line type="monotone" dataKey="brandClicks"    name="Brand clicks"     stroke="#5b4fa8" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Line type="monotone" dataKey="nonBrandLeads" name="Non-brand sign-ups" stroke="#059669" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                                        <Line type="monotone" dataKey="brandLeads"    name="Brand sign-ups"     stroke="#5b4fa8" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                                      </>
+                                    )}
+                                  </LineChart>
+                                </ResponsiveContainer>
+                              </div>
+                              <div className="text-[10px] text-gray-400 mt-2">
+                                Daily split uses the site-wide click-weighted brand ratio of {(d.totals.siteWideNbRatio * 100).toFixed(1)}% non-brand for the selected period. Sign-ups are modelled (GA4 generate_lead × ratio).
+                              </div>
+                            </ChartCard>
+                          );
+                        })()}
+
+                        {/* Landing pages table OR per-page query drill-down */}
+                        {nbsuDrill ? (() => {
+                          // Drill-down: list queries for the chosen landing page, filtered by class.
+                          const pageRows = d.queryPageRowsCur.filter((r) => r.page === nbsuDrill.page && r.cls === nbsuDrill.cls);
+                          const cmpRows = d.queryPageRowsCmp.filter((r) => r.page === nbsuDrill.page && r.cls === nbsuDrill.cls);
+                          const cmpByQuery = new Map(cmpRows.map((r) => [r.query, r]));
+                          const totalClicks = pageRows.reduce((s, r) => s + r.clicks, 0);
+                          const totalImpr   = pageRows.reduce((s, r) => s + r.impressions, 0);
+                          const totalClicksCmp = cmpRows.reduce((s, r) => s + r.clicks, 0);
+                          const totalImprCmp   = cmpRows.reduce((s, r) => s + r.impressions, 0);
+                          const sorted = [...pageRows].sort((a, b) => b.clicks - a.clicks);
+                          const isBrand = nbsuDrill.cls === "brand";
+                          const accent = isBrand ? "#5b4fa8" : "#059669";
+                          const accentBg = isBrand ? "bg-purple-50" : "bg-emerald-50";
+                          const accentBorder = isBrand ? "border-purple-100" : "border-emerald-100";
+                          const pctDelta = (a: number, b: number) => (b > 0 ? ((a - b) / b) * 100 : (a > 0 ? 100 : 0));
+                          return (
+                            <ChartCard
+                              title={
+                                <div className="flex items-center justify-between gap-3 flex-wrap w-full">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => setNbsuDrill(null)}
+                                      className="text-[11px] font-semibold text-gray-500 hover:text-gray-900 flex items-center gap-1 shrink-0"
+                                    >
+                                      <span aria-hidden>←</span> Back to landing pages
+                                    </button>
+                                    <span className="text-gray-300">·</span>
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isBrand ? "bg-purple-100 text-[#5b4fa8]" : "bg-emerald-100 text-emerald-700"}`}>
+                                      {isBrand ? "Brand queries" : "Non-brand queries"}
+                                    </span>
+                                    <span className="text-[12px] text-gray-700 font-mono truncate" title={nbsuDrill.page}>{nbsuDrill.page}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1 bg-gray-50 border border-gray-100 rounded-lg p-0.5 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => setNbsuDrill({ page: nbsuDrill.page, cls: "nonBrand" })}
+                                      className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${!isBrand ? "bg-white text-emerald-700 shadow-sm border border-gray-200" : "text-gray-500 hover:text-gray-700"}`}
+                                    >Non-brand</button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setNbsuDrill({ page: nbsuDrill.page, cls: "brand" })}
+                                      className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${isBrand ? "bg-white text-[#5b4fa8] shadow-sm border border-gray-200" : "text-gray-500 hover:text-gray-700"}`}
+                                    >Brand</button>
+                                  </div>
+                                </div>
+                              }
+                              tip="Queries that this landing page ranked on during the selected period, filtered by brand vs non-brand. Sorted by clicks. The comparison column shows movement vs the comparison period when available."
+                            >
+                              {/* Summary strip */}
+                              <div className={`grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3 ${accentBg} border ${accentBorder} rounded-xl p-3`}>
+                                <div>
+                                  <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Queries</div>
+                                  <div className="text-base font-bold tabular-nums" style={{ color: accent }}>{sorted.length.toLocaleString()}</div>
+                                </div>
+                                <div>
+                                  <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Clicks</div>
+                                  <div className="text-base font-bold tabular-nums" style={{ color: accent }}>
+                                    {totalClicks.toLocaleString()}
+                                    {hasCmp && totalClicksCmp > 0 && (() => {
+                                      const p = pctDelta(totalClicks, totalClicksCmp);
+                                      return <span className={`ml-1.5 text-[10px] font-bold ${p >= 0 ? "text-emerald-600" : "text-red-500"}`}>{p >= 0 ? "+" : ""}{p.toFixed(0)}%</span>;
+                                    })()}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Impressions</div>
+                                  <div className="text-base font-bold tabular-nums text-gray-700">
+                                    {totalImpr.toLocaleString()}
+                                    {hasCmp && totalImprCmp > 0 && (() => {
+                                      const p = pctDelta(totalImpr, totalImprCmp);
+                                      return <span className={`ml-1.5 text-[10px] font-bold ${p >= 0 ? "text-emerald-600" : "text-red-500"}`}>{p >= 0 ? "+" : ""}{p.toFixed(0)}%</span>;
+                                    })()}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Avg CTR</div>
+                                  <div className="text-base font-bold tabular-nums text-gray-700">{totalImpr > 0 ? ((totalClicks / totalImpr) * 100).toFixed(2) + "%" : "—"}</div>
+                                </div>
+                              </div>
+
+                              <div className="overflow-x-auto overflow-y-auto overscroll-contain rounded-xl border border-gray-50" style={{ maxHeight: 540, WebkitOverflowScrolling: "touch" }}>
+                                <table className="w-full text-xs">
+                                  <thead className="sticky top-0 bg-white z-10">
+                                    <tr className="text-left text-gray-400 border-b border-gray-100">
+                                      <th className="pb-2 pr-2 font-medium">Query</th>
+                                      <th className="pb-2 pr-2 font-medium text-right">Clicks</th>
+                                      <th className="pb-2 pr-2 font-medium text-right">Impr.</th>
+                                      <th className="pb-2 pr-2 font-medium text-right">CTR</th>
+                                      <th className="pb-2 font-medium text-right">Pos.</th>
                                     </tr>
-                                  );
-                                })}
-                                {nbsuSort.sorted.length === 0 && (
-                                  <tr><td colSpan={6} className="py-6 text-center text-gray-400">No landing pages with data in this window.</td></tr>
-                                )}
-                              </tbody>
-                            </table>
-                          </div>
-                          <div className="text-[10px] text-gray-400 mt-2">"fallback" = page had no GSC click data for the period, so the site-wide click-weighted non-brand ratio was applied.</div>
-                        </ChartCard>
+                                  </thead>
+                                  <tbody>
+                                    {sorted.slice(0, 500).map((r, i) => {
+                                      const cmp = cmpByQuery.get(r.query);
+                                      const ctr = r.impressions > 0 ? (r.clicks / r.impressions) * 100 : 0;
+                                      const clickDelta = cmp ? pctDelta(r.clicks, cmp.clicks) : null;
+                                      return (
+                                        <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/60">
+                                          <td className="py-1.5 pr-2 text-gray-800 max-w-[420px] truncate" title={r.query}>{r.query}</td>
+                                          <td className="py-1.5 pr-2 text-right tabular-nums font-semibold" style={{ color: accent }}>
+                                            {r.clicks.toLocaleString()}
+                                            {hasCmp && clickDelta != null && cmp && cmp.clicks > 0 && (
+                                              <span className={`ml-1 text-[10px] font-bold ${clickDelta >= 0 ? "text-emerald-600" : "text-red-500"}`}>{clickDelta >= 0 ? "+" : ""}{clickDelta.toFixed(0)}%</span>
+                                            )}
+                                            {hasCmp && cmp && cmp.clicks === 0 && r.clicks > 0 && <span className="ml-1 text-[10px] font-bold text-emerald-600">new</span>}
+                                          </td>
+                                          <td className="py-1.5 pr-2 text-right tabular-nums text-gray-600">{r.impressions.toLocaleString()}</td>
+                                          <td className="py-1.5 pr-2 text-right tabular-nums text-gray-600">{ctr.toFixed(2)}%</td>
+                                          <td className="py-1.5 text-right tabular-nums text-gray-600">{r.position > 0 ? r.position.toFixed(1) : "—"}</td>
+                                        </tr>
+                                      );
+                                    })}
+                                    {sorted.length === 0 && (
+                                      <tr><td colSpan={5} className="py-6 text-center text-gray-400">No {isBrand ? "brand" : "non-brand"} queries recorded for this page in the selected period.</td></tr>
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                              {sorted.length > 500 && (
+                                <div className="text-[10px] text-gray-400 mt-2">Showing top 500 of {sorted.length.toLocaleString()} queries.</div>
+                              )}
+                            </ChartCard>
+                          );
+                        })() : (
+                          <ChartCard
+                            title="Landing pages (whole site)"
+                            tip="One row per landing page. The NB/B ratio is click-weighted from GSC: brand clicks vs non-brand clicks for queries that page ranked on. NB and Brand sign-ups split the GA4 generate_lead key-event count from organic sessions by that ratio. Click a landing page URL to drill into its brand or non-brand queries."
+                          >
+                            <div className="overflow-x-auto overflow-y-auto overscroll-contain rounded-xl border border-gray-50" style={{ maxHeight: 540, WebkitOverflowScrolling: "touch" }}>
+                              <table className="w-full text-xs">
+                                <thead className="sticky top-0 bg-white z-10">
+                                  <tr className="text-left text-gray-400 border-b border-gray-100">
+                                    <SortableTh label="Landing page" sortKey="page" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium" />
+                                    <SortableTh label="NB / B ratio" sortKey="nonBrandRatio" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                    <SortableTh label="Org. sessions" sortKey="orgSessions" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                    <SortableTh label="Total SEO sign-ups" sortKey="fspLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                    <SortableTh label="NB SEO sign-ups" sortKey="nbLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                    <SortableTh label="Brand SEO sign-ups" sortKey="brandLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {nbsuSort.sorted.slice(0, 300).map((r, i) => {
+                                    // Inline change badge: show % when previous>0; show "new" tag when previous==0 but current>0; "—" when both zero
+                                    const changeBadge = (cur: number, prev: number, isInt: boolean) => {
+                                      const curR = isInt ? Math.round(cur) : cur;
+                                      const prevR = isInt ? Math.round(prev) : prev;
+                                      if (!hasCmp) return null;
+                                      if (prevR <= 0 && curR <= 0) return null;
+                                      if (prevR <= 0 && curR > 0) {
+                                        return <div className="text-[10px] font-bold text-emerald-600">new</div>;
+                                      }
+                                      if (prevR > 0 && curR <= 0) {
+                                        return <div className="text-[10px] font-bold text-red-500">−100%</div>;
+                                      }
+                                      const p = ((curR - prevR) / prevR) * 100;
+                                      return <div className={`text-[10px] font-bold ${p >= 0 ? "text-emerald-600" : "text-red-500"}`}>{p >= 0 ? "+" : ""}{p.toFixed(0)}%</div>;
+                                    };
+                                    return (
+                                      <tr key={i} className="border-b border-gray-50 hover:bg-emerald-50/30">
+                                        <td className="py-2 pr-2 max-w-[280px] truncate" title={r.page}>
+                                          <div className="flex items-center gap-2 min-w-0">
+                                            <UrlLink url={r.page} className="text-gray-700 truncate" />
+                                            <div className="flex items-center gap-1 shrink-0">
+                                              <button
+                                                type="button"
+                                                onClick={(e) => { e.stopPropagation(); setNbsuDrill({ page: r.page, cls: "nonBrand" }); }}
+                                                className="text-[9px] font-semibold text-emerald-700 hover:text-emerald-900 hover:underline px-1"
+                                                title="See non-brand queries for this page"
+                                              >see NB</button>
+                                              <span className="text-gray-200 text-[9px]">·</span>
+                                              <button
+                                                type="button"
+                                                onClick={(e) => { e.stopPropagation(); setNbsuDrill({ page: r.page, cls: "brand" }); }}
+                                                className="text-[9px] font-semibold text-[#5b4fa8] hover:text-[#3f3578] hover:underline px-1"
+                                                title="See brand queries for this page"
+                                              >see B</button>
+                                            </div>
+                                          </div>
+                                        </td>
+                                        <td className="py-2 pr-2 text-right tabular-nums">
+                                          <span className="text-emerald-700 font-semibold">{(r.nonBrandRatio * 100).toFixed(1)}%</span>
+                                          <span className="text-gray-300"> / </span>
+                                          <span className="text-[#5b4fa8] font-semibold">{((1 - r.nonBrandRatio) * 100).toFixed(1)}%</span>
+                                          <div className="text-[10px] text-gray-400">{r.nonBrandClicks.toLocaleString()} / {r.brandClicks.toLocaleString()} clicks{r.usedSiteWideRatio ? " · fallback" : ""}</div>
+                                        </td>
+                                        <td className="py-2 pr-2 text-right tabular-nums text-gray-900 font-semibold">
+                                          {r.orgSessions.toLocaleString()}
+                                          {changeBadge(r.orgSessions, r.orgSessionsCmp, true)}
+                                        </td>
+                                        <td className="py-2 pr-2 text-right tabular-nums text-sky-700 font-semibold">
+                                          {r.fspLeads.toLocaleString()}
+                                          {changeBadge(r.fspLeads, r.fspLeadsCmp, true)}
+                                        </td>
+                                        <td className="py-2 pr-2 text-right tabular-nums text-emerald-700 font-semibold">
+                                          {Math.round(r.nbLeads).toLocaleString()}
+                                          {changeBadge(r.nbLeads, r.nbLeadsCmp, true)}
+                                        </td>
+                                        <td className="py-2 pr-2 text-right tabular-nums text-[#5b4fa8] font-semibold">
+                                          {Math.round(r.brandLeads).toLocaleString()}
+                                          {changeBadge(r.brandLeads, r.brandLeadsCmp, true)}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                  {nbsuSort.sorted.length === 0 && (
+                                    <tr><td colSpan={6} className="py-6 text-center text-gray-400">No landing pages with data in this window.</td></tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                            <div className="text-[10px] text-gray-400 mt-2">"fallback" = page had no GSC click data for the period, so the site-wide click-weighted non-brand ratio was applied. Click <span className="font-semibold text-emerald-700">see NB</span> or <span className="font-semibold text-[#5b4fa8]">see B</span> next to any landing page to drill into its queries.</div>
+                          </ChartCard>
+                        )}
 
                         {/* Winners & Losers — only shown when a comparison period exists */}
                         {hasCmp && (() => {
@@ -8167,7 +8454,7 @@ ${combinedHtml}
                             const sign = (n: number) => (n >= 0 ? "+" : "");
                             return (
                               <ChartCard title={<span className="flex items-center gap-2"><span className={headerColor}>{isDown ? "▼" : "▲"}</span>{title}</span>} tip={tip}>
-                                <div className="overflow-x-auto overflow-y-auto rounded-xl border border-gray-50" style={{ maxHeight: 360 }}>
+                                <div className="overflow-x-auto overflow-y-auto overscroll-contain rounded-xl border border-gray-50" style={{ maxHeight: 360, WebkitOverflowScrolling: "touch" }}>
                                   <table className="w-full text-xs">
                                     <thead className="sticky top-0 bg-white z-10">
                                       <tr className="text-left text-gray-400 border-b border-gray-100">
@@ -8374,7 +8661,7 @@ ${combinedHtml}
                             const deltaColor = isDown ? "text-red-500" : "text-emerald-600";
                             return (
                               <ChartCard title={<span className="flex items-center gap-2"><span className={headerColor}>{isDown ? "▼" : "▲"}</span>{title}</span>} tip={tip}>
-                                <div className="overflow-x-auto overflow-y-auto rounded-xl border border-gray-50" style={{ maxHeight: 380 }}>
+                                <div className="overflow-x-auto overflow-y-auto overscroll-contain rounded-xl border border-gray-50" style={{ maxHeight: 380, WebkitOverflowScrolling: "touch" }}>
                                   <table className="w-full text-xs">
                                     <thead className="sticky top-0 bg-white z-10">
                                       <tr className="text-left text-gray-400 border-b border-gray-100">
@@ -8461,7 +8748,7 @@ ${combinedHtml}
                             const deltaColor = isDown ? "text-red-500" : "text-emerald-600";
                             return (
                               <ChartCard title={<span className="flex items-center gap-2"><span className={headerColor}>{isDown ? "▼" : "▲"}</span>{title}</span>} tip={tip}>
-                                <div className="overflow-x-auto overflow-y-auto rounded-xl border border-gray-50" style={{ maxHeight: 380 }}>
+                                <div className="overflow-x-auto overflow-y-auto overscroll-contain rounded-xl border border-gray-50" style={{ maxHeight: 380, WebkitOverflowScrolling: "touch" }}>
                                   <table className="w-full text-xs">
                                     <thead className="sticky top-0 bg-white z-10">
                                       <tr className="text-left text-gray-400 border-b border-gray-100">
@@ -8548,7 +8835,7 @@ ${combinedHtml}
                             const deltaColor = isDown ? "text-red-500" : "text-emerald-600";
                             return (
                               <ChartCard title={<span className="flex items-center gap-2"><span className={headerColor}>{isDown ? "▼" : "▲"}</span>{title}</span>} tip={tip}>
-                                <div className="overflow-x-auto overflow-y-auto rounded-xl border border-gray-50" style={{ maxHeight: 380 }}>
+                                <div className="overflow-x-auto overflow-y-auto overscroll-contain rounded-xl border border-gray-50" style={{ maxHeight: 380, WebkitOverflowScrolling: "touch" }}>
                                   <table className="w-full text-xs">
                                     <thead className="sticky top-0 bg-white z-10">
                                       <tr className="text-left text-gray-400 border-b border-gray-100">
@@ -9045,7 +9332,7 @@ ${combinedHtml}
                         </ChartCard>
 
                         <ChartCard title={`URLs — ${perfPieFilter ? URL_PERF_LABELS[perfPieFilter] : "All"} (${perfFilteredPages.length.toLocaleString()})`}>
-                          <div className="overflow-y-auto" style={{ maxHeight: 230 }}>
+                          <div className="overflow-y-auto overscroll-contain" style={{ maxHeight: 230, WebkitOverflowScrolling: "touch" }}>
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 bg-white z-10">
                                 <tr className="text-left text-gray-400 border-b border-gray-100">
@@ -9127,7 +9414,7 @@ ${combinedHtml}
                         </ChartCard>
 
                         <ChartCard title={`Queries — ${perfSubFilter ? PERF_LABELS[perfSubFilter] : "All"} (${perfFilteredQueries.length.toLocaleString()})`}>
-                          <div className="overflow-y-auto" style={{ maxHeight: 230 }}>
+                          <div className="overflow-y-auto overscroll-contain" style={{ maxHeight: 230, WebkitOverflowScrolling: "touch" }}>
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 bg-white z-10">
                                 <tr className="text-left text-gray-400 border-b border-gray-100">
@@ -9212,7 +9499,7 @@ ${combinedHtml}
                         </ChartCard>
 
                         <ChartCard title="Intent Breakdown" tip="Aggregated metrics by intent type. Compare clicks, impressions, CTR and average position across intent categories to see where your visibility is strongest.">
-                          <div className="overflow-y-auto" style={{ maxHeight: 230 }}>
+                          <div className="overflow-y-auto overscroll-contain" style={{ maxHeight: 230, WebkitOverflowScrolling: "touch" }}>
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 bg-white z-10">
                                 <tr className="text-left text-gray-400 border-b border-gray-100">
@@ -9262,7 +9549,7 @@ ${combinedHtml}
                             {!hasGscCmp && <span className="ml-2 text-amber-600">· Enable a comparison range to see deltas</span>}
                           </div>
                         </div>
-                        <div className="overflow-y-auto rounded-xl border border-gray-50" style={{ maxHeight: 460 }}>
+                        <div className="overflow-y-auto overscroll-contain rounded-xl border border-gray-50" style={{ maxHeight: 460, WebkitOverflowScrolling: "touch" }}>
                           <table className="w-full text-xs">
                             <thead className="sticky top-0 bg-white z-10">
                               <tr className="text-left text-gray-400 border-b border-gray-100">
