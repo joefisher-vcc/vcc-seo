@@ -8383,6 +8383,62 @@ ${combinedHtml}
                           const additionalClicksNeeded = nbCvr > 0 ? additionalLeads / nbCvr : 0;
                           const targetClicks    = currentNbClicks + additionalClicksNeeded;
                           const canForecast = nbCvr > 0 && currentNbLeads > 0;
+
+                          // ── Additional queries needed ──
+                          // Average clicks per non-brand query for the current period. Assumes any new
+                          // queries you'd rank for would perform at today's NB query average.
+                          const nbQuerySet = new Set(d.queryPageRowsCur.filter((r) => r.cls === "nonBrand").map((r) => r.query));
+                          const nbQueryCount = nbQuerySet.size;
+                          const avgClicksPerNbQuery = nbQueryCount > 0 ? currentNbClicks / nbQueryCount : 0;
+                          const additionalQueriesNeeded = avgClicksPerNbQuery > 0 ? additionalClicksNeeded / avgClicksPerNbQuery : 0;
+
+                          // ── Position improvement needed ──
+                          // Use a standard CTR-by-position curve (Advanced Web Ranking aggregated benchmark)
+                          // to estimate what new average position would yield the target NB clicks at the
+                          // same impression volume. Assumes impressions hold constant.
+                          const ctrCurve: { pos: number; ctr: number }[] = [
+                            { pos: 1,  ctr: 0.281 },
+                            { pos: 2,  ctr: 0.157 },
+                            { pos: 3,  ctr: 0.110 },
+                            { pos: 4,  ctr: 0.080 },
+                            { pos: 5,  ctr: 0.061 },
+                            { pos: 6,  ctr: 0.047 },
+                            { pos: 7,  ctr: 0.037 },
+                            { pos: 8,  ctr: 0.030 },
+                            { pos: 9,  ctr: 0.025 },
+                            { pos: 10, ctr: 0.022 },
+                            { pos: 15, ctr: 0.012 },
+                            { pos: 20, ctr: 0.007 },
+                            { pos: 30, ctr: 0.004 },
+                            { pos: 50, ctr: 0.002 },
+                            { pos: 100, ctr: 0.001 },
+                          ];
+                          const posAtCtr = (ctr: number) => {
+                            if (ctr >= ctrCurve[0].ctr) return ctrCurve[0].pos;
+                            if (ctr <= ctrCurve[ctrCurve.length - 1].ctr) return ctrCurve[ctrCurve.length - 1].pos;
+                            for (let i = 0; i < ctrCurve.length - 1; i++) {
+                              const a = ctrCurve[i], b = ctrCurve[i + 1];
+                              if (ctr <= a.ctr && ctr >= b.ctr) {
+                                const t = (a.ctr - ctr) / (a.ctr - b.ctr);
+                                return a.pos + (b.pos - a.pos) * t;
+                              }
+                            }
+                            return ctrCurve[ctrCurve.length - 1].pos;
+                          };
+                          // Current NB impression-weighted avg position + total impressions.
+                          let nbPosImpr = 0, nbImpr = 0;
+                          for (const r of d.queryPageRowsCur) {
+                            if (r.cls !== "nonBrand") continue;
+                            nbPosImpr += r.position * r.impressions;
+                            nbImpr    += r.impressions;
+                          }
+                          const nbAvgPos = nbImpr > 0 ? nbPosImpr / nbImpr : 0;
+                          const targetNbClicks = currentNbClicks + additionalClicksNeeded;
+                          const targetCtr = nbImpr > 0 ? targetNbClicks / nbImpr : 0;
+                          const targetPos = nbImpr > 0 && nbAvgPos > 0 ? posAtCtr(targetCtr) : 0;
+                          const posImprovement = nbAvgPos > 0 && targetPos > 0 ? nbAvgPos - targetPos : 0;
+                          const positionPathPossible = nbAvgPos > 0 && targetPos > 0 && targetPos >= 1 && targetCtr <= ctrCurve[0].ctr;
+
                           return (
                             <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
                               <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
@@ -8411,28 +8467,65 @@ ${combinedHtml}
                                 </div>
                               </div>
                               {canForecast ? (
-                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                                  <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
-                                    <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Current NB CVR</div>
-                                    <div className="text-lg font-bold text-emerald-600 tabular-nums">{(nbCvr * 100).toFixed(2)}%</div>
-                                    <div className="text-[10px] text-gray-400 mt-0.5">held constant in forecast</div>
+                                <>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                                    <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+                                      <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Current NB CVR</div>
+                                      <div className="text-lg font-bold text-emerald-600 tabular-nums">{(nbCvr * 100).toFixed(2)}%</div>
+                                      <div className="text-[10px] text-gray-400 mt-0.5">held constant in forecast</div>
+                                    </div>
+                                    <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+                                      <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Target NB sign-ups</div>
+                                      <div className="text-lg font-bold text-gray-900 tabular-nums">{Math.round(targetLeads).toLocaleString()}</div>
+                                      <div className="text-[10px] text-gray-400 mt-0.5">from {Math.round(currentNbLeads).toLocaleString()} · +{Math.round(additionalLeads).toLocaleString()}</div>
+                                    </div>
+                                    <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3">
+                                      <div className="text-[10px] uppercase tracking-wider text-emerald-700 font-semibold mb-1">Additional NB clicks needed</div>
+                                      <div className="text-lg font-bold text-emerald-700 tabular-nums">{Math.round(additionalClicksNeeded).toLocaleString()}</div>
+                                      <div className="text-[10px] text-emerald-700/70 mt-0.5">at current NB CVR</div>
+                                    </div>
+                                    <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+                                      <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Target NB clicks total</div>
+                                      <div className="text-lg font-bold text-gray-900 tabular-nums">{Math.round(targetClicks).toLocaleString()}</div>
+                                      <div className="text-[10px] text-gray-400 mt-0.5">from {Math.round(currentNbClicks).toLocaleString()}</div>
+                                    </div>
                                   </div>
-                                  <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
-                                    <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Target NB sign-ups</div>
-                                    <div className="text-lg font-bold text-gray-900 tabular-nums">{Math.round(targetLeads).toLocaleString()}</div>
-                                    <div className="text-[10px] text-gray-400 mt-0.5">from {Math.round(currentNbLeads).toLocaleString()} · +{Math.round(additionalLeads).toLocaleString()}</div>
+                                  <div className="mt-3 pt-3 border-t border-gray-100">
+                                    <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-2">How you could get those extra clicks</div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                      <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+                                        <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Path A · Rank for more queries</div>
+                                        {avgClicksPerNbQuery > 0 ? (
+                                          <>
+                                            <div className="text-lg font-bold text-gray-900 tabular-nums">+{Math.round(additionalQueriesNeeded).toLocaleString()} queries</div>
+                                            <div className="text-[10px] text-gray-400 mt-0.5">at {avgClicksPerNbQuery.toFixed(1)} clicks/query (current NB average) · {nbQueryCount.toLocaleString()} → {(nbQueryCount + Math.round(additionalQueriesNeeded)).toLocaleString()}</div>
+                                          </>
+                                        ) : (
+                                          <div className="text-[11px] text-gray-400">Not enough NB query data to estimate.</div>
+                                        )}
+                                      </div>
+                                      <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+                                        <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Path B · Improve avg position</div>
+                                        {positionPathPossible && posImprovement > 0 ? (
+                                          <>
+                                            <div className="text-lg font-bold text-gray-900 tabular-nums">{nbAvgPos.toFixed(1)} → {targetPos.toFixed(1)}</div>
+                                            <div className="text-[10px] text-gray-400 mt-0.5">improve avg NB position by {posImprovement.toFixed(1)} places · same impressions, higher CTR</div>
+                                          </>
+                                        ) : !positionPathPossible && nbAvgPos > 0 ? (
+                                          <>
+                                            <div className="text-lg font-bold text-amber-700 tabular-nums">Not achievable</div>
+                                            <div className="text-[10px] text-gray-400 mt-0.5">target CTR exceeds position-1 CTR — would need more impressions or queries too</div>
+                                          </>
+                                        ) : (
+                                          <div className="text-[11px] text-gray-400">Not enough NB impression data to estimate.</div>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="text-[10px] text-gray-400 mt-2">
+                                      Paths are independent illustrations of the same goal. Path A assumes new queries perform at today's NB average clicks/query. Path B uses a standard CTR-by-position curve and assumes NB impressions stay constant — in practice you'd usually combine both.
+                                    </div>
                                   </div>
-                                  <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3">
-                                    <div className="text-[10px] uppercase tracking-wider text-emerald-700 font-semibold mb-1">Additional NB clicks needed</div>
-                                    <div className="text-lg font-bold text-emerald-700 tabular-nums">{Math.round(additionalClicksNeeded).toLocaleString()}</div>
-                                    <div className="text-[10px] text-emerald-700/70 mt-0.5">at current NB CVR</div>
-                                  </div>
-                                  <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
-                                    <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Target NB clicks total</div>
-                                    <div className="text-lg font-bold text-gray-900 tabular-nums">{Math.round(targetClicks).toLocaleString()}</div>
-                                    <div className="text-[10px] text-gray-400 mt-0.5">from {Math.round(currentNbClicks).toLocaleString()}</div>
-                                  </div>
-                                </div>
+                                </>
                               ) : (
                                 <div className="text-[11px] text-gray-400 bg-gray-50 border border-gray-100 rounded-xl p-3">
                                   Need a non-zero NB conversion rate and sign-up count to forecast. Try a longer date range.
@@ -8639,7 +8732,7 @@ ${combinedHtml}
                             tip="One row per landing page. The NB/B ratio is click-weighted from GSC: brand clicks vs non-brand clicks for queries that page ranked on. NB and Brand sign-ups split the GA4 generate_lead key-event count from organic sessions by that ratio. Click a landing page URL to drill into its brand or non-brand queries."
                           >
                             <div className="overflow-x-auto overflow-y-auto overscroll-contain rounded-xl border border-gray-50" style={{ maxHeight: 540, WebkitOverflowScrolling: "touch" }}>
-                              <table className="w-full text-xs">
+                              <table className="w-full min-w-[1200px] text-xs">
                                 <thead className="sticky top-0 bg-white z-10">
                                   <tr className="text-left text-gray-400 border-b border-gray-100">
                                     <SortableTh label="Landing page" sortKey="page" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium" />
@@ -8648,6 +8741,9 @@ ${combinedHtml}
                                     <SortableTh label="Total SEO sign-ups" sortKey="fspLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
                                     <SortableTh label="NB SEO sign-ups" sortKey="nbLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
                                     <SortableTh label="Brand SEO sign-ups" sortKey="brandLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
+                                    <SortableTh label={<>Total CVR<div className="text-[9px] font-normal text-gray-300">leads ÷ sessions</div></>} sortKey={null} sort={nbsuSort.sort} className="pb-2 pr-2 font-medium text-right" />
+                                    <SortableTh label={<>NB CVR<div className="text-[9px] font-normal text-gray-300">NB leads ÷ NB clicks</div></>} sortKey={null} sort={nbsuSort.sort} className="pb-2 pr-2 font-medium text-right" />
+                                    <SortableTh label={<>Brand CVR<div className="text-[9px] font-normal text-gray-300">B leads ÷ B clicks</div></>} sortKey={null} sort={nbsuSort.sort} className="pb-2 pr-2 font-medium text-right" />
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -8667,6 +8763,12 @@ ${combinedHtml}
                                       const p = ((curR - prevR) / prevR) * 100;
                                       return <div className={`text-[10px] font-bold ${p >= 0 ? "text-emerald-600" : "text-red-500"}`}>{p >= 0 ? "+" : ""}{p.toFixed(0)}%</div>;
                                     };
+                                    // Per-row conversion rates
+                                    const totalCvr = r.orgSessions    > 0 ? (r.fspLeads   / r.orgSessions)    * 100 : 0;
+                                    const nbCvr    = r.nonBrandClicks > 0 ? (r.nbLeads    / r.nonBrandClicks) * 100 : 0;
+                                    const brandCvr = r.brandClicks    > 0 ? (r.brandLeads / r.brandClicks)    * 100 : 0;
+                                    // Comparison-period CVRs for delta badges (Cmp click totals aren't on the row, so only Total CVR gets a badge)
+                                    const totalCvrCmp = r.orgSessionsCmp > 0 ? (r.fspLeadsCmp / r.orgSessionsCmp) * 100 : 0;
                                     return (
                                       <tr key={i} className="border-b border-gray-50 hover:bg-emerald-50/30">
                                         <td className="py-2 pr-2 max-w-[280px] truncate" title={r.page}>
@@ -8711,11 +8813,21 @@ ${combinedHtml}
                                           {Math.round(r.brandLeads).toLocaleString()}
                                           {changeBadge(r.brandLeads, r.brandLeadsCmp, true)}
                                         </td>
+                                        <td className="py-2 pr-2 text-right tabular-nums text-sky-700 font-semibold">
+                                          {r.orgSessions > 0 ? `${totalCvr.toFixed(2)}%` : "—"}
+                                          {r.orgSessions > 0 && hasCmp && r.orgSessionsCmp > 0 && changeBadge(totalCvr, totalCvrCmp, false)}
+                                        </td>
+                                        <td className="py-2 pr-2 text-right tabular-nums text-emerald-700 font-semibold">
+                                          {r.nonBrandClicks > 0 ? `${nbCvr.toFixed(2)}%` : "—"}
+                                        </td>
+                                        <td className="py-2 pr-2 text-right tabular-nums text-[#5b4fa8] font-semibold">
+                                          {r.brandClicks > 0 ? `${brandCvr.toFixed(2)}%` : "—"}
+                                        </td>
                                       </tr>
                                     );
                                   })}
                                   {nbsuSort.sorted.length === 0 && (
-                                    <tr><td colSpan={6} className="py-6 text-center text-gray-400">No landing pages with data in this window.</td></tr>
+                                    <tr><td colSpan={9} className="py-6 text-center text-gray-400">No landing pages with data in this window.</td></tr>
                                   )}
                                 </tbody>
                               </table>
