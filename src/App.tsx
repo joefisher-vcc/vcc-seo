@@ -8173,6 +8173,54 @@ ${combinedHtml}
                           </div>
                         </div>
 
+                        {/* GSC query KPI cards — second row */}
+                        {(() => {
+                          const totalClicksCur = d.queryPageRowsCur.reduce((s, r) => s + r.clicks, 0);
+                          const totalClicksCmp = d.queryPageRowsCmp.reduce((s, r) => s + r.clicks, 0);
+                          const nbClicksCur = d.queryPageRowsCur.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
+                          const nbClicksCmp = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
+                          const brandClicksCur = d.queryPageRowsCur.reduce((s, r) => s + (r.cls === "brand" ? r.clicks : 0), 0);
+                          const brandClicksCmp = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "brand" ? r.clicks : 0), 0);
+                          const totalQueryCountCur = new Set(d.queryPageRowsCur.map((r) => r.query)).size;
+                          const totalQueryCountCmp = new Set(d.queryPageRowsCmp.map((r) => r.query)).size;
+                          return (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Total clicks</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-gray-900 tabular-nums">{totalClicksCur.toLocaleString()}</span>
+                                  {hasCmp && <Delta p={pct(totalClicksCur, totalClicksCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${totalClicksCmp.toLocaleString()} previously` : "all GSC query clicks"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-brand query clicks</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-emerald-600 tabular-nums">{nbClicksCur.toLocaleString()}</span>
+                                  {hasCmp && <Delta p={pct(nbClicksCur, nbClicksCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${nbClicksCmp.toLocaleString()} previously` : "non-brand classified queries"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Branded query clicks</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-[#5b4fa8] tabular-nums">{brandClicksCur.toLocaleString()}</span>
+                                  {hasCmp && <Delta p={pct(brandClicksCur, brandClicksCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${brandClicksCmp.toLocaleString()} previously` : "brand classified queries"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Total query count</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-gray-900 tabular-nums">{totalQueryCountCur.toLocaleString()}</span>
+                                  {hasCmp && <Delta p={pct(totalQueryCountCur, totalQueryCountCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${totalQueryCountCmp.toLocaleString()} previously` : "unique queries"}</div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
                         {/* Brand vs Non-brand trend chart ── shows daily clicks + sign-ups */}
                         {d.daily.length > 0 && (() => {
                           const chartData = d.daily.map((r) => ({
