@@ -8782,7 +8782,8 @@ ${combinedHtml}
                                     <SortableTh label="NB SEO sign-ups" sortKey="nbLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
                                     <SortableTh label="Brand SEO sign-ups" sortKey="brandLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
                                     <SortableTh label={<>Total CVR<div className="text-[9px] font-normal text-gray-300">leads ÷ sessions</div></>} sortKey={null} sort={nbsuSort.sort} className="pb-2 pr-2 font-medium text-right" />
-                                    <SortableTh label={<>CVR<div className="text-[9px] font-normal text-gray-300">leads ÷ clicks</div></>} sortKey={null} sort={nbsuSort.sort} className="pb-2 pr-2 font-medium text-right" />
+                                    <SortableTh label={<>NB CVR<div className="text-[9px] font-normal text-gray-300">NB leads ÷ NB clicks</div></>} sortKey={null} sort={nbsuSort.sort} className="pb-2 pr-2 font-medium text-right" />
+                                    <SortableTh label={<>Brand CVR<div className="text-[9px] font-normal text-gray-300">B leads ÷ B clicks</div></>} sortKey={null} sort={nbsuSort.sort} className="pb-2 pr-2 font-medium text-right" />
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -8802,15 +8803,11 @@ ${combinedHtml}
                                       const p = ((curR - prevR) / prevR) * 100;
                                       return <div className={`text-[10px] font-bold ${p >= 0 ? "text-emerald-600" : "text-red-500"}`}>{p >= 0 ? "+" : ""}{p.toFixed(0)}%</div>;
                                     };
-                                    // Per-row conversion rates.
-                                    // Note: per-page brand vs NB CVR cannot be separated because nbLeads/brandLeads are
-                                    // derived from fspLeads using the same click ratio that splits brand vs NB clicks —
-                                    // so nbLeads/nbClicks == brandLeads/brandClicks == fspLeads/totalClicks by construction.
-                                    // We surface a single click-based CVR alongside the session-based Total CVR.
-                                    const totalCvr   = r.orgSessions > 0 ? (r.fspLeads / r.orgSessions) * 100 : 0;
-                                    const totalClks  = r.brandClicks + r.nonBrandClicks;
-                                    const clickCvr   = totalClks > 0 ? (r.fspLeads / totalClks) * 100 : 0;
-                                    // Comparison-period CVRs for delta badges
+                                    // Per-row conversion rates — same formulas as the top scorecards, applied per URL.
+                                    const totalCvr = r.orgSessions    > 0 ? (r.fspLeads   / r.orgSessions)    * 100 : 0;
+                                    const nbCvr    = r.nonBrandClicks > 0 ? (r.nbLeads    / r.nonBrandClicks) * 100 : 0;
+                                    const brandCvr = r.brandClicks    > 0 ? (r.brandLeads / r.brandClicks)    * 100 : 0;
+                                    // Comparison-period CVR for the Total CVR delta badge.
                                     const totalCvrCmp = r.orgSessionsCmp > 0 ? (r.fspLeadsCmp / r.orgSessionsCmp) * 100 : 0;
                                     return (
                                       <tr key={i} className="border-b border-gray-50 hover:bg-emerald-50/30">
@@ -8860,8 +8857,11 @@ ${combinedHtml}
                                           {r.orgSessions > 0 ? `${totalCvr.toFixed(2)}%` : "—"}
                                           {r.orgSessions > 0 && hasCmp && r.orgSessionsCmp > 0 && changeBadge(totalCvr, totalCvrCmp, false)}
                                         </td>
-                                        <td className="py-2 pr-2 text-right tabular-nums text-gray-900 font-semibold">
-                                          {totalClks > 0 ? `${clickCvr.toFixed(2)}%` : "—"}
+                                        <td className="py-2 pr-2 text-right tabular-nums text-emerald-700 font-semibold">
+                                          {r.nonBrandClicks > 0 ? `${nbCvr.toFixed(2)}%` : "—"}
+                                        </td>
+                                        <td className="py-2 pr-2 text-right tabular-nums text-[#5b4fa8] font-semibold">
+                                          {r.brandClicks > 0 ? `${brandCvr.toFixed(2)}%` : "—"}
                                         </td>
                                       </tr>
                                     );
