@@ -8782,8 +8782,6 @@ ${combinedHtml}
                                     <SortableTh label="NB SEO sign-ups" sortKey="nbLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
                                     <SortableTh label="Brand SEO sign-ups" sortKey="brandLeads" sort={nbsuSort.sort} onToggle={nbsuSort.toggle} className="pb-2 pr-2 font-medium text-right" />
                                     <SortableTh label={<>Total CVR<div className="text-[9px] font-normal text-gray-300">leads ÷ sessions</div></>} sortKey={null} sort={nbsuSort.sort} className="pb-2 pr-2 font-medium text-right" />
-                                    <SortableTh label={<>NB CVR<div className="text-[9px] font-normal text-gray-300">NB leads ÷ NB clicks</div></>} sortKey={null} sort={nbsuSort.sort} className="pb-2 pr-2 font-medium text-right" />
-                                    <SortableTh label={<>Brand CVR<div className="text-[9px] font-normal text-gray-300">B leads ÷ B clicks</div></>} sortKey={null} sort={nbsuSort.sort} className="pb-2 pr-2 font-medium text-right" />
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -8803,11 +8801,8 @@ ${combinedHtml}
                                       const p = ((curR - prevR) / prevR) * 100;
                                       return <div className={`text-[10px] font-bold ${p >= 0 ? "text-emerald-600" : "text-red-500"}`}>{p >= 0 ? "+" : ""}{p.toFixed(0)}%</div>;
                                     };
-                                    // Per-row conversion rates — same formulas as the top scorecards, applied per URL.
-                                    const totalCvr = r.orgSessions    > 0 ? (r.fspLeads   / r.orgSessions)    * 100 : 0;
-                                    const nbCvr    = r.nonBrandClicks > 0 ? (r.nbLeads    / r.nonBrandClicks) * 100 : 0;
-                                    const brandCvr = r.brandClicks    > 0 ? (r.brandLeads / r.brandClicks)    * 100 : 0;
-                                    // Comparison-period CVR for the Total CVR delta badge.
+                                    // Per-row total conversion rate (leads ÷ sessions).
+                                    const totalCvr    = r.orgSessions    > 0 ? (r.fspLeads    / r.orgSessions)    * 100 : 0;
                                     const totalCvrCmp = r.orgSessionsCmp > 0 ? (r.fspLeadsCmp / r.orgSessionsCmp) * 100 : 0;
                                     return (
                                       <tr key={i} className="border-b border-gray-50 hover:bg-emerald-50/30">
@@ -8856,12 +8851,6 @@ ${combinedHtml}
                                         <td className="py-2 pr-2 text-right tabular-nums text-sky-700 font-semibold">
                                           {r.orgSessions > 0 ? `${totalCvr.toFixed(2)}%` : "—"}
                                           {r.orgSessions > 0 && hasCmp && r.orgSessionsCmp > 0 && changeBadge(totalCvr, totalCvrCmp, false)}
-                                        </td>
-                                        <td className="py-2 pr-2 text-right tabular-nums text-emerald-700 font-semibold">
-                                          {r.nonBrandClicks > 0 ? `${nbCvr.toFixed(2)}%` : "—"}
-                                        </td>
-                                        <td className="py-2 pr-2 text-right tabular-nums text-[#5b4fa8] font-semibold">
-                                          {r.brandClicks > 0 ? `${brandCvr.toFixed(2)}%` : "—"}
                                         </td>
                                       </tr>
                                     );
