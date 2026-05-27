@@ -8372,6 +8372,46 @@ ${combinedHtml}
                           );
                         })()}
 
+                        {/* GSC query KPI cards — fifth row: new branded queries won / lost */}
+                        {(() => {
+                          // "New" = got impressions this period but had zero in the comparison period (won).
+                          // "Lost" = had impressions in the comparison period but zero this period.
+                          // Aggregated at query level (sum impressions across all landing pages) to avoid
+                          // counting the same query multiple times.
+                          const aggBrandImprByQuery = (rows: typeof d.queryPageRowsCur) => {
+                            const m = new Map<string, number>();
+                            for (const r of rows) {
+                              if (r.cls !== "brand") continue;
+                              m.set(r.query, (m.get(r.query) ?? 0) + r.impressions);
+                            }
+                            return m;
+                          };
+                          const brandImprCur = aggBrandImprByQuery(d.queryPageRowsCur);
+                          const brandImprCmp = aggBrandImprByQuery(d.queryPageRowsCmp);
+                          let brandWonCount = 0;
+                          let brandLostCount = 0;
+                          brandImprCur.forEach((impr, q) => { if (impr > 0 && (brandImprCmp.get(q) ?? 0) === 0) brandWonCount++; });
+                          brandImprCmp.forEach((impr, q) => { if (impr > 0 && (brandImprCur.get(q) ?? 0) === 0) brandLostCount++; });
+                          return (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">New branded queries won</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-emerald-600 tabular-nums">{hasCmp ? brandWonCount.toLocaleString() : "—"}</span>
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? "got impressions this period, none previously" : "needs a comparison period"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Branded queries lost</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-red-500 tabular-nums">{hasCmp ? brandLostCount.toLocaleString() : "—"}</span>
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? "had impressions previously, none this period" : "needs a comparison period"}</div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
                         {/* NB Sign Ups forecast calculator */}
                         {(() => {
                           const nbCvr = d.totals.nonBrandClicks > 0 ? d.totals.nbLeads / d.totals.nonBrandClicks : 0;
@@ -8835,6 +8875,168 @@ ${combinedHtml}
                             <div className="text-[10px] text-gray-400 mt-2">"fallback" = page had no GSC click data for the period, so the site-wide click-weighted non-brand ratio was applied. Click <span className="font-semibold text-emerald-700">see NB</span> or <span className="font-semibold text-[#5b4fa8]">see B</span> next to any landing page to drill into its queries.</div>
                           </ChartCard>
                         )}
+
+                        {/* Branded queries: Won (new) & Lost — only shown when a comparison period exists */}
+                        {hasCmp && !nbsuDrill && (() => {
+                          // Aggregate brand queries to query level (sum impressions/clicks across pages,
+                          // impression-weighted position) so each query appears once. "Won" = present in
+                          // current with impressions > 0 AND absent (zero impressions) in comparison. "Lost" = inverse.
+                          type BrandAgg = { query: string; impressions: number; clicks: number; position: number };
+                          const aggregate = (rows: typeof d.queryPageRowsCur): Map<string, BrandAgg> => {
+                            const acc = new Map<string, { impressions: number; clicks: number; posImpr: number }>();
+                            for (const r of rows) {
+                              if (r.cls !== "brand") continue;
+                              const cur = acc.get(r.query) ?? { impressions: 0, clicks: 0, posImpr: 0 };
+                              cur.impressions += r.impressions;
+                              cur.clicks      += r.clicks;
+                              cur.posImpr     += r.position * r.impressions;
+                              acc.set(r.query, cur);
+                            }
+                            const out = new Map<string, BrandAgg>();
+                            acc.forEach((v, k) => out.set(k, {
+                              query: k,
+                              impressions: v.impressions,
+                              clicks: v.clicks,
+                              position: v.impressions > 0 ? v.posImpr / v.impressions : 0,
+                            }));
+                            return out;
+                          };
+                          const brandCur = aggregate(d.queryPageRowsCur);
+                          const brandCmp = aggregate(d.queryPageRowsCmp);
+                          const wonRows: BrandAgg[] = [];
+                          brandCur.forEach((agg, q) => { if (agg.impressions > 0 && (brandCmp.get(q)?.impressions ?? 0) === 0) wonRows.push(agg); });
+                          const lostRows: BrandAgg[] = [];
+                          brandCmp.forEach((agg, q) => { if (agg.impressions > 0 && (brandCur.get(q)?.impressions ?? 0) === 0) lostRows.push(agg); });
+                          wonRows.sort((a, b) => b.impressions - a.impressions);
+                          lostRows.sort((a, b) => b.impressions - a.impressions);
+
+                          const QueryTable = ({ rows, accent, periodLabel }: { rows: BrandAgg[]; accent: "won" | "lost"; periodLabel: string }) => {
+                            const isWon = accent === "won";
+                            return (
+                              <div className="overflow-x-auto overflow-y-auto overscroll-contain rounded-xl border border-gray-50" style={{ maxHeight: 360, WebkitOverflowScrolling: "touch" }}>
+                                <table className="w-full min-w-[520px] text-xs">
+                                  <thead className="sticky top-0 bg-white z-10">
+                                    <tr className="text-left text-gray-400 border-b border-gray-100">
+                                      <th className="pb-2 pr-2 font-medium">Query</th>
+                                      <th className="pb-2 pr-2 font-medium text-right">Impressions<div className="text-[9px] font-normal text-gray-300">{periodLabel}</div></th>
+                                      <th className="pb-2 pr-2 font-medium text-right">Clicks</th>
+                                      <th className="pb-2 pr-2 font-medium text-right">Avg pos</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {rows.slice(0, 100).map((r, i) => (
+                                      <tr key={i} className={`border-b border-gray-50 ${isWon ? "hover:bg-emerald-50/30" : "hover:bg-red-50/30"}`}>
+                                        <td className="py-2 pr-2 truncate max-w-[260px]" title={r.query}>
+                                          <span className="text-gray-700">{r.query}</span>
+                                        </td>
+                                        <td className="py-2 pr-2 text-right tabular-nums text-gray-900 font-semibold">{r.impressions.toLocaleString()}</td>
+                                        <td className={`py-2 pr-2 text-right tabular-nums font-semibold ${isWon ? "text-emerald-700" : "text-red-500"}`}>{r.clicks.toLocaleString()}</td>
+                                        <td className="py-2 pr-2 text-right tabular-nums text-gray-600">{r.position > 0 ? r.position.toFixed(1) : "—"}</td>
+                                      </tr>
+                                    ))}
+                                    {rows.length === 0 && (
+                                      <tr><td colSpan={4} className="py-6 text-center text-gray-400">No {isWon ? "new" : "lost"} branded queries in this window.</td></tr>
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                            );
+                          };
+                          return (
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                              <ChartCard
+                                title={<span className="flex items-center gap-2"><span className="text-emerald-600">▲</span>New branded queries won</span>}
+                                tip="Brand queries that received impressions this period but had zero impressions in the comparison period. Aggregated at query level across all landing pages, sorted by impressions."
+                              >
+                                <QueryTable rows={wonRows} accent="won" periodLabel="this period" />
+                                <div className="text-[10px] text-gray-400 mt-2">{wonRows.length.toLocaleString()} branded queries appeared this period that weren't seen previously.</div>
+                              </ChartCard>
+                              <ChartCard
+                                title={<span className="flex items-center gap-2"><span className="text-red-500">▼</span>Branded queries lost</span>}
+                                tip="Brand queries that had impressions in the comparison period but zero this period. Aggregated at query level. Sorted by previous-period impressions to surface the most material losses first."
+                              >
+                                <QueryTable rows={lostRows} accent="lost" periodLabel="previous period" />
+                                <div className="text-[10px] text-gray-400 mt-2">{lostRows.length.toLocaleString()} branded queries dropped out of the impression universe vs the comparison period.</div>
+                              </ChartCard>
+                            </div>
+                          );
+                        })()}
+
+                        {/* Low hanging fruit — non-brand queries ranking 15–40 */}
+                        {!nbsuDrill && (() => {
+                          // Aggregate non-brand rows to query level so we don't double-count queries
+                          // that rank on multiple pages. Position is impression-weighted, then we filter
+                          // to queries whose aggregate position is 15-40 (page 2-4 territory).
+                          type LhfAgg = { query: string; impressions: number; clicks: number; position: number; topPage: string };
+                          const acc = new Map<string, { impressions: number; clicks: number; posImpr: number; pageClicks: Map<string, number> }>();
+                          for (const r of d.queryPageRowsCur) {
+                            if (r.cls !== "nonBrand") continue;
+                            const cur = acc.get(r.query) ?? { impressions: 0, clicks: 0, posImpr: 0, pageClicks: new Map<string, number>() };
+                            cur.impressions += r.impressions;
+                            cur.clicks      += r.clicks;
+                            cur.posImpr     += r.position * r.impressions;
+                            cur.pageClicks.set(r.page, (cur.pageClicks.get(r.page) ?? 0) + r.clicks);
+                            acc.set(r.query, cur);
+                          }
+                          const lhfRows: LhfAgg[] = [];
+                          acc.forEach((v, q) => {
+                            const pos = v.impressions > 0 ? v.posImpr / v.impressions : 0;
+                            if (pos < 15 || pos > 40) return;
+                            // Pick the landing page where the query gets the most clicks (or impressions if no clicks).
+                            let topPage = "—";
+                            let topMetric = -1;
+                            v.pageClicks.forEach((clicks, page) => { if (clicks > topMetric) { topMetric = clicks; topPage = page; } });
+                            lhfRows.push({ query: q, impressions: v.impressions, clicks: v.clicks, position: pos, topPage });
+                          });
+                          // Sort by impressions desc — highest-impression queries on page 2-4 have the
+                          // biggest potential upside if pushed onto page 1.
+                          lhfRows.sort((a, b) => b.impressions - a.impressions);
+
+                          return (
+                            <ChartCard
+                              title={<span className="flex items-center gap-2"><span className="text-amber-500">★</span>Low hanging fruit — NB queries ranking 15–40</span>}
+                              tip="Non-brand queries with an impression-weighted average position between 15 and 40 — typically page 2-4 of search results. These have demonstrated relevance (Google ranks the page for them and gives them impressions) but aren't yet driving meaningful clicks. Small position improvements here usually deliver outsized click gains. Sorted by impressions to surface the biggest opportunities first."
+                            >
+                              <div className="overflow-x-auto overflow-y-auto overscroll-contain rounded-xl border border-gray-50" style={{ maxHeight: 480, WebkitOverflowScrolling: "touch" }}>
+                                <table className="w-full min-w-[760px] text-xs">
+                                  <thead className="sticky top-0 bg-white z-10">
+                                    <tr className="text-left text-gray-400 border-b border-gray-100">
+                                      <th className="pb-2 pr-2 font-medium">Query</th>
+                                      <th className="pb-2 pr-2 font-medium">Top landing page</th>
+                                      <th className="pb-2 pr-2 font-medium text-right">Impressions</th>
+                                      <th className="pb-2 pr-2 font-medium text-right">Clicks</th>
+                                      <th className="pb-2 pr-2 font-medium text-right">CTR</th>
+                                      <th className="pb-2 pr-2 font-medium text-right">Avg pos</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {lhfRows.slice(0, 200).map((r, i) => {
+                                      const ctr = r.impressions > 0 ? (r.clicks / r.impressions) * 100 : 0;
+                                      return (
+                                        <tr key={i} className="border-b border-gray-50 hover:bg-amber-50/30">
+                                          <td className="py-2 pr-2 truncate max-w-[240px]" title={r.query}>
+                                            <span className="text-gray-700">{r.query}</span>
+                                          </td>
+                                          <td className="py-2 pr-2 truncate max-w-[220px]" title={r.topPage}>
+                                            <UrlLink url={r.topPage} className="text-gray-500 text-[11px] truncate" />
+                                          </td>
+                                          <td className="py-2 pr-2 text-right tabular-nums text-gray-900 font-semibold">{r.impressions.toLocaleString()}</td>
+                                          <td className="py-2 pr-2 text-right tabular-nums text-emerald-700 font-semibold">{r.clicks.toLocaleString()}</td>
+                                          <td className="py-2 pr-2 text-right tabular-nums text-gray-600">{ctr.toFixed(2)}%</td>
+                                          <td className="py-2 pr-2 text-right tabular-nums text-amber-700 font-semibold">{r.position.toFixed(1)}</td>
+                                        </tr>
+                                      );
+                                    })}
+                                    {lhfRows.length === 0 && (
+                                      <tr><td colSpan={6} className="py-6 text-center text-gray-400">No non-brand queries ranking between positions 15 and 40 in this window.</td></tr>
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                              <div className="text-[10px] text-gray-400 mt-2">{lhfRows.length.toLocaleString()} non-brand queries currently rank between positions 15 and 40. Showing top 200 by impressions. "Top landing page" = the page accumulating the most clicks for this query in the selected period.</div>
+                            </ChartCard>
+                          );
+                        })()}
 
                         {/* Winners & Losers — only shown when a comparison period exists */}
                         {hasCmp && (() => {
