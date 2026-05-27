@@ -8221,6 +8221,81 @@ ${combinedHtml}
                           );
                         })()}
 
+                        {/* GSC query KPI cards — third row: query counts + position movement */}
+                        {(() => {
+                          // Unique query counts by class
+                          const nbQuerySetCur = new Set(d.queryPageRowsCur.filter((r) => r.cls === "nonBrand").map((r) => r.query));
+                          const nbQuerySetCmp = new Set(d.queryPageRowsCmp.filter((r) => r.cls === "nonBrand").map((r) => r.query));
+                          const brandQuerySetCur = new Set(d.queryPageRowsCur.filter((r) => r.cls === "brand").map((r) => r.query));
+                          const brandQuerySetCmp = new Set(d.queryPageRowsCmp.filter((r) => r.cls === "brand").map((r) => r.query));
+                          const nbQueryCountCur = nbQuerySetCur.size;
+                          const nbQueryCountCmp = nbQuerySetCmp.size;
+                          const brandQueryCountCur = brandQuerySetCur.size;
+                          const brandQueryCountCmp = brandQuerySetCmp.size;
+
+                          // Aggregate non-brand queries to impression-weighted average position per period.
+                          // Lower position = better rank, so "up in position" = position decreased vs cmp.
+                          const aggNbPositions = (rows: typeof d.queryPageRowsCur) => {
+                            const acc = new Map<string, { posImpr: number; impr: number }>();
+                            for (const r of rows) {
+                              if (r.cls !== "nonBrand") continue;
+                              const cur = acc.get(r.query) ?? { posImpr: 0, impr: 0 };
+                              cur.posImpr += r.position * r.impressions;
+                              cur.impr += r.impressions;
+                              acc.set(r.query, cur);
+                            }
+                            const out = new Map<string, number>();
+                            acc.forEach((v, k) => { if (v.impr > 0) out.set(k, v.posImpr / v.impr); });
+                            return out;
+                          };
+                          const nbPosCur = aggNbPositions(d.queryPageRowsCur);
+                          const nbPosCmp = aggNbPositions(d.queryPageRowsCmp);
+                          let nbQueriesUpInPos = 0;
+                          let nbQueriesDownInPos = 0;
+                          // Only count queries present in both periods so the comparison is meaningful.
+                          nbPosCur.forEach((curPos, q) => {
+                            const cmpPos = nbPosCmp.get(q);
+                            if (cmpPos == null) return;
+                            if (curPos < cmpPos) nbQueriesUpInPos++;
+                            else if (curPos > cmpPos) nbQueriesDownInPos++;
+                          });
+
+                          return (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-branded query count</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-emerald-600 tabular-nums">{nbQueryCountCur.toLocaleString()}</span>
+                                  {hasCmp && <Delta p={pct(nbQueryCountCur, nbQueryCountCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${nbQueryCountCmp.toLocaleString()} previously` : "unique non-brand queries"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Branded query count</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-[#5b4fa8] tabular-nums">{brandQueryCountCur.toLocaleString()}</span>
+                                  {hasCmp && <Delta p={pct(brandQueryCountCur, brandQueryCountCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${brandQueryCountCmp.toLocaleString()} previously` : "unique brand queries"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">NB queries up in position</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-emerald-600 tabular-nums">{hasCmp ? nbQueriesUpInPos.toLocaleString() : "—"}</span>
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? "ranked higher vs previous period" : "needs a comparison period"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">NB queries down in position</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-red-500 tabular-nums">{hasCmp ? nbQueriesDownInPos.toLocaleString() : "—"}</span>
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? "ranked lower vs previous period" : "needs a comparison period"}</div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
                         {/* Brand vs Non-brand trend chart ── shows daily clicks + sign-ups */}
                         {d.daily.length > 0 && (() => {
                           const chartData = d.daily.map((r) => ({
