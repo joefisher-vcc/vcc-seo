@@ -8393,22 +8393,19 @@ ${combinedHtml}
                           nbImprCur.forEach((impr, q) => { if (impr > 0 && (nbImprCmp.get(q) ?? 0) === 0) nbWonCount++; });
                           nbImprCmp.forEach((impr, q) => { if (impr > 0 && (nbImprCur.get(q) ?? 0) === 0) nbLostCount++; });
 
-                          // Impression-weighted avg position per NB query → count those in top 3 / top 10.
-                          const nbAvgPosByQuery = (rows: typeof d.queryPageRowsCur) => {
-                            const acc = new Map<string, { posImpr: number; impr: number }>();
+                          // Best (lowest) position per NB query across all its landing pages,
+                          // then count unique queries ranking in top 3 / top 10.
+                          const nbBestPosByQuery = (rows: typeof d.queryPageRowsCur) => {
+                            const out = new Map<string, number>();
                             for (const r of rows) {
                               if (r.cls !== "nonBrand") continue;
-                              const cur = acc.get(r.query) ?? { posImpr: 0, impr: 0 };
-                              cur.posImpr += r.position * r.impressions;
-                              cur.impr    += r.impressions;
-                              acc.set(r.query, cur);
+                              const prev = out.get(r.query);
+                              if (prev == null || r.position < prev) out.set(r.query, r.position);
                             }
-                            const out = new Map<string, number>();
-                            acc.forEach((v, k) => { if (v.impr > 0) out.set(k, v.posImpr / v.impr); });
                             return out;
                           };
-                          const nbPosByQueryCur = nbAvgPosByQuery(d.queryPageRowsCur);
-                          const nbPosByQueryCmp = nbAvgPosByQuery(d.queryPageRowsCmp);
+                          const nbPosByQueryCur = nbBestPosByQuery(d.queryPageRowsCur);
+                          const nbPosByQueryCmp = nbBestPosByQuery(d.queryPageRowsCmp);
                           let nbTop3Cur = 0, nbTop10Cur = 0;
                           nbPosByQueryCur.forEach((pos) => {
                             if (pos <= 3)  nbTop3Cur++;
@@ -8428,7 +8425,7 @@ ${combinedHtml}
                                   <span className="text-2xl font-bold text-emerald-600 tabular-nums">{nbTop3Cur.toLocaleString()}</span>
                                   {hasCmp && <Delta p={pct(nbTop3Cur, nbTop3Cmp)} />}
                                 </div>
-                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${nbTop3Cmp.toLocaleString()} previously · avg position ≤ 3` : "avg position ≤ 3 · impression-weighted"}</div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${nbTop3Cmp.toLocaleString()} previously · best position ≤ 3` : "unique NB queries ranking ≤ 3"}</div>
                               </div>
                               <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
                                 <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">NB keywords in top 10</div>
@@ -8436,7 +8433,7 @@ ${combinedHtml}
                                   <span className="text-2xl font-bold text-emerald-600 tabular-nums">{nbTop10Cur.toLocaleString()}</span>
                                   {hasCmp && <Delta p={pct(nbTop10Cur, nbTop10Cmp)} />}
                                 </div>
-                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${nbTop10Cmp.toLocaleString()} previously · avg position ≤ 10` : "avg position ≤ 10 · impression-weighted"}</div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${nbTop10Cmp.toLocaleString()} previously · best position ≤ 10` : "unique NB queries ranking ≤ 10"}</div>
                               </div>
                               <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
                                 <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">New non-branded queries won</div>
