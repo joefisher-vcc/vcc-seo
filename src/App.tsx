@@ -8372,39 +8372,39 @@ ${combinedHtml}
                           );
                         })()}
 
-                        {/* GSC query KPI cards — fifth row: new branded queries won / lost */}
+                        {/* GSC query KPI cards — fifth row: new non-branded queries won / lost */}
                         {(() => {
                           // "New" = got impressions this period but had zero in the comparison period (won).
                           // "Lost" = had impressions in the comparison period but zero this period.
                           // Aggregated at query level (sum impressions across all landing pages) to avoid
                           // counting the same query multiple times.
-                          const aggBrandImprByQuery = (rows: typeof d.queryPageRowsCur) => {
+                          const aggNbImprByQuery = (rows: typeof d.queryPageRowsCur) => {
                             const m = new Map<string, number>();
                             for (const r of rows) {
-                              if (r.cls !== "brand") continue;
+                              if (r.cls !== "nonBrand") continue;
                               m.set(r.query, (m.get(r.query) ?? 0) + r.impressions);
                             }
                             return m;
                           };
-                          const brandImprCur = aggBrandImprByQuery(d.queryPageRowsCur);
-                          const brandImprCmp = aggBrandImprByQuery(d.queryPageRowsCmp);
-                          let brandWonCount = 0;
-                          let brandLostCount = 0;
-                          brandImprCur.forEach((impr, q) => { if (impr > 0 && (brandImprCmp.get(q) ?? 0) === 0) brandWonCount++; });
-                          brandImprCmp.forEach((impr, q) => { if (impr > 0 && (brandImprCur.get(q) ?? 0) === 0) brandLostCount++; });
+                          const nbImprCur = aggNbImprByQuery(d.queryPageRowsCur);
+                          const nbImprCmp = aggNbImprByQuery(d.queryPageRowsCmp);
+                          let nbWonCount = 0;
+                          let nbLostCount = 0;
+                          nbImprCur.forEach((impr, q) => { if (impr > 0 && (nbImprCmp.get(q) ?? 0) === 0) nbWonCount++; });
+                          nbImprCmp.forEach((impr, q) => { if (impr > 0 && (nbImprCur.get(q) ?? 0) === 0) nbLostCount++; });
                           return (
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                               <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">New branded queries won</div>
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">New non-branded queries won</div>
                                 <div className="flex items-end justify-between gap-2">
-                                  <span className="text-2xl font-bold text-emerald-600 tabular-nums">{hasCmp ? brandWonCount.toLocaleString() : "—"}</span>
+                                  <span className="text-2xl font-bold text-emerald-600 tabular-nums">{hasCmp ? nbWonCount.toLocaleString() : "—"}</span>
                                 </div>
                                 <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? "got impressions this period, none previously" : "needs a comparison period"}</div>
                               </div>
                               <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Branded queries lost</div>
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-branded queries lost</div>
                                 <div className="flex items-end justify-between gap-2">
-                                  <span className="text-2xl font-bold text-red-500 tabular-nums">{hasCmp ? brandLostCount.toLocaleString() : "—"}</span>
+                                  <span className="text-2xl font-bold text-red-500 tabular-nums">{hasCmp ? nbLostCount.toLocaleString() : "—"}</span>
                                 </div>
                                 <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? "had impressions previously, none this period" : "needs a comparison period"}</div>
                               </div>
@@ -8876,23 +8876,23 @@ ${combinedHtml}
                           </ChartCard>
                         )}
 
-                        {/* Branded queries: Won (new) & Lost — only shown when a comparison period exists */}
+                        {/* Non-branded queries: Won (new) & Lost — only shown when a comparison period exists */}
                         {hasCmp && !nbsuDrill && (() => {
-                          // Aggregate brand queries to query level (sum impressions/clicks across pages,
+                          // Aggregate non-brand queries to query level (sum impressions/clicks across pages,
                           // impression-weighted position) so each query appears once. "Won" = present in
                           // current with impressions > 0 AND absent (zero impressions) in comparison. "Lost" = inverse.
-                          type BrandAgg = { query: string; impressions: number; clicks: number; position: number };
-                          const aggregate = (rows: typeof d.queryPageRowsCur): Map<string, BrandAgg> => {
+                          type NbAgg = { query: string; impressions: number; clicks: number; position: number };
+                          const aggregate = (rows: typeof d.queryPageRowsCur): Map<string, NbAgg> => {
                             const acc = new Map<string, { impressions: number; clicks: number; posImpr: number }>();
                             for (const r of rows) {
-                              if (r.cls !== "brand") continue;
+                              if (r.cls !== "nonBrand") continue;
                               const cur = acc.get(r.query) ?? { impressions: 0, clicks: 0, posImpr: 0 };
                               cur.impressions += r.impressions;
                               cur.clicks      += r.clicks;
                               cur.posImpr     += r.position * r.impressions;
                               acc.set(r.query, cur);
                             }
-                            const out = new Map<string, BrandAgg>();
+                            const out = new Map<string, NbAgg>();
                             acc.forEach((v, k) => out.set(k, {
                               query: k,
                               impressions: v.impressions,
@@ -8901,16 +8901,16 @@ ${combinedHtml}
                             }));
                             return out;
                           };
-                          const brandCur = aggregate(d.queryPageRowsCur);
-                          const brandCmp = aggregate(d.queryPageRowsCmp);
-                          const wonRows: BrandAgg[] = [];
-                          brandCur.forEach((agg, q) => { if (agg.impressions > 0 && (brandCmp.get(q)?.impressions ?? 0) === 0) wonRows.push(agg); });
-                          const lostRows: BrandAgg[] = [];
-                          brandCmp.forEach((agg, q) => { if (agg.impressions > 0 && (brandCur.get(q)?.impressions ?? 0) === 0) lostRows.push(agg); });
+                          const nbCur = aggregate(d.queryPageRowsCur);
+                          const nbCmp = aggregate(d.queryPageRowsCmp);
+                          const wonRows: NbAgg[] = [];
+                          nbCur.forEach((agg, q) => { if (agg.impressions > 0 && (nbCmp.get(q)?.impressions ?? 0) === 0) wonRows.push(agg); });
+                          const lostRows: NbAgg[] = [];
+                          nbCmp.forEach((agg, q) => { if (agg.impressions > 0 && (nbCur.get(q)?.impressions ?? 0) === 0) lostRows.push(agg); });
                           wonRows.sort((a, b) => b.impressions - a.impressions);
                           lostRows.sort((a, b) => b.impressions - a.impressions);
 
-                          const QueryTable = ({ rows, accent, periodLabel }: { rows: BrandAgg[]; accent: "won" | "lost"; periodLabel: string }) => {
+                          const QueryTable = ({ rows, accent, periodLabel }: { rows: NbAgg[]; accent: "won" | "lost"; periodLabel: string }) => {
                             const isWon = accent === "won";
                             return (
                               <div className="overflow-x-auto overflow-y-auto overscroll-contain rounded-xl border border-gray-50" style={{ maxHeight: 360, WebkitOverflowScrolling: "touch" }}>
@@ -8935,7 +8935,7 @@ ${combinedHtml}
                                       </tr>
                                     ))}
                                     {rows.length === 0 && (
-                                      <tr><td colSpan={4} className="py-6 text-center text-gray-400">No {isWon ? "new" : "lost"} branded queries in this window.</td></tr>
+                                      <tr><td colSpan={4} className="py-6 text-center text-gray-400">No {isWon ? "new" : "lost"} non-branded queries in this window.</td></tr>
                                     )}
                                   </tbody>
                                 </table>
@@ -8945,18 +8945,18 @@ ${combinedHtml}
                           return (
                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                               <ChartCard
-                                title={<span className="flex items-center gap-2"><span className="text-emerald-600">▲</span>New branded queries won</span>}
-                                tip="Brand queries that received impressions this period but had zero impressions in the comparison period. Aggregated at query level across all landing pages, sorted by impressions."
+                                title={<span className="flex items-center gap-2"><span className="text-emerald-600">▲</span>New non-branded queries won</span>}
+                                tip="Non-brand queries that received impressions this period but had zero impressions in the comparison period. Aggregated at query level across all landing pages, sorted by impressions."
                               >
                                 <QueryTable rows={wonRows} accent="won" periodLabel="this period" />
-                                <div className="text-[10px] text-gray-400 mt-2">{wonRows.length.toLocaleString()} branded queries appeared this period that weren't seen previously.</div>
+                                <div className="text-[10px] text-gray-400 mt-2">{wonRows.length.toLocaleString()} non-branded queries appeared this period that weren't seen previously.</div>
                               </ChartCard>
                               <ChartCard
-                                title={<span className="flex items-center gap-2"><span className="text-red-500">▼</span>Branded queries lost</span>}
-                                tip="Brand queries that had impressions in the comparison period but zero this period. Aggregated at query level. Sorted by previous-period impressions to surface the most material losses first."
+                                title={<span className="flex items-center gap-2"><span className="text-red-500">▼</span>Non-branded queries lost</span>}
+                                tip="Non-brand queries that had impressions in the comparison period but zero this period. Aggregated at query level. Sorted by previous-period impressions to surface the most material losses first."
                               >
                                 <QueryTable rows={lostRows} accent="lost" periodLabel="previous period" />
-                                <div className="text-[10px] text-gray-400 mt-2">{lostRows.length.toLocaleString()} branded queries dropped out of the impression universe vs the comparison period.</div>
+                                <div className="text-[10px] text-gray-400 mt-2">{lostRows.length.toLocaleString()} non-branded queries dropped out of the impression universe vs the comparison period.</div>
                               </ChartCard>
                             </div>
                           );
