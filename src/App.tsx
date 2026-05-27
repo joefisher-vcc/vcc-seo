@@ -8139,40 +8139,111 @@ ${combinedHtml}
                           {hasCmp && <span><strong>{nbsuFetchFilters.comparison === "prevYear" ? "Last year:" : "Previous:"}</strong> {cmpPeriodLabel}</span>}
                         </div>
 
-                        {/* KPI scorecards — aligned columns: Total | Brand | Non-Brand */}
-                        {(() => {
-                          // ── Derived figures used across rows ──
-                          const totalClicksCur    = d.queryPageRowsCur.reduce((s, r) => s + r.clicks, 0);
-                          const totalClicksCmp    = d.queryPageRowsCmp.reduce((s, r) => s + r.clicks, 0);
-                          const nbClicksCur       = d.queryPageRowsCur.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
-                          const nbClicksCmp       = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
-                          const brandClicksCur    = d.queryPageRowsCur.reduce((s, r) => s + (r.cls === "brand"    ? r.clicks : 0), 0);
-                          const brandClicksCmp    = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "brand"    ? r.clicks : 0), 0);
+                        {/* KPI cards — row 1: sign-ups (totals → brand → nb) */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                          <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Organic sessions</div>
+                            <div className="flex items-end justify-between gap-2">
+                              <span className="text-2xl font-bold text-gray-900 tabular-nums">{Math.round(d.totals.orgSessions).toLocaleString()}</span>
+                              {hasCmp && <Delta p={pct(d.totals.orgSessions, d.totals.orgSessionsCmp)} />}
+                            </div>
+                            <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.orgSessionsCmp).toLocaleString()} previously` : "whole site · organic"}</div>
+                          </div>
+                          <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Total SEO sign-ups</div>
+                            <div className="flex items-end justify-between gap-2">
+                              <span className="text-2xl font-bold text-sky-700 tabular-nums">{Math.round(d.totals.fspLeads).toLocaleString()}</span>
+                              {hasCmp && <Delta p={pct(d.totals.fspLeads, d.totals.fspLeadsCmp)} />}
+                            </div>
+                            <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.fspLeadsCmp).toLocaleString()} previously` : "generate_lead events"}</div>
+                          </div>
+                          <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Brand SEO sign-ups</div>
+                            <div className="flex items-end justify-between gap-2">
+                              <span className="text-2xl font-bold text-[#5b4fa8] tabular-nums">{Math.round(d.totals.brandLeads).toLocaleString()}</span>
+                              {hasCmp && <Delta p={pct(d.totals.brandLeads, d.totals.brandLeadsCmp)} />}
+                            </div>
+                            <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.brandLeadsCmp).toLocaleString()} previously` : "click-weighted brand share"}</div>
+                          </div>
+                          <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-brand SEO sign-ups</div>
+                            <div className="flex items-end justify-between gap-2">
+                              <span className="text-2xl font-bold text-emerald-600 tabular-nums">{Math.round(d.totals.nbLeads).toLocaleString()}</span>
+                              {hasCmp && <Delta p={pct(d.totals.nbLeads, d.totals.nbLeadsCmp)} />}
+                            </div>
+                            <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.nbLeadsCmp).toLocaleString()} previously · ` : ""}site-wide NB ratio {(d.totals.siteWideNbRatio * 100).toFixed(1)}%</div>
+                          </div>
+                        </div>
 
+                        {/* GSC query KPI cards — second row: clicks (totals → brand → nb) */}
+                        {(() => {
+                          const totalClicksCur = d.queryPageRowsCur.reduce((s, r) => s + r.clicks, 0);
+                          const totalClicksCmp = d.queryPageRowsCmp.reduce((s, r) => s + r.clicks, 0);
+                          const nbClicksCur = d.queryPageRowsCur.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
+                          const nbClicksCmp = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
+                          const brandClicksCur = d.queryPageRowsCur.reduce((s, r) => s + (r.cls === "brand" ? r.clicks : 0), 0);
+                          const brandClicksCmp = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "brand" ? r.clicks : 0), 0);
                           const totalQueryCountCur = new Set(d.queryPageRowsCur.map((r) => r.query)).size;
                           const totalQueryCountCmp = new Set(d.queryPageRowsCmp.map((r) => r.query)).size;
-                          const nbQueryCountCur    = new Set(d.queryPageRowsCur.filter((r) => r.cls === "nonBrand").map((r) => r.query)).size;
-                          const nbQueryCountCmp    = new Set(d.queryPageRowsCmp.filter((r) => r.cls === "nonBrand").map((r) => r.query)).size;
-                          const brandQueryCountCur = new Set(d.queryPageRowsCur.filter((r) => r.cls === "brand").map((r) => r.query)).size;
-                          const brandQueryCountCmp = new Set(d.queryPageRowsCmp.filter((r) => r.cls === "brand").map((r) => r.query)).size;
+                          return (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Total clicks</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-gray-900 tabular-nums">{totalClicksCur.toLocaleString()}</span>
+                                  {hasCmp && <Delta p={pct(totalClicksCur, totalClicksCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${totalClicksCmp.toLocaleString()} previously` : "all GSC query clicks"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Total query count</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-gray-900 tabular-nums">{totalQueryCountCur.toLocaleString()}</span>
+                                  {hasCmp && <Delta p={pct(totalQueryCountCur, totalQueryCountCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${totalQueryCountCmp.toLocaleString()} previously` : "unique queries"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Branded query clicks</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-[#5b4fa8] tabular-nums">{brandClicksCur.toLocaleString()}</span>
+                                  {hasCmp && <Delta p={pct(brandClicksCur, brandClicksCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${brandClicksCmp.toLocaleString()} previously` : "brand classified queries"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-brand query clicks</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-emerald-600 tabular-nums">{nbClicksCur.toLocaleString()}</span>
+                                  {hasCmp && <Delta p={pct(nbClicksCur, nbClicksCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${nbClicksCmp.toLocaleString()} previously` : "non-brand classified queries"}</div>
+                              </div>
+                            </div>
+                          );
+                        })()}
 
-                          // Conversion rates
-                          const totalCvrCur = d.totals.orgSessions    > 0 ? (d.totals.fspLeads    / d.totals.orgSessions)    * 100 : 0;
-                          const brandCvrCur = d.totals.brandClicks    > 0 ? (d.totals.brandLeads  / d.totals.brandClicks)    * 100 : 0;
-                          const nbCvrCur    = d.totals.nonBrandClicks > 0 ? (d.totals.nbLeads     / d.totals.nonBrandClicks) * 100 : 0;
-                          const totalCvrCmp = d.totals.orgSessionsCmp > 0 ? (d.totals.fspLeadsCmp / d.totals.orgSessionsCmp) * 100 : 0;
-                          const brandCvrCmp = brandClicksCmp          > 0 ? (d.totals.brandLeadsCmp / brandClicksCmp)        * 100 : 0;
-                          const nbCvrCmp    = nbClicksCmp             > 0 ? (d.totals.nbLeadsCmp    / nbClicksCmp)           * 100 : 0;
-                          const fmtPct = (v: number) => `${v.toFixed(2)}%`;
+                        {/* GSC query KPI cards — third row: query counts (brand → nb) + NB position movement */}
+                        {(() => {
+                          // Unique query counts by class
+                          const nbQuerySetCur = new Set(d.queryPageRowsCur.filter((r) => r.cls === "nonBrand").map((r) => r.query));
+                          const nbQuerySetCmp = new Set(d.queryPageRowsCmp.filter((r) => r.cls === "nonBrand").map((r) => r.query));
+                          const brandQuerySetCur = new Set(d.queryPageRowsCur.filter((r) => r.cls === "brand").map((r) => r.query));
+                          const brandQuerySetCmp = new Set(d.queryPageRowsCmp.filter((r) => r.cls === "brand").map((r) => r.query));
+                          const nbQueryCountCur = nbQuerySetCur.size;
+                          const nbQueryCountCmp = nbQuerySetCmp.size;
+                          const brandQueryCountCur = brandQuerySetCur.size;
+                          const brandQueryCountCmp = brandQuerySetCmp.size;
 
-                          // NB position movement & avg position
+                          // Aggregate non-brand queries to impression-weighted average position per period.
+                          // Lower position = better rank, so "up in position" = position decreased vs cmp.
                           const aggNbPositions = (rows: typeof d.queryPageRowsCur) => {
                             const acc = new Map<string, { posImpr: number; impr: number }>();
                             for (const r of rows) {
                               if (r.cls !== "nonBrand") continue;
                               const cur = acc.get(r.query) ?? { posImpr: 0, impr: 0 };
                               cur.posImpr += r.position * r.impressions;
-                              cur.impr    += r.impressions;
+                              cur.impr += r.impressions;
                               acc.set(r.query, cur);
                             }
                             const out = new Map<string, number>();
@@ -8183,12 +8254,66 @@ ${combinedHtml}
                           const nbPosCmp = aggNbPositions(d.queryPageRowsCmp);
                           let nbQueriesUpInPos = 0;
                           let nbQueriesDownInPos = 0;
+                          // Only count queries present in both periods so the comparison is meaningful.
                           nbPosCur.forEach((curPos, q) => {
                             const cmpPos = nbPosCmp.get(q);
                             if (cmpPos == null) return;
                             if (curPos < cmpPos) nbQueriesUpInPos++;
                             else if (curPos > cmpPos) nbQueriesDownInPos++;
                           });
+
+                          return (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Branded query count</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-[#5b4fa8] tabular-nums">{brandQueryCountCur.toLocaleString()}</span>
+                                  {hasCmp && <Delta p={pct(brandQueryCountCur, brandQueryCountCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${brandQueryCountCmp.toLocaleString()} previously` : "unique brand queries"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-branded query count</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-emerald-600 tabular-nums">{nbQueryCountCur.toLocaleString()}</span>
+                                  {hasCmp && <Delta p={pct(nbQueryCountCur, nbQueryCountCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${nbQueryCountCmp.toLocaleString()} previously` : "unique non-brand queries"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">NB queries up in position</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-emerald-600 tabular-nums">{hasCmp ? nbQueriesUpInPos.toLocaleString() : "—"}</span>
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? "ranked higher vs previous period" : "needs a comparison period"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">NB queries down in position</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-red-500 tabular-nums">{hasCmp ? nbQueriesDownInPos.toLocaleString() : "—"}</span>
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? "ranked lower vs previous period" : "needs a comparison period"}</div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        {/* GSC query KPI cards — fourth row: conversion rates (totals → brand → nb) + NB avg position */}
+                        {(() => {
+                          // Conversion rates (current period)
+                          const totalCvrCur     = d.totals.orgSessions    > 0 ? (d.totals.fspLeads    / d.totals.orgSessions)    * 100 : 0;
+                          const brandCvrCur     = d.totals.brandClicks    > 0 ? (d.totals.brandLeads  / d.totals.brandClicks)    * 100 : 0;
+                          const nbCvrCur        = d.totals.nonBrandClicks > 0 ? (d.totals.nbLeads     / d.totals.nonBrandClicks) * 100 : 0;
+
+                          // Conversion rates (comparison period) — derive brand/nb click totals from queryPageRowsCmp,
+                          // matching how the current period's brand/nonBrand clicks were summed in the data fetcher.
+                          const brandClicksCmp    = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "brand"    ? r.clicks : 0), 0);
+                          const nonBrandClicksCmp = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
+                          const totalCvrCmp = d.totals.orgSessionsCmp > 0 ? (d.totals.fspLeadsCmp   / d.totals.orgSessionsCmp) * 100 : 0;
+                          const brandCvrCmp = brandClicksCmp          > 0 ? (d.totals.brandLeadsCmp / brandClicksCmp)          * 100 : 0;
+                          const nbCvrCmp    = nonBrandClicksCmp       > 0 ? (d.totals.nbLeadsCmp    / nonBrandClicksCmp)       * 100 : 0;
+
+                          // NB average position — impression-weighted over non-brand rows only.
                           const nbAvgPosFor = (rows: typeof d.queryPageRowsCur) => {
                             let posImpr = 0, impr = 0;
                             for (const r of rows) {
@@ -8200,9 +8325,59 @@ ${combinedHtml}
                           };
                           const nbAvgPosCur = nbAvgPosFor(d.queryPageRowsCur);
                           const nbAvgPosCmp = nbAvgPosFor(d.queryPageRowsCmp);
+                          // For position, lower = better, so invert delta sign so an improvement reads positive.
                           const posDeltaPct = nbAvgPosCmp > 0 ? ((nbAvgPosCmp - nbAvgPosCur) / nbAvgPosCmp) * 100 : 0;
 
-                          // New / lost non-brand queries
+                          const fmtPct = (v: number) => `${v.toFixed(2)}%`;
+
+                          return (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Total conversion rate</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-sky-700 tabular-nums">{fmtPct(totalCvrCur)}</span>
+                                  {hasCmp && <Delta p={pct(totalCvrCur, totalCvrCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${fmtPct(totalCvrCmp)} previously` : "sign-ups ÷ organic sessions"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Branded conversion rate</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-[#5b4fa8] tabular-nums">{fmtPct(brandCvrCur)}</span>
+                                  {hasCmp && <Delta p={pct(brandCvrCur, brandCvrCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${fmtPct(brandCvrCmp)} previously` : "brand sign-ups ÷ brand clicks"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-branded conversion rate</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-emerald-600 tabular-nums">{fmtPct(nbCvrCur)}</span>
+                                  {hasCmp && <Delta p={pct(nbCvrCur, nbCvrCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${fmtPct(nbCvrCmp)} previously` : "NB sign-ups ÷ NB clicks"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-branded avg position</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-emerald-600 tabular-nums">{nbAvgPosCur > 0 ? nbAvgPosCur.toFixed(1) : "—"}</span>
+                                  {hasCmp && nbAvgPosCmp > 0 && (
+                                    <span className={`text-[11px] font-bold ${posDeltaPct >= 0 ? "text-emerald-600" : "text-red-500"}`}>
+                                      {posDeltaPct >= 0 ? "+" : ""}{posDeltaPct.toFixed(1)}%
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp && nbAvgPosCmp > 0 ? `${nbAvgPosCmp.toFixed(1)} previously · lower = better` : "impression-weighted · lower = better"}</div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        {/* GSC query KPI cards — fifth row: new non-branded queries won / lost */}
+                        {(() => {
+                          // "New" = got impressions this period but had zero in the comparison period (won).
+                          // "Lost" = had impressions in the comparison period but zero this period.
+                          // Aggregated at query level (sum impressions across all landing pages) to avoid
+                          // counting the same query multiple times.
                           const aggNbImprByQuery = (rows: typeof d.queryPageRowsCur) => {
                             const m = new Map<string, number>();
                             for (const r of rows) {
@@ -8217,199 +8392,21 @@ ${combinedHtml}
                           let nbLostCount = 0;
                           nbImprCur.forEach((impr, q) => { if (impr > 0 && (nbImprCmp.get(q) ?? 0) === 0) nbWonCount++; });
                           nbImprCmp.forEach((impr, q) => { if (impr > 0 && (nbImprCur.get(q) ?? 0) === 0) nbLostCount++; });
-
-                          // ── Card primitive ──
-                          const Card = ({ label, value, valueColor, sub, delta }: {
-                            label: string; value: React.ReactNode; valueColor: string; sub: React.ReactNode; delta?: React.ReactNode;
-                          }) => (
-                            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                              <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">{label}</div>
-                              <div className="flex items-end justify-between gap-2">
-                                <span className={`text-2xl font-bold tabular-nums ${valueColor}`}>{value}</span>
-                                {delta}
-                              </div>
-                              <div className="text-[10px] text-gray-400 mt-1">{sub}</div>
-                            </div>
-                          );
-                          const Empty = () => <div className="hidden lg:block" />;
-
                           return (
-                            <div className="space-y-3">
-                              {/* Column headers (lg+) */}
-                              <div className="hidden lg:grid lg:grid-cols-3 gap-3 px-1">
-                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold">Total</div>
-                                <div className="text-[10px] uppercase tracking-wider text-[#5b4fa8] font-semibold">Brand</div>
-                                <div className="text-[10px] uppercase tracking-wider text-emerald-600 font-semibold">Non-Brand</div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">New non-branded queries won</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-emerald-600 tabular-nums">{hasCmp ? nbWonCount.toLocaleString() : "—"}</span>
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? "got impressions this period, none previously" : "needs a comparison period"}</div>
                               </div>
-
-                              {/* Row 1: Sign-ups */}
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                <Card
-                                  label="Total SEO sign-ups"
-                                  value={Math.round(d.totals.fspLeads).toLocaleString()}
-                                  valueColor="text-sky-700"
-                                  delta={hasCmp ? <Delta p={pct(d.totals.fspLeads, d.totals.fspLeadsCmp)} /> : null}
-                                  sub={hasCmp ? `${Math.round(d.totals.fspLeadsCmp).toLocaleString()} previously` : "generate_lead events"}
-                                />
-                                <Card
-                                  label="Brand SEO sign-ups"
-                                  value={Math.round(d.totals.brandLeads).toLocaleString()}
-                                  valueColor="text-[#5b4fa8]"
-                                  delta={hasCmp ? <Delta p={pct(d.totals.brandLeads, d.totals.brandLeadsCmp)} /> : null}
-                                  sub={hasCmp ? `${Math.round(d.totals.brandLeadsCmp).toLocaleString()} previously` : "click-weighted brand share"}
-                                />
-                                <Card
-                                  label="Non-brand SEO sign-ups"
-                                  value={Math.round(d.totals.nbLeads).toLocaleString()}
-                                  valueColor="text-emerald-600"
-                                  delta={hasCmp ? <Delta p={pct(d.totals.nbLeads, d.totals.nbLeadsCmp)} /> : null}
-                                  sub={`${hasCmp ? `${Math.round(d.totals.nbLeadsCmp).toLocaleString()} previously · ` : ""}site-wide NB ratio ${(d.totals.siteWideNbRatio * 100).toFixed(1)}%`}
-                                />
-                              </div>
-
-                              {/* Row 2: Sessions (total only) */}
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                <Card
-                                  label="Organic sessions"
-                                  value={Math.round(d.totals.orgSessions).toLocaleString()}
-                                  valueColor="text-gray-900"
-                                  delta={hasCmp ? <Delta p={pct(d.totals.orgSessions, d.totals.orgSessionsCmp)} /> : null}
-                                  sub={hasCmp ? `${Math.round(d.totals.orgSessionsCmp).toLocaleString()} previously` : "whole site · organic"}
-                                />
-                                <Empty />
-                                <Empty />
-                              </div>
-
-                              {/* Row 3: Query clicks */}
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                <Card
-                                  label="Total clicks"
-                                  value={totalClicksCur.toLocaleString()}
-                                  valueColor="text-gray-900"
-                                  delta={hasCmp ? <Delta p={pct(totalClicksCur, totalClicksCmp)} /> : null}
-                                  sub={hasCmp ? `${totalClicksCmp.toLocaleString()} previously` : "all GSC query clicks"}
-                                />
-                                <Card
-                                  label="Branded query clicks"
-                                  value={brandClicksCur.toLocaleString()}
-                                  valueColor="text-[#5b4fa8]"
-                                  delta={hasCmp ? <Delta p={pct(brandClicksCur, brandClicksCmp)} /> : null}
-                                  sub={hasCmp ? `${brandClicksCmp.toLocaleString()} previously` : "brand classified queries"}
-                                />
-                                <Card
-                                  label="Non-brand query clicks"
-                                  value={nbClicksCur.toLocaleString()}
-                                  valueColor="text-emerald-600"
-                                  delta={hasCmp ? <Delta p={pct(nbClicksCur, nbClicksCmp)} /> : null}
-                                  sub={hasCmp ? `${nbClicksCmp.toLocaleString()} previously` : "non-brand classified queries"}
-                                />
-                              </div>
-
-                              {/* Row 4: Query counts */}
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                <Card
-                                  label="Total query count"
-                                  value={totalQueryCountCur.toLocaleString()}
-                                  valueColor="text-gray-900"
-                                  delta={hasCmp ? <Delta p={pct(totalQueryCountCur, totalQueryCountCmp)} /> : null}
-                                  sub={hasCmp ? `${totalQueryCountCmp.toLocaleString()} previously` : "unique queries"}
-                                />
-                                <Card
-                                  label="Branded query count"
-                                  value={brandQueryCountCur.toLocaleString()}
-                                  valueColor="text-[#5b4fa8]"
-                                  delta={hasCmp ? <Delta p={pct(brandQueryCountCur, brandQueryCountCmp)} /> : null}
-                                  sub={hasCmp ? `${brandQueryCountCmp.toLocaleString()} previously` : "unique brand queries"}
-                                />
-                                <Card
-                                  label="Non-branded query count"
-                                  value={nbQueryCountCur.toLocaleString()}
-                                  valueColor="text-emerald-600"
-                                  delta={hasCmp ? <Delta p={pct(nbQueryCountCur, nbQueryCountCmp)} /> : null}
-                                  sub={hasCmp ? `${nbQueryCountCmp.toLocaleString()} previously` : "unique non-brand queries"}
-                                />
-                              </div>
-
-                              {/* Row 5: Conversion rates */}
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                <Card
-                                  label="Total conversion rate"
-                                  value={fmtPct(totalCvrCur)}
-                                  valueColor="text-sky-700"
-                                  delta={hasCmp ? <Delta p={pct(totalCvrCur, totalCvrCmp)} /> : null}
-                                  sub={hasCmp ? `${fmtPct(totalCvrCmp)} previously` : "sign-ups ÷ organic sessions"}
-                                />
-                                <Card
-                                  label="Branded conversion rate"
-                                  value={fmtPct(brandCvrCur)}
-                                  valueColor="text-[#5b4fa8]"
-                                  delta={hasCmp ? <Delta p={pct(brandCvrCur, brandCvrCmp)} /> : null}
-                                  sub={hasCmp ? `${fmtPct(brandCvrCmp)} previously` : "brand sign-ups ÷ brand clicks"}
-                                />
-                                <Card
-                                  label="Non-branded conversion rate"
-                                  value={fmtPct(nbCvrCur)}
-                                  valueColor="text-emerald-600"
-                                  delta={hasCmp ? <Delta p={pct(nbCvrCur, nbCvrCmp)} /> : null}
-                                  sub={hasCmp ? `${fmtPct(nbCvrCmp)} previously` : "NB sign-ups ÷ NB clicks"}
-                                />
-                              </div>
-
-                              {/* Row 6: NB-only position & movement (all in the NB column) */}
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                <Empty />
-                                <Empty />
-                                <Card
-                                  label="Non-branded avg position"
-                                  value={nbAvgPosCur > 0 ? nbAvgPosCur.toFixed(1) : "—"}
-                                  valueColor="text-emerald-600"
-                                  delta={hasCmp && nbAvgPosCmp > 0 ? (
-                                    <span className={`text-[11px] font-bold ${posDeltaPct >= 0 ? "text-emerald-600" : "text-red-500"}`}>
-                                      {posDeltaPct >= 0 ? "+" : ""}{posDeltaPct.toFixed(1)}%
-                                    </span>
-                                  ) : null}
-                                  sub={hasCmp && nbAvgPosCmp > 0 ? `${nbAvgPosCmp.toFixed(1)} previously · lower = better` : "impression-weighted · lower = better"}
-                                />
-                              </div>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                <Empty />
-                                <Empty />
-                                <Card
-                                  label="NB queries up in position"
-                                  value={hasCmp ? nbQueriesUpInPos.toLocaleString() : "—"}
-                                  valueColor="text-emerald-600"
-                                  sub={hasCmp ? "ranked higher vs previous period" : "needs a comparison period"}
-                                />
-                              </div>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                <Empty />
-                                <Empty />
-                                <Card
-                                  label="NB queries down in position"
-                                  value={hasCmp ? nbQueriesDownInPos.toLocaleString() : "—"}
-                                  valueColor="text-red-500"
-                                  sub={hasCmp ? "ranked lower vs previous period" : "needs a comparison period"}
-                                />
-                              </div>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                <Empty />
-                                <Empty />
-                                <Card
-                                  label="New non-branded queries won"
-                                  value={hasCmp ? nbWonCount.toLocaleString() : "—"}
-                                  valueColor="text-emerald-600"
-                                  sub={hasCmp ? "got impressions this period, none previously" : "needs a comparison period"}
-                                />
-                              </div>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                <Empty />
-                                <Empty />
-                                <Card
-                                  label="Non-branded queries lost"
-                                  value={hasCmp ? nbLostCount.toLocaleString() : "—"}
-                                  valueColor="text-red-500"
-                                  sub={hasCmp ? "had impressions previously, none this period" : "needs a comparison period"}
-                                />
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-branded queries lost</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-red-500 tabular-nums">{hasCmp ? nbLostCount.toLocaleString() : "—"}</span>
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? "had impressions previously, none this period" : "needs a comparison period"}</div>
                               </div>
                             </div>
                           );
