@@ -3377,6 +3377,8 @@ export default function App() {
   const [nbsuDrill, setNbsuDrill] = useState<{ page: string; cls: "brand" | "nonBrand" } | null>(null);
   /** Expanded-row tracker for the query/url movement tables. Key format: `${tableId}::${rowKey}`. */
   const [nbsuExpanded, setNbsuExpanded] = useState<Set<string>>(new Set());
+  /** NB Sign Ups forecast calculator — target % uplift in non-brand sign-ups (default 10). */
+  const [nbsuForecastPct, setNbsuForecastPct] = useState<number>(10);
   const [queryCopyResults, setQueryCopyResults] = useState<Map<string, { text: string; queryHits: Map<string, boolean> }>>(new Map());
   const [queryCopyLoading, setQueryCopyLoading] = useState<Set<string>>(new Set());
   const [queryCopyPage, setQueryCopyPage] = useState<string>(""); // URL typed/selected by user
@@ -8292,6 +8294,150 @@ ${combinedHtml}
                                 </div>
                                 <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? "ranked lower vs previous period" : "needs a comparison period"}</div>
                               </div>
+                            </div>
+                          );
+                        })()}
+
+                        {/* GSC query KPI cards — fourth row: conversion rates + NB avg position */}
+                        {(() => {
+                          // Conversion rates (current period)
+                          const totalCvrCur     = d.totals.orgSessions    > 0 ? (d.totals.fspLeads    / d.totals.orgSessions)    * 100 : 0;
+                          const brandCvrCur     = d.totals.brandClicks    > 0 ? (d.totals.brandLeads  / d.totals.brandClicks)    * 100 : 0;
+                          const nbCvrCur        = d.totals.nonBrandClicks > 0 ? (d.totals.nbLeads     / d.totals.nonBrandClicks) * 100 : 0;
+
+                          // Conversion rates (comparison period) — derive brand/nb click totals from queryPageRowsCmp,
+                          // matching how the current period's brand/nonBrand clicks were summed in the data fetcher.
+                          const brandClicksCmp    = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "brand"    ? r.clicks : 0), 0);
+                          const nonBrandClicksCmp = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
+                          const totalCvrCmp = d.totals.orgSessionsCmp > 0 ? (d.totals.fspLeadsCmp   / d.totals.orgSessionsCmp) * 100 : 0;
+                          const brandCvrCmp = brandClicksCmp          > 0 ? (d.totals.brandLeadsCmp / brandClicksCmp)          * 100 : 0;
+                          const nbCvrCmp    = nonBrandClicksCmp       > 0 ? (d.totals.nbLeadsCmp    / nonBrandClicksCmp)       * 100 : 0;
+
+                          // NB average position — impression-weighted over non-brand rows only.
+                          const nbAvgPosFor = (rows: typeof d.queryPageRowsCur) => {
+                            let posImpr = 0, impr = 0;
+                            for (const r of rows) {
+                              if (r.cls !== "nonBrand") continue;
+                              posImpr += r.position * r.impressions;
+                              impr    += r.impressions;
+                            }
+                            return impr > 0 ? posImpr / impr : 0;
+                          };
+                          const nbAvgPosCur = nbAvgPosFor(d.queryPageRowsCur);
+                          const nbAvgPosCmp = nbAvgPosFor(d.queryPageRowsCmp);
+                          // For position, lower = better, so invert delta sign so an improvement reads positive.
+                          const posDeltaPct = nbAvgPosCmp > 0 ? ((nbAvgPosCmp - nbAvgPosCur) / nbAvgPosCmp) * 100 : 0;
+
+                          const fmtPct = (v: number) => `${v.toFixed(2)}%`;
+
+                          return (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Total conversion rate</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-sky-700 tabular-nums">{fmtPct(totalCvrCur)}</span>
+                                  {hasCmp && <Delta p={pct(totalCvrCur, totalCvrCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${fmtPct(totalCvrCmp)} previously` : "sign-ups ÷ organic sessions"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Branded conversion rate</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-[#5b4fa8] tabular-nums">{fmtPct(brandCvrCur)}</span>
+                                  {hasCmp && <Delta p={pct(brandCvrCur, brandCvrCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${fmtPct(brandCvrCmp)} previously` : "brand sign-ups ÷ brand clicks"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-branded conversion rate</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-emerald-600 tabular-nums">{fmtPct(nbCvrCur)}</span>
+                                  {hasCmp && <Delta p={pct(nbCvrCur, nbCvrCmp)} />}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${fmtPct(nbCvrCmp)} previously` : "NB sign-ups ÷ NB clicks"}</div>
+                              </div>
+                              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Non-branded avg position</div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <span className="text-2xl font-bold text-emerald-600 tabular-nums">{nbAvgPosCur > 0 ? nbAvgPosCur.toFixed(1) : "—"}</span>
+                                  {hasCmp && nbAvgPosCmp > 0 && (
+                                    <span className={`text-[11px] font-bold ${posDeltaPct >= 0 ? "text-emerald-600" : "text-red-500"}`}>
+                                      {posDeltaPct >= 0 ? "+" : ""}{posDeltaPct.toFixed(1)}%
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-1">{hasCmp && nbAvgPosCmp > 0 ? `${nbAvgPosCmp.toFixed(1)} previously · lower = better` : "impression-weighted · lower = better"}</div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        {/* NB Sign Ups forecast calculator */}
+                        {(() => {
+                          const nbCvr = d.totals.nonBrandClicks > 0 ? d.totals.nbLeads / d.totals.nonBrandClicks : 0;
+                          const currentNbLeads  = d.totals.nbLeads;
+                          const currentNbClicks = d.totals.nonBrandClicks;
+                          const pctVal = Number.isFinite(nbsuForecastPct) ? nbsuForecastPct : 0;
+                          const additionalLeads = currentNbLeads * (pctVal / 100);
+                          const targetLeads     = currentNbLeads + additionalLeads;
+                          const additionalClicksNeeded = nbCvr > 0 ? additionalLeads / nbCvr : 0;
+                          const targetClicks    = currentNbClicks + additionalClicksNeeded;
+                          const canForecast = nbCvr > 0 && currentNbLeads > 0;
+                          return (
+                            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                              <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+                                <div className="flex items-center gap-2">
+                                  <div className="bg-emerald-50 border border-emerald-100 rounded-lg p-1.5"><TrendingUp size={12} className="text-emerald-600" /></div>
+                                  <div>
+                                    <h3 className="text-xs font-bold text-gray-900">Non-brand sign-ups forecast</h3>
+                                    <p className="text-[10px] text-gray-400">How many extra non-brand clicks you'd need at today's NB conversion rate to hit a target uplift.</p>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <label className="text-[11px] text-gray-500 font-medium">Increase NB sign-ups by</label>
+                                  <div className="flex items-center gap-1">
+                                    <input
+                                      type="number"
+                                      value={Number.isFinite(nbsuForecastPct) ? nbsuForecastPct : 0}
+                                      onChange={(e) => {
+                                        const v = parseFloat(e.target.value);
+                                        setNbsuForecastPct(Number.isFinite(v) ? v : 0);
+                                      }}
+                                      step="1"
+                                      className="w-20 bg-white border border-gray-200 rounded-lg px-2 py-1 text-xs text-gray-700 tabular-nums text-right focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+                                    />
+                                    <span className="text-xs text-gray-500">%</span>
+                                  </div>
+                                </div>
+                              </div>
+                              {canForecast ? (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                                  <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+                                    <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Current NB CVR</div>
+                                    <div className="text-lg font-bold text-emerald-600 tabular-nums">{(nbCvr * 100).toFixed(2)}%</div>
+                                    <div className="text-[10px] text-gray-400 mt-0.5">held constant in forecast</div>
+                                  </div>
+                                  <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+                                    <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Target NB sign-ups</div>
+                                    <div className="text-lg font-bold text-gray-900 tabular-nums">{Math.round(targetLeads).toLocaleString()}</div>
+                                    <div className="text-[10px] text-gray-400 mt-0.5">from {Math.round(currentNbLeads).toLocaleString()} · +{Math.round(additionalLeads).toLocaleString()}</div>
+                                  </div>
+                                  <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3">
+                                    <div className="text-[10px] uppercase tracking-wider text-emerald-700 font-semibold mb-1">Additional NB clicks needed</div>
+                                    <div className="text-lg font-bold text-emerald-700 tabular-nums">{Math.round(additionalClicksNeeded).toLocaleString()}</div>
+                                    <div className="text-[10px] text-emerald-700/70 mt-0.5">at current NB CVR</div>
+                                  </div>
+                                  <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+                                    <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Target NB clicks total</div>
+                                    <div className="text-lg font-bold text-gray-900 tabular-nums">{Math.round(targetClicks).toLocaleString()}</div>
+                                    <div className="text-[10px] text-gray-400 mt-0.5">from {Math.round(currentNbClicks).toLocaleString()}</div>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="text-[11px] text-gray-400 bg-gray-50 border border-gray-100 rounded-xl p-3">
+                                  Need a non-zero NB conversion rate and sign-up count to forecast. Try a longer date range.
+                                </div>
+                              )}
                             </div>
                           );
                         })()}
