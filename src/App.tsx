@@ -90,6 +90,13 @@ function resolveDateRange(value: string): { startDate: string; endDate: string }
   const fmt = (d: Date) => toISODate(d);
   const ago = (n: number) => { const d = new Date(today); d.setDate(d.getDate() - n); return d; };
 
+  if (value === "today") {
+    return { startDate: fmt(today), endDate: fmt(today) };
+  }
+  if (value === "yesterday") {
+    const yest = fmt(ago(1));
+    return { startDate: yest, endDate: yest };
+  }
   if (value === "lastWeek") {
     // Monday–Sunday of last week
     const day = today.getDay(); // 0=Sun
@@ -413,6 +420,13 @@ function gscDateWindows(f: GSCFilters): { startDate: string; endDate: string; co
   if (f.dateRange === "custom" && f.customStart && f.customEnd) {
     startDate = f.customStart;
     endDate   = f.customEnd;
+  } else if (f.dateRange === "yesterday") {
+    // GSC has a ~2-day data lag. When the user picks "Yesterday", GA4 shows
+    // actual yesterday, but we offset GSC back by 2 extra days (3 days ago)
+    // so it reflects the most recently reliable GSC data available.
+    const gscDay = addDaysISO(toISODate(new Date()), -3);
+    startDate = gscDay;
+    endDate   = gscDay;
   } else {
     const r = resolveDateRange(f.dateRange);
     startDate = r.startDate;
@@ -5117,6 +5131,13 @@ export default function App() {
       const { start: startDate, end: endDate, cmpStart: cmpStartDate, cmpEnd: cmpEndDate } = resolveWindow();
       const hasCmp = !!cmpStartDate && !!cmpEndDate;
 
+      // GSC has a ~2-day data lag. When "yesterday" is selected, GA4 uses actual
+      // yesterday but GSC is offset back by 2 extra days to show reliable data.
+      const gscStartDate = nbsuFetchFilters.dateRange === "yesterday" ? addDaysISO(today, -3) : startDate;
+      const gscEndDate   = nbsuFetchFilters.dateRange === "yesterday" ? addDaysISO(today, -3) : endDate;
+      const gscCmpStartDate = (nbsuFetchFilters.dateRange === "yesterday" && cmpStartDate) ? addDaysISO(cmpStartDate, -2) : cmpStartDate;
+      const gscCmpEndDate   = (nbsuFetchFilters.dateRange === "yesterday" && cmpEndDate)   ? addDaysISO(cmpEndDate,   -2) : cmpEndDate;
+
       const classify = (q: string) => nbSeoClassify(q, nbsBrandTerms);
       const normPath = (url: string): string => {
         try { return new URL(url).pathname.replace(/\/$/, "") || "/"; }
@@ -5201,13 +5222,13 @@ export default function App() {
       });
 
       const [pageQueryCur, pageQueryCmp, ga4SessCur, ga4SessCmp, ga4FspCur, ga4FspCmp, gscDailyCur, ga4FspDailyCur] = await Promise.all([
-        gscFetch(startDate, endDate),
-        hasCmp ? gscFetch(cmpStartDate, cmpEndDate) : emptyGsc,
+        gscFetch(gscStartDate, gscEndDate),
+        hasCmp ? gscFetch(gscCmpStartDate, gscCmpEndDate) : emptyGsc,
         ga4Fetch(ga4SessionsByLandingPage(startDate, endDate)),
         hasCmp ? ga4Fetch(ga4SessionsByLandingPage(cmpStartDate, cmpEndDate)) : emptyGa4,
         ga4Fetch(ga4FspLeadsByLandingPage(startDate, endDate)),
         hasCmp ? ga4Fetch(ga4FspLeadsByLandingPage(cmpStartDate, cmpEndDate)) : emptyGa4,
-        gscDailyFetch(startDate, endDate),
+        gscDailyFetch(gscStartDate, gscEndDate),
         ga4Fetch(ga4FspDaily(startDate, endDate)),
       ]);
 
