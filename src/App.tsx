@@ -5060,28 +5060,32 @@ export default function App() {
         limit: 1,
       });
 
-      // ── GA4: AIO sessions (sessions where sessionSource matches AI_MASTER_PATTERN) ─
-      // We use sessionSourceMedium dimension and filter for organic, then check source
+      const AI_REGEXP = "(chat\\.openai\\.com|chatgpt\\.com|perplexity\\.ai|claude\\.ai|bard\\.google\\.com|gemini\\.google\\.com|copilot\\.microsoft\\.com|bing\\.com|you\\.com|poe\\.com|phind\\.com|komo\\.ai|reka\\.ai|pi\\.ai|character\\.ai|huggingface\\.co)";
+      const aiRegexFilter = { filter: { fieldName: "sessionSourceMedium", stringFilter: { matchType: "PARTIAL_REGEXP", value: AI_REGEXP } } };
+
+      // ── GA4: AIO sessions — filter sessionSourceMedium with AI regex ─────
       const ga4AioSessionsBody = JSON.stringify({
         dateRanges: [{ startDate: yesterdayDate, endDate: yesterdayDate }],
-        dimensions: [{ name: "sessionSource" }],
+        dimensions: [{ name: "sessionSourceMedium" }],
         metrics: [{ name: "sessions" }],
-        dimensionFilter: { filter: { fieldName: "sessionMedium", stringFilter: { matchType: "EXACT", value: "organic" } } },
-        limit: 500,
+        dimensionFilter: aiRegexFilter,
+        orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+        limit: 100,
       });
 
       // ── GA4: AIO sign ups (generate_lead key events in AIO-source sessions) ─
       const ga4AioSignUpsBody = JSON.stringify({
         dateRanges: [{ startDate: yesterdayDate, endDate: yesterdayDate }],
-        dimensions: [{ name: "sessionSource" }],
+        dimensions: [{ name: "sessionSourceMedium" }],
         metrics: [{ name: "keyEvents" }],
         dimensionFilter: {
           andGroup: { expressions: [
             { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
-            { filter: { fieldName: "sessionMedium", stringFilter: { matchType: "EXACT", value: "organic" } } },
+            aiRegexFilter,
           ]},
         },
-        limit: 500,
+        orderBys: [{ metric: { metricName: "keyEvents" }, desc: true }],
+        limit: 100,
       });
 
       // ── GA4: NB sign ups — generate_lead via organic search yesterday ─────
@@ -5141,21 +5145,9 @@ export default function App() {
       const totalOrgSignUps = parseInt((ga4OrgSignUpsResp.rows?.[0]?.metricValues?.[0]?.value ?? "0"), 10);
       const nbSignUps = Math.round(totalOrgSignUps * siteWideNbRatio);
 
-      // AIO sessions/signups: filter sources matching AI_MASTER_PATTERN
-      let aioSessions = 0;
-      (ga4AioSessResp.rows ?? []).forEach((r) => {
-        const src = r.dimensionValues[0]?.value ?? "";
-        if (AI_MASTER_PATTERN.test(src)) {
-          aioSessions += parseInt(r.metricValues[0]?.value ?? "0", 10);
-        }
-      });
-      let aioSignUps = 0;
-      (ga4AioSignUpsResp.rows ?? []).forEach((r) => {
-        const src = r.dimensionValues[0]?.value ?? "";
-        if (AI_MASTER_PATTERN.test(src)) {
-          aioSignUps += parseInt(r.metricValues[0]?.value ?? "0", 10);
-        }
-      });
+      // AIO: API already filtered by AI regex — just sum all rows
+      const aioSessions = (ga4AioSessResp.rows ?? []).reduce((sum, r) => sum + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
+      const aioSignUps  = (ga4AioSignUpsResp.rows ?? []).reduce((sum, r) => sum + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
 
       setSnapshotData({
         ga4Date: yesterdayDate,
