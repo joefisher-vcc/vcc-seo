@@ -3432,7 +3432,7 @@ export default function App() {
     customCompareEnd?: string;
     comparison: "prev" | "prevYear" | "none";
   }
-  const NBSU_DEFAULT_FILTER: NbsuDateFilter = { dateRange: "7", comparison: "prev" };
+  const NBSU_DEFAULT_FILTER: NbsuDateFilter = { dateRange: "yesterday", comparison: "prev" };
   const [nbsuFilters, setNbsuFilters] = useState<NbsuDateFilter>(NBSU_DEFAULT_FILTER);
   const [nbsuFetchFilters, setNbsuFetchFilters] = useState<NbsuDateFilter>(NBSU_DEFAULT_FILTER);
   const [nbsuData, setNbsuData] = useState<NbsuDataType | null>(null);
@@ -3579,7 +3579,8 @@ export default function App() {
   }
   const [snapVCC, setSnapVCC] = useState<SnapResult | null>(null);
   const [snapAV, setSnapAV]   = useState<SnapResult | null>(null);
-  const [snapLoading, setSnapLoading] = useState(false);
+  const [snapVCCLoading, setSnapVCCLoading] = useState(false);
+  const [snapAVLoading,  setSnapAVLoading]  = useState(false);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -4800,12 +4801,14 @@ export default function App() {
     setBrandLoading(false);
   }, [selectedGSC, selectedGA4, accessToken, gscFetchFilters, ga4FetchFilters]);
 
-  // ── Daily Snapshot fetch — runs for both VCC and AV in parallel ───────────
+  // ── Daily Snapshot fetch — GSC fetched once, both GA4 properties fire in parallel ──
   const fetchDailySnapshot = useCallback(async () => {
     if (!selectedGSC || !accessToken) return;
-    setSnapLoading(true);
+
     setSnapVCC(null);
     setSnapAV(null);
+    if (selectedGA4) setSnapVCCLoading(true);
+    if (avGA4Id)     setSnapAVLoading(true);
 
     const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
     const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
@@ -4819,109 +4822,108 @@ export default function App() {
       catch { return url.replace(/^https?:\/\/[^/]+/, "").replace(/\/$/, "") || "/"; }
     };
 
-    // Resolve dates from nbsuFetchFilters (same logic as fetchNbsuData)
+    // Resolve dates — always yesterday vs day-before by default
     const today = toISODate(new Date());
     const yesterday = addDaysISO(today, -1);
     const f = nbsuFetchFilters;
-    const n = parseInt(f.dateRange, 10);
     let startDate: string, endDate: string, cmpStartDate: string, cmpEndDate: string;
     if (f.dateRange === "yesterday") {
       startDate = yesterday; endDate = yesterday;
-    } else if (!isNaN(n)) {
-      endDate = yesterday; startDate = addDaysISO(endDate, -(n - 1));
     } else {
-      endDate = yesterday; startDate = addDaysISO(endDate, -6);
+      const n = parseInt(f.dateRange, 10) || 7;
+      endDate = yesterday; startDate = addDaysISO(endDate, -(n - 1));
     }
     const len = Math.round((new Date(endDate).getTime() - new Date(startDate).getTime()) / 86400000) + 1;
     cmpEndDate = addDaysISO(startDate, -1);
     cmpStartDate = addDaysISO(cmpEndDate, -(len - 1));
     const hasCmp = f.comparison !== "none";
 
-    // GSC lag: when yesterday, offset 2 extra days
-    const gscStart = f.dateRange === "yesterday" ? addDaysISO(today, -3) : startDate;
-    const gscEnd   = f.dateRange === "yesterday" ? addDaysISO(today, -3) : endDate;
-    const gscCmpStart = hasCmp ? (f.dateRange === "yesterday" ? addDaysISO(cmpStartDate, -2) : cmpStartDate) : "";
-    const gscCmpEnd   = hasCmp ? (f.dateRange === "yesterday" ? addDaysISO(cmpEndDate, -2) : cmpEndDate) : "";
+    // GSC uses 48h lag
+    const gscStart    = addDaysISO(startDate, -2);
+    const gscEnd      = addDaysISO(endDate, -2);
+    const gscCmpStart = hasCmp ? addDaysISO(cmpStartDate, -2) : "";
+    const gscCmpEnd   = hasCmp ? addDaysISO(cmpEndDate, -2) : "";
 
     type GscRow = { keys: string[]; clicks: number; impressions: number; ctr: number; position: number };
     type Ga4Resp = { rows?: { dimensionValues: { value: string }[]; metricValues: { value: string }[] }[] };
 
-    const fetchGsc = async (s: string, e: string): Promise<GscRow[]> => {
-      const body = JSON.stringify({ startDate: s, endDate: e, dimensions: ["page", "query"], rowLimit: 25000 });
-      const res = await fetch(gscBase, { method: "POST", headers, body }).then((r) => r.json());
-      return (res?.rows ?? []) as GscRow[];
-    };
+    // ── Fetch GSC once — shared by both properties ────────────────────────────
+    const fetchGsc = (s: string, e: string): Promise<GscRow[]> =>
+      fetch(gscBase, { method: "POST", headers, body: JSON.stringify({ startDate: s, endDate: e, dimensions: ["page", "query"], rowLimit: 25000 }) })
+        .then((r) => r.json()).then((res) => (res?.rows ?? []) as GscRow[]);
 
+    const [gscCur, gscCmp] = await Promise.all([
+      fetchGsc(gscStart, gscEnd),
+      hasCmp && gscCmpStart ? fetchGsc(gscCmpStart, gscCmpEnd) : Promise.resolve<GscRow[]>([]),
+    ]);
+
+    // Pre-compute GSC NB ratios per page — used by both properties
+    type PerPage = { b: number; nb: number };
+    const aggGsc = (rows: GscRow[]) => {
+      const m = new Map<string, PerPage>();
+      rows.forEach((r) => {
+        const path = normPath(r.keys[0]);
+        const clicks = Math.round(r.clicks ?? 0);
+        if (!clicks) return;
+        let p = m.get(path); if (!p) { p = { b: 0, nb: 0 }; m.set(path, p); }
+        if (classify(r.keys[1] ?? "") === "brand") p.b += clicks; else p.nb += clicks;
+      });
+      return m;
+    };
+    const perPageCur = aggGsc(gscCur);
+    const perPageCmp = aggGsc(gscCmp);
+
+    let totalB = 0, totalNb = 0, totalBCmp = 0, totalNbCmp = 0;
+    perPageCur.forEach((v) => { totalB += v.b; totalNb += v.nb; });
+    perPageCmp.forEach((v) => { totalBCmp += v.b; totalNbCmp += v.nb; });
+    const siteWideNbRatio    = (totalB + totalNb) > 0 ? totalNb / (totalB + totalNb) : 0;
+    const siteWideNbRatioCmp = (totalBCmp + totalNbCmp) > 0 ? totalNbCmp / (totalBCmp + totalNbCmp) : siteWideNbRatio;
+    const nbClicks    = totalNb;
+    const nbClicksCmp = totalNbCmp;
+
+    // NB top-3 keywords from GSC
+    const bestPos = (rows: GscRow[]) => {
+      const m = new Map<string, number>();
+      rows.forEach((r) => { if (classify(r.keys[1] ?? "") !== "nonBrand") return; const prev = m.get(r.keys[1]); if (prev == null || r.position < prev) m.set(r.keys[1], r.position); });
+      return m;
+    };
+    const nbTop3    = Array.from(bestPos(gscCur).values()).filter((p) => p <= 3).length;
+    const nbTop3Cmp = Array.from(bestPos(gscCmp).values()).filter((p) => p <= 3).length;
+
+    // ── Fetch GA4 for one property — fires independently ─────────────────────
     const fetchForGA4 = async (ga4Id: string, propLabel: string): Promise<SnapResult> => {
       const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${ga4Id}:runReport`;
       const ga4Fetch = (body: object): Promise<Ga4Resp> =>
         fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(body) }).then((r) => r.json() as Promise<Ga4Resp>);
 
-      const [gscCur, gscCmp, ga4FspCur, ga4FspCmp, ga4SessCur, ga4SessCmp, ga4AioSess, ga4AioLeads] = await Promise.all([
-        fetchGsc(gscStart, gscEnd),
-        hasCmp && gscCmpStart ? fetchGsc(gscCmpStart, gscCmpEnd) : Promise.resolve<GscRow[]>([]),
-        ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [{ filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } }, { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } }] } }, limit: 10000 }),
-        hasCmp ? ga4Fetch({ dateRanges: [{ startDate: cmpStartDate, endDate: cmpEndDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [{ filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } }, { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } }] } }, limit: 10000 }) : Promise.resolve<Ga4Resp>({}),
-        ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "sessions" }], dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } }, limit: 10000 }),
-        hasCmp ? ga4Fetch({ dateRanges: [{ startDate: cmpStartDate, endDate: cmpEndDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "sessions" }], dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } }, limit: 10000 }) : Promise.resolve<Ga4Resp>({}),
+      const orgFilter = { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } };
+      const leadFilter = { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } };
+
+      const [ga4FspCur, ga4FspCmp, ga4SessCur, ga4SessCmp, ga4AioSess, ga4AioLeads] = await Promise.all([
+        ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [leadFilter, orgFilter] } }, limit: 10000 }),
+        hasCmp ? ga4Fetch({ dateRanges: [{ startDate: cmpStartDate, endDate: cmpEndDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [leadFilter, orgFilter] } }, limit: 10000 }) : Promise.resolve<Ga4Resp>({}),
+        ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "sessions" }], dimensionFilter: orgFilter, limit: 10000 }),
+        hasCmp ? ga4Fetch({ dateRanges: [{ startDate: cmpStartDate, endDate: cmpEndDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "sessions" }], dimensionFilter: orgFilter, limit: 10000 }) : Promise.resolve<Ga4Resp>({}),
         ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "sessions" }], dimensionFilter: aiRegexFilter, limit: 100 }),
-        ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [{ filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } }, aiRegexFilter] } }, limit: 100 }),
+        ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [leadFilter, aiRegexFilter] } }, limit: 100 }),
       ]);
 
-      // GSC: click-weighted NB ratio per page
-      type PerPage = { b: number; nb: number };
-      const aggGsc = (rows: GscRow[]) => {
-        const m = new Map<string, PerPage>();
-        rows.forEach((r) => {
-          const path = normPath(r.keys[0]);
-          const clicks = Math.round(r.clicks ?? 0);
-          if (!clicks) return;
-          let p = m.get(path); if (!p) { p = { b: 0, nb: 0 }; m.set(path, p); }
-          if (classify(r.keys[1] ?? "") === "brand") p.b += clicks; else p.nb += clicks;
-        });
-        return m;
-      };
-      const perPageCur = aggGsc(gscCur);
-      const perPageCmp = aggGsc(gscCmp);
+      const leadsMap = (resp: Ga4Resp) => { const m = new Map<string, number>(); (resp.rows ?? []).forEach((r) => { const v = parseInt(r.metricValues[0]?.value ?? "0", 10); if (v) { const k = normPath(r.dimensionValues[0]?.value ?? ""); m.set(k, (m.get(k) ?? 0) + v); } }); return m; };
+      const sessMap  = (resp: Ga4Resp) => { const m = new Map<string, number>(); (resp.rows ?? []).forEach((r) => { const k = normPath(r.dimensionValues[0]?.value ?? ""); m.set(k, (m.get(k) ?? 0) + parseInt(r.metricValues[0]?.value ?? "0", 10)); }); return m; };
 
-      let totalB = 0, totalNb = 0, totalBCmp = 0, totalNbCmp = 0;
-      perPageCur.forEach((v) => { totalB += v.b; totalNb += v.nb; });
-      perPageCmp.forEach((v) => { totalBCmp += v.b; totalNbCmp += v.nb; });
-      const siteWideNbRatio = (totalB + totalNb) > 0 ? totalNb / (totalB + totalNb) : 0;
-      const siteWideNbRatioCmp = (totalBCmp + totalNbCmp) > 0 ? totalNbCmp / (totalBCmp + totalNbCmp) : siteWideNbRatio;
-      const nbClicks = totalNb;
-      const nbClicksCmp = totalNbCmp;
-
-      // NB top-3 keywords
-      const nbBestPos = new Map<string, number>();
-      gscCur.forEach((r) => { if (classify(r.keys[1] ?? "") !== "nonBrand") return; const prev = nbBestPos.get(r.keys[1]); if (prev == null || r.position < prev) nbBestPos.set(r.keys[1], r.position); });
-      const nbTop3 = Array.from(nbBestPos.values()).filter((p) => p <= 3).length;
-      const nbBestPosCmp = new Map<string, number>();
-      gscCmp.forEach((r) => { if (classify(r.keys[1] ?? "") !== "nonBrand") return; const prev = nbBestPosCmp.get(r.keys[1]); if (prev == null || r.position < prev) nbBestPosCmp.set(r.keys[1], r.position); });
-      const nbTop3Cmp = Array.from(nbBestPosCmp.values()).filter((p) => p <= 3).length;
-
-      // GA4 leads per page
-      const leadsMap = (resp: Ga4Resp) => { const m = new Map<string, number>(); (resp.rows ?? []).forEach((r) => { const v = parseInt(r.metricValues[0]?.value ?? "0", 10); if (v) m.set(normPath(r.dimensionValues[0]?.value ?? ""), (m.get(normPath(r.dimensionValues[0]?.value ?? "")) ?? 0) + v); }); return m; };
-      const sessMap = (resp: Ga4Resp) => { const m = new Map<string, number>(); (resp.rows ?? []).forEach((r) => { m.set(normPath(r.dimensionValues[0]?.value ?? ""), (m.get(normPath(r.dimensionValues[0]?.value ?? "")) ?? 0) + parseInt(r.metricValues[0]?.value ?? "0", 10)); }); return m; };
-      const fspCur  = leadsMap(ga4FspCur);
-      const fspCmp  = leadsMap(ga4FspCmp);
-      const sessCur = sessMap(ga4SessCur);
-      const sessCmp = sessMap(ga4SessCmp);
+      const fspCur  = leadsMap(ga4FspCur);  const fspCmp  = leadsMap(ga4FspCmp);
+      const sessCur = sessMap(ga4SessCur);   const sessCmp = sessMap(ga4SessCmp);
 
       let totFsp = 0, totNbLeads = 0, totFspCmp = 0, totNbLeadsCmp = 0;
-      const allPaths = new Set([...perPageCur.keys(), ...fspCur.keys()]);
-      allPaths.forEach((path) => {
+      new Set([...perPageCur.keys(), ...fspCur.keys()]).forEach((path) => {
         const fsp = fspCur.get(path) ?? 0; if (!fsp) return;
         const cur = perPageCur.get(path); const tc = (cur?.b ?? 0) + (cur?.nb ?? 0);
-        const ratio = tc > 0 ? (cur!.nb / tc) : siteWideNbRatio;
-        totFsp += fsp; totNbLeads += fsp * ratio;
+        totFsp += fsp; totNbLeads += fsp * (tc > 0 ? cur!.nb / tc : siteWideNbRatio);
       });
-      const allPathsCmp = new Set([...perPageCmp.keys(), ...fspCmp.keys()]);
-      allPathsCmp.forEach((path) => {
+      new Set([...perPageCmp.keys(), ...fspCmp.keys()]).forEach((path) => {
         const fsp = fspCmp.get(path) ?? 0; if (!fsp) return;
         const cur = perPageCmp.get(path); const tc = (cur?.b ?? 0) + (cur?.nb ?? 0);
-        const ratio = tc > 0 ? (cur!.nb / tc) : siteWideNbRatioCmp;
-        totFspCmp += fsp; totNbLeadsCmp += fsp * ratio;
+        totFspCmp += fsp; totNbLeadsCmp += fsp * (tc > 0 ? cur!.nb / tc : siteWideNbRatioCmp);
       });
 
       const orgSessions    = Array.from(sessCur.values()).reduce((a, b) => a + b, 0);
@@ -4943,19 +4945,17 @@ export default function App() {
       };
     };
 
-    try {
-      const jobs: Promise<void>[] = [];
-      if (selectedGA4) {
-        const vccLabel = ga4Properties.find((p) => p.value === selectedGA4)?.label ?? "VCC";
-        jobs.push(fetchForGA4(selectedGA4, vccLabel).then(setSnapVCC));
-      }
-      if (avGA4Id) {
-        const avLabel = ga4Properties.find((p) => p.value === avGA4Id)?.label ?? "Arcavindi";
-        jobs.push(fetchForGA4(avGA4Id, avLabel).then(setSnapAV));
-      }
-      await Promise.all(jobs);
-    } catch (e) { console.error("fetchDailySnapshot", e); }
-    setSnapLoading(false);
+    // Fire both GA4 fetches in parallel — each resolves its own state independently
+    const jobs: Promise<void>[] = [];
+    if (selectedGA4) {
+      const label = ga4Properties.find((p) => p.value === selectedGA4)?.label ?? "Vintage Cash Cow";
+      jobs.push(fetchForGA4(selectedGA4, label).then(setSnapVCC).catch(console.error).finally(() => setSnapVCCLoading(false)));
+    }
+    if (avGA4Id) {
+      const label = ga4Properties.find((p) => p.value === avGA4Id)?.label ?? "Arcavindi";
+      jobs.push(fetchForGA4(avGA4Id, label).then(setSnapAV).catch(console.error).finally(() => setSnapAVLoading(false)));
+    }
+    await Promise.all(jobs);
   }, [selectedGSC, selectedGA4, avGA4Id, accessToken, nbsBrandTerms, nbsuFetchFilters, ga4Properties]);
 
   // Per-landing-page non-brand calculation for /items-we-buy/ pages:
@@ -10667,11 +10667,11 @@ ${combinedHtml}
                         {(snapVCC || snapAV) && <SlackCopyButton buildMessage={buildSlack} />}
                         <button
                           onClick={() => void fetchDailySnapshot()}
-                          disabled={snapLoading}
+                          disabled={snapVCCLoading || snapAVLoading}
                           className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-yellow-400 text-yellow-900 hover:bg-yellow-500 transition-all disabled:opacity-50 flex items-center gap-1.5"
                         >
-                          <RefreshCw size={12} className={snapLoading ? "animate-spin" : ""} />
-                          {snapLoading ? "Loading…" : "Refresh"}
+                          <RefreshCw size={12} className={(snapVCCLoading || snapAVLoading) ? "animate-spin" : ""} />
+                          {(snapVCCLoading || snapAVLoading) ? "Loading…" : "Refresh"}
                         </button>
                       </div>
                     </div>
@@ -10713,25 +10713,30 @@ ${combinedHtml}
                       </div>
                     </div>
 
-                    {snapLoading && (
-                      <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center text-sm text-gray-400">
-                        <div className="inline-block w-6 h-6 border-2 border-gray-200 border-t-yellow-400 rounded-full animate-spin mb-3" />
-                        <p>Fetching VCC + Arcavindi data…</p>
-                      </div>
-                    )}
-
-                    {!snapLoading && !snapVCC && !snapAV && (
+                    {!snapVCCLoading && !snapAVLoading && !snapVCC && !snapAV && (
                       <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center text-sm text-gray-400">
                         {selectedGSC ? "Click Refresh to load data." : "Select a GSC property to continue."}
                       </div>
                     )}
 
-                    {!snapLoading && (snapVCC || snapAV) && (
+                    {(snapVCC || snapAV || snapVCCLoading || snapAVLoading) && (
                       <div className="space-y-8">
+                        {snapVCCLoading && !snapVCC && (
+                          <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center text-sm text-gray-400">
+                            <div className="inline-block w-5 h-5 border-2 border-gray-200 border-t-yellow-400 rounded-full animate-spin mb-2" />
+                            <p>Loading Vintage Cash Cow…</p>
+                          </div>
+                        )}
                         {snapVCC && <PropBlock s={snapVCC} abbr="VCC" />}
-                        {snapVCC && snapAV && <div className="border-t border-gray-100" />}
-                        {snapAV  && <PropBlock s={snapAV}  abbr="AV" />}
-                        <SlackPreview buildMessage={buildSlack} />
+                        {(snapVCC || !snapVCCLoading) && (snapAV || snapAVLoading) && <div className="border-t border-gray-100" />}
+                        {snapAVLoading && !snapAV && (
+                          <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center text-sm text-gray-400">
+                            <div className="inline-block w-5 h-5 border-2 border-gray-200 border-t-yellow-400 rounded-full animate-spin mb-2" />
+                            <p>Loading Arcavindi…</p>
+                          </div>
+                        )}
+                        {snapAV && <PropBlock s={snapAV} abbr="AV" />}
+                        {(snapVCC || snapAV) && <SlackPreview buildMessage={buildSlack} />}
                       </div>
                     )}
                   </section>
