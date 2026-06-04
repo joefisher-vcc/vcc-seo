@@ -159,7 +159,6 @@ const LS_SELECTED_GSC = "vcc_selected_gsc";
 const LS_ACTIVE_VIEW = "vcc_active_view";
 const LS_BRAND_TERMS = "vcc_brand_terms_v5";
 const LS_BRAND_TERMS_HISTORY = "vcc_brand_terms_history_v5";
-const LS_SNAPSHOT_TARGETS = "vcc_snapshot_targets_v1";
 
 function persistGoogleToken(r: { access_token?: string; expires_in?: number }) {
   if (!r.access_token) return;
@@ -3130,279 +3129,52 @@ ${el.outerHTML}
 }
 
 
-// ─── Daily SEO/AIO Snapshot ──────────────────────────────────────────────────
-
-interface SnapshotTargets {
-  nbClicks: string;
-  nbSignUps: string;
-  nbKeywordsTop3: string;
-  aioSignUps: string;
-  aioSessions: string;
-}
-
-const DEFAULT_SNAPSHOT_TARGETS: SnapshotTargets = {
-  nbClicks: "",
-  nbSignUps: "",
-  nbKeywordsTop3: "",
-  aioSignUps: "",
-  aioSessions: "",
-};
-
-interface SnapshotData {
-  // GA4 yesterday
-  ga4Date: string;         // "yesterday" YYYY-MM-DD
-  totalSessions: number;
-  // NB metrics
-  nbClicks: number;
-  nbImpressions: number;
-  nbKeywordsTop3: number;  // count of non-brand queries in positions 1-3
-  nbSignUps: number;       // modelled non-brand generate_lead
-  // AIO (AI Overview / AI-influenced) metrics
-  aioSignUps: number;      // generate_lead events in sessions matching AIO regex
-  aioSessions: number;     // sessions matching AIO regex
-  // Top NB keywords in top 3
-  topNbKeywords: { query: string; position: number; clicks: number }[];
-  // GSC date used
-  gscDate: string;
-}
-
-function SnapTarget({ label, value, target, unit = "" }: { label: string; value: number; target: string; unit?: string }) {
-  const tNum = parseFloat(target);
-  const hasTarget = !isNaN(tNum) && target.trim() !== "";
-  const pct = hasTarget ? Math.round((value / tNum) * 100) : null;
-  const met = hasTarget && value >= tNum;
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-xs text-gray-500">{label}</span>
-      <span className="text-lg font-bold text-gray-900">{value.toLocaleString()}{unit}</span>
-      {hasTarget && (
-        <span className={`text-xs font-semibold ${met ? "text-emerald-600" : "text-amber-600"}`}>
-          {pct}% of target ({tNum.toLocaleString()}{unit}) {met ? "✓" : ""}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function DailySnapshotView({
-  snapshotData,
-  snapshotLoading,
-  snapshotTargets,
-  setSnapshotTargets,
-  selectedGA4,
-  selectedGSC,
-}: {
-  snapshotData: SnapshotData | null;
-  snapshotLoading: boolean;
-  snapshotTargets: SnapshotTargets;
-  setSnapshotTargets: (t: SnapshotTargets) => void;
-  selectedGA4: string;
-  selectedGSC: string;
-}) {
+function SlackCopyButton({ buildMessage }: { buildMessage: () => string }) {
   const [copied, setCopied] = useState(false);
-
-  function buildSlackMessage(): string {
-    if (!snapshotData) return "";
-    const d = snapshotData;
-    const tgt = (val: number, target: string) => {
-      const n = parseFloat(target);
-      if (isNaN(n) || target.trim() === "") return "";
-      const pct = Math.round((val / n) * 100);
-      return ` (${pct}% of ${n.toLocaleString()} target)`;
-    };
-
-    const lines: string[] = [
-      `📊 *Daily SEO/AIO Snapshot — ${d.ga4Date}*`,
-      ``,
-      `*Non-Brand (GSC as of ${d.gscDate})*`,
-      `• NB Clicks: ${d.nbClicks.toLocaleString()}${tgt(d.nbClicks, snapshotTargets.nbClicks)}`,
-      `• NB Impressions: ${d.nbImpressions.toLocaleString()}`,
-      `• NB Keywords in Top 3: ${d.nbKeywordsTop3.toLocaleString()}${tgt(d.nbKeywordsTop3, snapshotTargets.nbKeywordsTop3)}`,
-      `• NB Sign Ups (modelled): ${d.nbSignUps.toLocaleString()}${tgt(d.nbSignUps, snapshotTargets.nbSignUps)}`,
-      ``,
-      `*AIO (AI-Influenced Organic) — GA4 Yesterday*`,
-      `• AIO Sessions: ${d.aioSessions.toLocaleString()}${tgt(d.aioSessions, snapshotTargets.aioSessions)}`,
-      `• AIO Sign Ups: ${d.aioSignUps.toLocaleString()}${tgt(d.aioSignUps, snapshotTargets.aioSignUps)}`,
-    ];
-    if (d.topNbKeywords.length > 0) {
-      lines.push(``);
-      lines.push(`*Top NB Keywords (pos 1–3)*`);
-      d.topNbKeywords.slice(0, 5).forEach((kw, i) => {
-        lines.push(`${i + 1}. "${kw.query}" — pos ${kw.position.toFixed(1)}, ${kw.clicks} clicks`);
-      });
-    }
-    return lines.join("\n");
-  }
-
-  async function handleCopy() {
-    const msg = buildSlackMessage();
+  const handleCopy = async () => {
+    const msg = buildMessage();
     if (!msg) return;
     await navigator.clipboard.writeText(msg);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  }
-
-  const missingProps = !selectedGA4 || !selectedGSC;
-
+  };
   return (
-    <section>
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <div className="bg-blue-100 rounded-xl p-2">
-            <Activity size={16} className="text-blue-700" />
-          </div>
-          <div>
-            <h2 className="text-sm font-bold text-gray-900">Daily SEO/AIO Snapshot</h2>
-            <p className="text-xs text-gray-400">Yesterday's GA4 + GSC (48h lag) · ready to paste into Slack</p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          {snapshotData && (
-            <button
-              type="button"
-              onClick={handleCopy}
-              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
-                copied
-                  ? "bg-emerald-50 border-emerald-300 text-emerald-700"
-                  : "bg-white border-gray-200 text-gray-600 hover:border-blue-300 hover:text-blue-700"
-              }`}
-            >
-              {copied ? "✓ Copied!" : "📋 Copy for Slack"}
-            </button>
-          )}
-        </div>
+    <button
+      type="button"
+      onClick={handleCopy}
+      className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
+        copied ? "bg-emerald-50 border-emerald-300 text-emerald-700" : "bg-white border-gray-200 text-gray-600 hover:border-yellow-400 hover:text-yellow-700"
+      }`}
+    >
+      {copied ? "✓ Copied!" : "📋 Copy for Slack"}
+    </button>
+  );
+}
+
+function SlackPreview({ buildMessage }: { buildMessage: () => string }) {
+  const [copied, setCopied] = useState(false);
+  const msg = buildMessage();
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(msg);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div className="bg-gray-900 rounded-2xl p-5 shadow-sm">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-xs font-bold text-gray-400 uppercase tracking-wide">Slack Preview</span>
+        <button
+          type="button"
+          onClick={handleCopy}
+          className={`text-xs font-semibold px-2.5 py-1 rounded-lg transition-colors ${
+            copied ? "bg-yellow-600 text-white" : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+          }`}
+        >
+          {copied ? "✓ Copied!" : "Copy"}
+        </button>
       </div>
-
-      {missingProps && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800 mb-6">
-          Please select both a GA4 property and a GSC property above to use the snapshot.
-        </div>
-      )}
-
-      {/* Targets config */}
-      <div className="bg-white border border-gray-100 rounded-2xl p-5 mb-6 shadow-sm">
-        <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-4">Daily Targets (optional)</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
-          {(
-            [
-              { key: "nbClicks", label: "NB Clicks" },
-              { key: "nbSignUps", label: "NB Sign Ups" },
-              { key: "nbKeywordsTop3", label: "NB Keywords Top 3" },
-              { key: "aioSignUps", label: "AIO Sign Ups" },
-              { key: "aioSessions", label: "AIO Sessions" },
-            ] as { key: keyof SnapshotTargets; label: string }[]
-          ).map(({ key, label }) => (
-            <div key={key} className="flex flex-col gap-1">
-              <label className="text-xs text-gray-500 font-medium">{label}</label>
-              <input
-                type="number"
-                min="0"
-                value={snapshotTargets[key]}
-                onChange={(e) => setSnapshotTargets({ ...snapshotTargets, [key]: e.target.value })}
-                placeholder="—"
-                className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-purple-300 w-full"
-              />
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {snapshotLoading && (
-        <div className="flex items-center justify-center py-16 text-gray-400 gap-3">
-          <RefreshCw size={16} className="animate-spin" />
-          <span className="text-sm">Fetching yesterday's data…</span>
-        </div>
-      )}
-
-      {!snapshotLoading && snapshotData && (
-        <>
-          <div className="text-xs text-gray-400 mb-3">
-            GA4: {snapshotData.ga4Date} · GSC: {snapshotData.gscDate} (48h lag)
-          </div>
-
-          {/* KPI cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
-            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-              <SnapTarget label="NB Clicks" value={snapshotData.nbClicks} target={snapshotTargets.nbClicks} />
-            </div>
-            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-              <SnapTarget label="NB Sign Ups" value={snapshotData.nbSignUps} target={snapshotTargets.nbSignUps} />
-            </div>
-            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-              <SnapTarget label="NB Keywords Top 3" value={snapshotData.nbKeywordsTop3} target={snapshotTargets.nbKeywordsTop3} />
-            </div>
-            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 shadow-sm">
-              <SnapTarget label="AIO Sessions" value={snapshotData.aioSessions} target={snapshotTargets.aioSessions} />
-            </div>
-            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 shadow-sm">
-              <SnapTarget label="AIO Sign Ups" value={snapshotData.aioSignUps} target={snapshotTargets.aioSignUps} />
-            </div>
-          </div>
-
-          {/* Top NB keywords in top 3 */}
-          {snapshotData.topNbKeywords.length > 0 && (
-            <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm mb-6">
-              <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-3">
-                Non-Brand Keywords in Top 3 (GSC {snapshotData.gscDate})
-              </h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-100">
-                      <th className="text-left py-2 pr-4 text-xs text-gray-500 font-semibold">Query</th>
-                      <th className="text-right py-2 px-3 text-xs text-gray-500 font-semibold">Position</th>
-                      <th className="text-right py-2 px-3 text-xs text-gray-500 font-semibold">Clicks</th>
-                      <th className="text-right py-2 px-3 text-xs text-gray-500 font-semibold">Impressions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {snapshotData.topNbKeywords.map((kw) => (
-                      <tr key={kw.query} className="border-b border-gray-50 hover:bg-gray-50">
-                        <td className="py-2 pr-4 text-gray-900 max-w-xs truncate">{kw.query}</td>
-                        <td className="py-2 px-3 text-right">
-                          <span className="inline-flex items-center justify-center bg-emerald-100 text-emerald-800 text-xs font-bold rounded px-1.5 py-0.5 min-w-[2rem]">
-                            {kw.position.toFixed(1)}
-                          </span>
-                        </td>
-                        <td className="py-2 px-3 text-right text-gray-700 font-medium">{kw.clicks.toLocaleString()}</td>
-                        <td className="py-2 px-3 text-right text-gray-500">{(kw as { query: string; position: number; clicks: number; impressions: number }).impressions?.toLocaleString() ?? "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Slack preview */}
-          <div className="bg-gray-900 rounded-2xl p-5 shadow-sm">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-bold text-gray-400 uppercase tracking-wide">Slack Preview</span>
-              <button
-                type="button"
-                onClick={handleCopy}
-                className={`text-xs font-semibold px-2.5 py-1 rounded-lg transition-colors ${
-                  copied ? "bg-emerald-700 text-emerald-100" : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-                }`}
-              >
-                {copied ? "✓ Copied!" : "Copy"}
-              </button>
-            </div>
-            <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">
-              {buildSlackMessage()}
-            </pre>
-          </div>
-        </>
-      )}
-
-      {!snapshotLoading && !snapshotData && !missingProps && (
-        <div className="bg-white border border-dashed border-gray-200 rounded-2xl p-12 text-center text-gray-400">
-          <Activity size={32} className="mx-auto mb-3 opacity-30" />
-          <p className="text-sm font-medium">Loading data…</p>
-          <p className="text-xs mt-1 text-gray-300">GA4 uses yesterday · GSC uses 48h ago for reliable data</p>
-        </div>
-      )}
-    </section>
+      <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">{msg}</pre>
+    </div>
   );
 }
 
@@ -3782,22 +3554,6 @@ export default function App() {
   const [brandLoading, setBrandLoading] = useState(false);
   const [brandTab, setBrandTab] = useState<"overview" | "queries" | "pages" | "leads">("overview");
   const [convLoading, setConvLoading] = useState(false);
-
-  // ── Daily Snapshot state ──────────────────────────────────────────────────
-  const [snapshotData, setSnapshotData] = useState<SnapshotData | null>(null);
-  const [snapshotLoading, setSnapshotLoading] = useState(false);
-  const [snapshotTargets, setSnapshotTargets] = useState<SnapshotTargets>(() => {
-    try {
-      const raw = localStorage.getItem(LS_SNAPSHOT_TARGETS);
-      if (raw) return { ...DEFAULT_SNAPSHOT_TARGETS, ...JSON.parse(raw) };
-    } catch { /* ignore */ }
-    return DEFAULT_SNAPSHOT_TARGETS;
-  });
-
-  // Persist snapshot targets
-  useEffect(() => {
-    localStorage.setItem(LS_SNAPSHOT_TARGETS, JSON.stringify(snapshotTargets));
-  }, [snapshotTargets]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -5014,192 +4770,6 @@ export default function App() {
     setBrandLoading(false);
   }, [selectedGSC, selectedGA4, accessToken, gscFetchFilters, ga4FetchFilters]);
 
-  // ── Daily Snapshot fetch ───────────────────────────────────────────────────
-  // Mirrors the nbSignUps fetch exactly: GSC [page,query] click-weighted NB ratio,
-  // GA4 generate_lead per landing page (Organic Search), site-wide NB ratio applied.
-  // AIO uses the same sessionSourceMedium PARTIAL_REGEXP as the main GA4 fetch.
-  const fetchSnapshotData = useCallback(async () => {
-    if (!selectedGSC || !selectedGA4 || !accessToken) return;
-    setSnapshotLoading(true);
-    setSnapshotData(null);
-    try {
-      const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
-      const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
-      const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
-
-      // GA4 = yesterday; GSC = 2 days ago (48h lag, same as nbSignUps "yesterday" branch)
-      const today = toISODate(new Date());
-      const yesterdayDate = addDaysISO(today, -1);
-      const gscDate = addDaysISO(today, -2);
-
-      const classify = (q: string) => nbSeoClassify(q, nbsBrandTerms);
-      const normPath = (url: string): string => {
-        try { return new URL(url).pathname.replace(/\/$/, "") || "/"; }
-        catch { return url.replace(/^https?:\/\/[^/]+/, "").replace(/\/$/, "") || "/"; }
-      };
-
-      type GscRow = { keys: string[]; clicks: number; impressions: number; ctr: number; position: number };
-      type Ga4Resp = { rows?: { dimensionValues: { value: string }[]; metricValues: { value: string }[] }[] };
-
-      // ── GSC: [page, query] single day — same as nbSignUps ─────────────────
-      const gscPageQueryFetch = async (): Promise<GscRow[]> => {
-        const body = JSON.stringify({ startDate: gscDate, endDate: gscDate, dimensions: ["page", "query"], rowLimit: 25000 });
-        const res = await fetch(gscBase, { method: "POST", headers, body }).then((r) => r.json());
-        return (res?.rows ?? []) as GscRow[];
-      };
-
-      // ── GSC: [query] single day for top-3 keywords with position data ─────
-      const gscQueryFetch = async (): Promise<GscRow[]> => {
-        const body = JSON.stringify({ startDate: gscDate, endDate: gscDate, dimensions: ["query"], rowLimit: 25000 });
-        const res = await fetch(gscBase, { method: "POST", headers, body }).then((r) => r.json());
-        return (res?.rows ?? []) as GscRow[];
-      };
-
-      // ── GA4: generate_lead per landing page (Organic Search) — same as nbSignUps ─
-      const ga4FspLeadsBody = JSON.stringify({
-        dateRanges: [{ startDate: yesterdayDate, endDate: yesterdayDate }],
-        dimensions: [{ name: "landingPagePlusQueryString" }],
-        metrics: [{ name: "keyEvents" }],
-        dimensionFilter: {
-          andGroup: { expressions: [
-            { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
-            { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } },
-          ]},
-        },
-        limit: 10000,
-      });
-
-      // ── GA4: organic sessions per landing page — same as nbSignUps ─────────
-      const ga4OrgSessionsBody = JSON.stringify({
-        dateRanges: [{ startDate: yesterdayDate, endDate: yesterdayDate }],
-        dimensions: [{ name: "landingPagePlusQueryString" }],
-        metrics: [{ name: "sessions" }],
-        dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } },
-        limit: 10000,
-      });
-
-      // ── GA4: AIO sessions — same regex as main GA4 fetch ──────────────────
-      const AI_REGEXP = "(chat\\.openai\\.com|chatgpt\\.com|perplexity\\.ai|claude\\.ai|bard\\.google\\.com|gemini\\.google\\.com|copilot\\.microsoft\\.com|bing\\.com|you\\.com|poe\\.com|phind\\.com|komo\\.ai|reka\\.ai|pi\\.ai|character\\.ai|huggingface\\.co)";
-      const aiRegexFilter = { filter: { fieldName: "sessionSourceMedium", stringFilter: { matchType: "PARTIAL_REGEXP", value: AI_REGEXP } } };
-
-      const ga4AioSessionsBody = JSON.stringify({
-        dateRanges: [{ startDate: yesterdayDate, endDate: yesterdayDate }],
-        dimensions: [{ name: "sessionSourceMedium" }],
-        metrics: [{ name: "sessions" }],
-        dimensionFilter: aiRegexFilter,
-        orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
-        limit: 100,
-      });
-
-      // ── GA4: AIO sign ups (generate_lead in AIO sessions) ─────────────────
-      const ga4AioSignUpsBody = JSON.stringify({
-        dateRanges: [{ startDate: yesterdayDate, endDate: yesterdayDate }],
-        dimensions: [{ name: "sessionSourceMedium" }],
-        metrics: [{ name: "keyEvents" }],
-        dimensionFilter: {
-          andGroup: { expressions: [
-            { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
-            aiRegexFilter,
-          ]},
-        },
-        orderBys: [{ metric: { metricName: "keyEvents" }, desc: true }],
-        limit: 100,
-      });
-
-      const ga4Fetch = (body: string): Promise<Ga4Resp> =>
-        fetch(ga4Base, { method: "POST", headers, body }).then((r) => r.json() as Promise<Ga4Resp>);
-
-      const [pageQueryRows, queryRows, ga4FspResp, ga4SessResp, ga4AioSessResp, ga4AioSignUpsResp] = await Promise.all([
-        gscPageQueryFetch(),
-        gscQueryFetch(),
-        ga4Fetch(ga4FspLeadsBody),
-        ga4Fetch(ga4OrgSessionsBody),
-        ga4Fetch(ga4AioSessionsBody),
-        ga4Fetch(ga4AioSignUpsBody),
-      ]);
-
-      // ── GSC: click-weighted NB ratio per page (mirrors nbSignUps exactly) ──
-      type PerPage = { brandClicks: number; nonBrandClicks: number };
-      const perPageMap = new Map<string, PerPage>();
-      pageQueryRows.forEach((r) => {
-        const path = normPath(r.keys[0]);
-        const query = r.keys[1] ?? "";
-        const clicks = Math.round(r.clicks ?? 0);
-        if (clicks === 0) return;
-        let p = perPageMap.get(path);
-        if (!p) { p = { brandClicks: 0, nonBrandClicks: 0 }; perPageMap.set(path, p); }
-        if (classify(query) === "brand") p.brandClicks += clicks; else p.nonBrandClicks += clicks;
-      });
-
-      let totalBrandClicks = 0, totalNbClicks = 0;
-      perPageMap.forEach((v) => { totalBrandClicks += v.brandClicks; totalNbClicks += v.nonBrandClicks; });
-      const siteWideNbRatio = (totalBrandClicks + totalNbClicks) > 0
-        ? totalNbClicks / (totalBrandClicks + totalNbClicks) : 0;
-      const nbClicks = totalNbClicks;
-
-      // ── GSC: impressions and top-3 NB keywords (from query-level data) ─────
-      let nbImpressions = 0;
-      const top3NbKeywords: { query: string; position: number; clicks: number; impressions: number }[] = [];
-      queryRows.forEach((r) => {
-        const query = r.keys[0];
-        if (classify(query) !== "nonBrand") return;
-        const clicks = Math.round(r.clicks ?? 0);
-        const impr = Math.round(r.impressions ?? 0);
-        nbImpressions += impr;
-        if (r.position <= 3.5) {
-          top3NbKeywords.push({ query, position: r.position, clicks, impressions: impr });
-        }
-      });
-      top3NbKeywords.sort((a, b) => a.position - b.position);
-
-      // ── GA4: aggregate organic sessions and leads per landing page ──────────
-      const sessMap = new Map<string, number>();
-      (ga4SessResp.rows ?? []).forEach((r) => {
-        const path = normPath(r.dimensionValues[0]?.value ?? "");
-        sessMap.set(path, (sessMap.get(path) ?? 0) + parseInt(r.metricValues[0]?.value ?? "0", 10));
-      });
-      const fspMap = new Map<string, number>();
-      (ga4FspResp.rows ?? []).forEach((r) => {
-        const path = normPath(r.dimensionValues[0]?.value ?? "");
-        const v = parseInt(r.metricValues[0]?.value ?? "0", 10);
-        if (v > 0) fspMap.set(path, (fspMap.get(path) ?? 0) + v);
-      });
-
-      // ── Apply per-page NB ratio to FSP leads (same model as nbSignUps) ─────
-      let totalNbLeads = 0;
-      let totalFspLeads = 0;
-      const allPaths = new Set([...perPageMap.keys(), ...fspMap.keys()]);
-      allPaths.forEach((path) => {
-        const fspLeads = fspMap.get(path) ?? 0;
-        if (fspLeads === 0) return;
-        const cur = perPageMap.get(path);
-        const totalClicks = (cur?.brandClicks ?? 0) + (cur?.nonBrandClicks ?? 0);
-        const ratio = totalClicks > 0 ? (cur!.nonBrandClicks / totalClicks) : siteWideNbRatio;
-        totalNbLeads += fspLeads * ratio;
-        totalFspLeads += fspLeads;
-      });
-
-      const totalOrgSessions = Array.from(sessMap.values()).reduce((a, b) => a + b, 0);
-
-      // ── AIO: sum all rows (API already filtered by AI regex) ──────────────
-      const aioSessions = (ga4AioSessResp.rows ?? []).reduce((sum, r) => sum + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
-      const aioSignUps  = (ga4AioSignUpsResp.rows ?? []).reduce((sum, r) => sum + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
-
-      setSnapshotData({
-        ga4Date: yesterdayDate,
-        gscDate,
-        totalSessions: totalOrgSessions,
-        nbClicks,
-        nbImpressions,
-        nbKeywordsTop3: top3NbKeywords.length,
-        nbSignUps: Math.round(totalNbLeads),
-        aioSessions,
-        aioSignUps,
-        topNbKeywords: top3NbKeywords,
-      });
-    } catch (e) { console.error("fetchSnapshotData", e); }
-    setSnapshotLoading(false);
-  }, [selectedGSC, selectedGA4, accessToken, nbsBrandTerms]);
   // Per-landing-page non-brand calculation for /items-we-buy/ pages:
   //   1. Fixed 7-day window vs previous 7 days.
   //   2. GSC [page, query] data: for each landing page, calculate an IMPRESSION-WEIGHTED
@@ -5990,12 +5560,8 @@ export default function App() {
     return () => clearTimeout(t);
   }, [nbsuFilters]);
   useEffect(() => {
-    if (activeView === "nbSignUps" && selectedGSC && selectedGA4 && accessToken) void fetchNbsuData();
+    if ((activeView === "nbSignUps" || activeView === "dailySnapshot") && selectedGSC && selectedGA4 && accessToken) void fetchNbsuData();
   }, [activeView, selectedGSC, selectedGA4, accessToken, fetchNbsuData]);
-
-  useEffect(() => {
-    if (activeView === "dailySnapshot" && selectedGSC && selectedGA4 && accessToken) void fetchSnapshotData();
-  }, [activeView, selectedGSC, selectedGA4, accessToken, fetchSnapshotData]);
 
   // ── Auto-check mentions: for every page in gscPages, fetch copy and check query presence ──
   useEffect(() => {
@@ -6890,12 +6456,16 @@ ${combinedHtml}
               {VIEWS.map(({ key, label, icon: Icon }) => {
                 const isActive = activeView === key;
                 const isNbSignUps = key === "nbSignUps";
+                const isDailySnapshot = key === "dailySnapshot";
                 let btnClass: string;
                 if (isNbSignUps) {
-                  // Always-on green highlight, slightly darker when active.
                   btnClass = isActive
                     ? "bg-emerald-700 text-white shadow-sm"
                     : "bg-emerald-600 text-white hover:bg-emerald-700";
+                } else if (isDailySnapshot) {
+                  btnClass = isActive
+                    ? "bg-yellow-500 text-white shadow-sm"
+                    : "bg-yellow-400 text-yellow-900 hover:bg-yellow-500 hover:text-white";
                 } else {
                   btnClass = isActive
                     ? "bg-purple-700 text-white shadow-sm"
@@ -10775,16 +10345,227 @@ ${combinedHtml}
               />
             )}
 
-            {activeView === "dailySnapshot" && (
-              <DailySnapshotView
-                snapshotData={snapshotData}
-                snapshotLoading={snapshotLoading}
-                snapshotTargets={snapshotTargets}
-                setSnapshotTargets={setSnapshotTargets}
-                selectedGA4={selectedGA4}
-                selectedGSC={selectedGSC}
-              />
-            )}
+            {activeView === "dailySnapshot" && (() => {
+              const d = nbsuData;
+              const loading = nbsuLoading;
+
+              // Build the slack message from nbsuData
+              const buildSlack = () => {
+                if (!d) return "";
+                const hasCmp = !!d.cmpPeriod.start;
+                const pct = (a: number, b: number) => b > 0 ? `${((a - b) / b * 100).toFixed(1)}%` : "";
+                const arrow = (a: number, b: number) => b > 0 ? (a >= b ? " ↑" : " ↓") : "";
+
+                // NB top-3 keywords
+                const nbBestPos = new Map<string, number>();
+                d.queryPageRowsCur.forEach((r) => {
+                  if (r.cls !== "nonBrand") return;
+                  const prev = nbBestPos.get(r.query);
+                  if (prev == null || r.position < prev) nbBestPos.set(r.query, r.position);
+                });
+                const top3queries = Array.from(nbBestPos.entries())
+                  .filter(([, p]) => p <= 3)
+                  .sort((a, b) => a[1] - b[1])
+                  .slice(0, 5);
+                const nbTop3Count = Array.from(nbBestPos.values()).filter((p) => p <= 3).length;
+
+                const nbClicksCur = d.queryPageRowsCur.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
+                const nbClicksCmp = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
+                const nbTop3Cmp = (() => {
+                  const m = new Map<string, number>();
+                  d.queryPageRowsCmp.forEach((r) => { if (r.cls !== "nonBrand") return; const p = m.get(r.query); if (p == null || r.position < p) m.set(r.query, r.position); });
+                  return Array.from(m.values()).filter((p) => p <= 3).length;
+                })();
+
+                const lines = [
+                  `📊 *Daily Snapshot — ${d.period.start}${d.period.start !== d.period.end ? ` → ${d.period.end}` : ""}*`,
+                  ``,
+                  `*Non-Brand SEO*`,
+                  `• NB Organic Sessions: ${Math.round(d.totals.orgSessions).toLocaleString()}${hasCmp ? ` (${pct(d.totals.orgSessions, d.totals.orgSessionsCmp)}${arrow(d.totals.orgSessions, d.totals.orgSessionsCmp)} vs prev)` : ""}`,
+                  `• NB Clicks: ${nbClicksCur.toLocaleString()}${hasCmp ? ` (${pct(nbClicksCur, nbClicksCmp)}${arrow(nbClicksCur, nbClicksCmp)} vs prev)` : ""}`,
+                  `• NB Sign Ups: ${Math.round(d.totals.nbLeads).toLocaleString()}${hasCmp ? ` (${pct(d.totals.nbLeads, d.totals.nbLeadsCmp)}${arrow(d.totals.nbLeads, d.totals.nbLeadsCmp)} vs prev)` : ""}`,
+                  `• Total SEO Sign Ups: ${Math.round(d.totals.fspLeads).toLocaleString()}${hasCmp ? ` (${pct(d.totals.fspLeads, d.totals.fspLeadsCmp)}${arrow(d.totals.fspLeads, d.totals.fspLeadsCmp)} vs prev)` : ""}`,
+                  `• NB Keywords in Top 3: ${nbTop3Count}${hasCmp ? ` (prev: ${nbTop3Cmp})` : ""}`,
+                  `• Site-wide NB ratio: ${(d.totals.siteWideNbRatio * 100).toFixed(1)}%`,
+                ];
+                if (top3queries.length > 0) {
+                  lines.push(``);
+                  lines.push(`*Top NB Keywords (pos 1–3)*`);
+                  top3queries.forEach(([q, p], i) => lines.push(`${i + 1}. "${q}" — pos ${p.toFixed(1)}`));
+                }
+                return lines.join("\n");
+              };
+
+              return (
+                <>
+                  <SectionDivider label="DAILY SNAPSHOT" />
+                  <section className="space-y-4">
+                    <div className="flex items-center justify-between gap-4 flex-wrap">
+                      <div className="flex items-center gap-3">
+                        <div className="bg-yellow-100 border border-yellow-200 rounded-xl p-2"><Activity size={16} className="text-yellow-700" /></div>
+                        <div>
+                          <h2 className="text-sm font-bold text-gray-900">Daily Snapshot</h2>
+                          <p className="text-xs text-gray-400">Non-brand SEO KPIs · same data as Non-Brand Sign Ups · copy for Slack</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {d && <SlackCopyButton buildMessage={buildSlack} />}
+                        <button
+                          onClick={() => void fetchNbsuData()}
+                          disabled={loading}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-yellow-400 text-yellow-900 hover:bg-yellow-500 transition-all disabled:opacity-50 flex items-center gap-1.5"
+                        >
+                          <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+                          {loading ? "Loading…" : "Refresh"}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Reuse the same date filter as nbSignUps */}
+                    <div className="bg-yellow-50/60 border border-yellow-100 rounded-2xl p-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1.5 font-medium">Date Range</label>
+                          <Select
+                            value={nbsuFilters.dateRange}
+                            onChange={(v) => setNbsuFilters((f) => ({ ...f, dateRange: v as NbsuDateFilter["dateRange"] }))}
+                            options={[
+                              { value: "yesterday", label: "Yesterday" },
+                              { value: "7",         label: "Last 7 days" },
+                              { value: "28",        label: "Last 28 days" },
+                              { value: "lastWeek",  label: "Last week" },
+                              { value: "lastMonth", label: "Last month" },
+                              { value: "30",        label: "Last 30 days" },
+                            ]}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1.5 font-medium">Compare To</label>
+                          <Select
+                            value={nbsuFilters.comparison}
+                            onChange={(v) => setNbsuFilters((f) => ({ ...f, comparison: v as NbsuDateFilter["comparison"] }))}
+                            options={[
+                              { value: "prev",     label: "Previous period" },
+                              { value: "prevYear", label: "Same period last year" },
+                              { value: "none",     label: "No comparison" },
+                            ]}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1.5 font-medium">GA4 Property</label>
+                          <Select value={selectedGA4} onChange={setSelectedGA4} options={ga4Properties} placeholder="Select GA4 Property" disabled={ga4Properties.length === 0} />
+                        </div>
+                      </div>
+                    </div>
+
+                    {loading && (
+                      <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center text-sm text-gray-400">
+                        <div className="inline-block w-6 h-6 border-2 border-gray-200 border-t-yellow-400 rounded-full animate-spin mb-3" />
+                        <p>Pulling data…</p>
+                      </div>
+                    )}
+
+                    {!loading && !d && (
+                      <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center text-sm text-gray-400">
+                        {selectedGSC && selectedGA4 ? "Click Refresh to load data." : "Connect both a GA4 and a GSC property to use this section."}
+                      </div>
+                    )}
+
+                    {!loading && d && (() => {
+                      const hasCmp = !!d.cmpPeriod.start && !!d.cmpPeriod.end;
+                      const pct = (a: number, b: number) => (b > 0 ? ((a - b) / b) * 100 : (a > 0 ? 100 : 0));
+                      const Delta = ({ p }: { p: number | null }) => {
+                        if (p == null || !isFinite(p)) return <span className="text-[10px] text-gray-400">—</span>;
+                        const up = p >= 0;
+                        return <span className={`text-[11px] font-bold ${up ? "text-emerald-600" : "text-red-500"}`}>{up ? "+" : ""}{p.toFixed(1)}%</span>;
+                      };
+
+                      const nbClicksCur = d.queryPageRowsCur.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
+                      const nbClicksCmp = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
+
+                      const nbBestPos = new Map<string, number>();
+                      d.queryPageRowsCur.forEach((r) => { if (r.cls !== "nonBrand") return; const p = nbBestPos.get(r.query); if (p == null || r.position < p) nbBestPos.set(r.query, r.position); });
+                      const nbTop3Cur = Array.from(nbBestPos.values()).filter((p) => p <= 3).length;
+                      const nbTop3Cmp = (() => { const m = new Map<string, number>(); d.queryPageRowsCmp.forEach((r) => { if (r.cls !== "nonBrand") return; const p = m.get(r.query); if (p == null || r.position < p) m.set(r.query, r.position); }); return Array.from(m.values()).filter((p) => p <= 3).length; })();
+
+                      const top3keywords = Array.from(nbBestPos.entries()).filter(([, p]) => p <= 3).sort((a, b) => a[1] - b[1]).slice(0, 10);
+
+                      return (
+                        <>
+                          <div className="text-[11px] text-gray-500 flex items-center gap-4 flex-wrap">
+                            <span><strong>Current:</strong> {formatDisplayDate(d.period.start)} – {formatDisplayDate(d.period.end)}</span>
+                            {hasCmp && <span className="text-gray-300">vs</span>}
+                            {hasCmp && <span><strong>Previous:</strong> {formatDisplayDate(d.cmpPeriod.start)} – {formatDisplayDate(d.cmpPeriod.end)}</span>}
+                          </div>
+
+                          {/* KPI cards */}
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                              <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Organic Sessions</div>
+                              <div className="flex items-end justify-between gap-2">
+                                <span className="text-2xl font-bold text-gray-900 tabular-nums">{Math.round(d.totals.orgSessions).toLocaleString()}</span>
+                                {hasCmp && <Delta p={pct(d.totals.orgSessions, d.totals.orgSessionsCmp)} />}
+                              </div>
+                              <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.orgSessionsCmp).toLocaleString()} previously` : "whole site · organic"}</div>
+                            </div>
+                            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                              <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">NB Clicks</div>
+                              <div className="flex items-end justify-between gap-2">
+                                <span className="text-2xl font-bold text-emerald-600 tabular-nums">{nbClicksCur.toLocaleString()}</span>
+                                {hasCmp && <Delta p={pct(nbClicksCur, nbClicksCmp)} />}
+                              </div>
+                              <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${nbClicksCmp.toLocaleString()} previously` : "non-brand GSC clicks"}</div>
+                            </div>
+                            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                              <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">NB Sign Ups</div>
+                              <div className="flex items-end justify-between gap-2">
+                                <span className="text-2xl font-bold text-emerald-600 tabular-nums">{Math.round(d.totals.nbLeads).toLocaleString()}</span>
+                                {hasCmp && <Delta p={pct(d.totals.nbLeads, d.totals.nbLeadsCmp)} />}
+                              </div>
+                              <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.nbLeadsCmp).toLocaleString()} previously` : `NB ratio ${(d.totals.siteWideNbRatio * 100).toFixed(1)}%`}</div>
+                            </div>
+                            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                              <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Total SEO Sign Ups</div>
+                              <div className="flex items-end justify-between gap-2">
+                                <span className="text-2xl font-bold text-sky-700 tabular-nums">{Math.round(d.totals.fspLeads).toLocaleString()}</span>
+                                {hasCmp && <Delta p={pct(d.totals.fspLeads, d.totals.fspLeadsCmp)} />}
+                              </div>
+                              <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.fspLeadsCmp).toLocaleString()} previously` : "generate_lead · organic"}</div>
+                            </div>
+                            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                              <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">NB Keywords Top 3</div>
+                              <div className="flex items-end justify-between gap-2">
+                                <span className="text-2xl font-bold text-emerald-600 tabular-nums">{nbTop3Cur.toLocaleString()}</span>
+                                {hasCmp && <Delta p={pct(nbTop3Cur, nbTop3Cmp)} />}
+                              </div>
+                              <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${nbTop3Cmp.toLocaleString()} previously` : "unique NB queries pos ≤ 3"}</div>
+                            </div>
+                          </div>
+
+                          {/* Top 3 NB keywords list */}
+                          {top3keywords.length > 0 && (
+                            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                              <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-3">NB Keywords in Top 3 positions</div>
+                              <div className="flex flex-wrap gap-2">
+                                {top3keywords.map(([q, p]) => (
+                                  <span key={q} className="inline-flex items-center gap-1.5 bg-emerald-50 border border-emerald-100 text-emerald-800 text-xs font-medium rounded-lg px-2.5 py-1">
+                                    <span className="bg-emerald-600 text-white text-[10px] font-bold rounded px-1 py-0.5">{p.toFixed(1)}</span>
+                                    {q}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Slack preview */}
+                          <SlackPreview buildMessage={buildSlack} />
+                        </>
+                      );
+                    })()}
+                  </section>
+                </>
+              );
+            })()}
           </>
         )}
       </main>
