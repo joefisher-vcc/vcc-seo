@@ -3197,6 +3197,8 @@ export default function App() {
   const [selectedGA4, setSelectedGA4]     = useState(() => localStorage.getItem(LS_SELECTED_GA4) ?? "");
   const [gscProperties, setGscProperties] = useState<{ value: string; label: string }[]>([]);
   const [selectedGSC, setSelectedGSC]     = useState(() => localStorage.getItem(LS_SELECTED_GSC) ?? "");
+  // Second GA4 property for Daily Snapshot (Arcavindi)
+  const [avGA4Id, setAvGA4Id] = useState("");
 
   // ── Auto-decorate every <table> with a Copy button and every <section> with a Download-PDF button ──
   useEffect(() => {
@@ -3558,6 +3560,27 @@ export default function App() {
   const [brandTab, setBrandTab] = useState<"overview" | "queries" | "pages" | "leads">("overview");
   const [convLoading, setConvLoading] = useState(false);
 
+  // ── Daily Snapshot state ──────────────────────────────────────────────────
+  interface SnapResult {
+    propLabel: string;
+    propId: string;
+    period: { start: string; end: string };
+    cmpPeriod: { start: string; end: string };
+    // NB SEO
+    orgSessions: number; orgSessionsCmp: number;
+    nbClicks: number; nbClicksCmp: number;
+    nbLeads: number; nbLeadsCmp: number;
+    fspLeads: number; fspLeadsCmp: number;
+    nbTop3: number; nbTop3Cmp: number;
+    siteWideNbRatio: number;
+    // AIO
+    aioSessions: number;
+    aioSignUps: number;
+  }
+  const [snapVCC, setSnapVCC] = useState<SnapResult | null>(null);
+  const [snapAV, setSnapAV]   = useState<SnapResult | null>(null);
+  const [snapLoading, setSnapLoading] = useState(false);
+
   useEffect(() => {
     const t = setInterval(() => {
       if (window.google?.accounts?.oauth2) { setGoogleReady(true); clearInterval(t); }
@@ -3612,6 +3635,7 @@ export default function App() {
   }, []);
 
   const VCC_GA4_LABEL = "Vintage Cash Cow - GA4";
+  const AV_GA4_LABEL  = "Arcavindi - GA4";
   const VCC_GSC_URL   = "https://www.vintagecashcow.co.uk/";
 
   const loadProperties = useCallback(async (token: string) => {
@@ -3639,6 +3663,9 @@ export default function App() {
       const vcc = gscProps.find((p) => p.value === VCC_GSC_URL || p.value === VCC_GSC_URL.replace(/\/$/, ""));
       return vcc ? vcc.value : (gscProps[0]?.value ?? "");
     });
+    // Auto-select Arcavindi GA4 property for snapshot
+    const av = props.find((p) => p.label === AV_GA4_LABEL || p.label.toLowerCase().includes("arcavindi"));
+    if (av) setAvGA4Id(av.value);
   }, []);
 
   useEffect(() => { if (accessToken) loadProperties(accessToken); }, [accessToken, loadProperties]);
@@ -4773,6 +4800,164 @@ export default function App() {
     setBrandLoading(false);
   }, [selectedGSC, selectedGA4, accessToken, gscFetchFilters, ga4FetchFilters]);
 
+  // ── Daily Snapshot fetch — runs for both VCC and AV in parallel ───────────
+  const fetchDailySnapshot = useCallback(async () => {
+    if (!selectedGSC || !accessToken) return;
+    setSnapLoading(true);
+    setSnapVCC(null);
+    setSnapAV(null);
+
+    const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+    const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
+
+    const AI_REGEXP = "(chat\\.openai\\.com|chatgpt\\.com|perplexity\\.ai|claude\\.ai|bard\\.google\\.com|gemini\\.google\\.com|copilot\\.microsoft\\.com|bing\\.com|you\\.com|poe\\.com|phind\\.com|komo\\.ai|reka\\.ai|pi\\.ai|character\\.ai|huggingface\\.co)";
+    const aiRegexFilter = { filter: { fieldName: "sessionSourceMedium", stringFilter: { matchType: "PARTIAL_REGEXP", value: AI_REGEXP } } };
+
+    const classify = (q: string) => nbSeoClassify(q, nbsBrandTerms);
+    const normPath = (url: string): string => {
+      try { return new URL(url).pathname.replace(/\/$/, "") || "/"; }
+      catch { return url.replace(/^https?:\/\/[^/]+/, "").replace(/\/$/, "") || "/"; }
+    };
+
+    // Resolve dates from nbsuFetchFilters (same logic as fetchNbsuData)
+    const today = toISODate(new Date());
+    const yesterday = addDaysISO(today, -1);
+    const f = nbsuFetchFilters;
+    const n = parseInt(f.dateRange, 10);
+    let startDate: string, endDate: string, cmpStartDate: string, cmpEndDate: string;
+    if (f.dateRange === "yesterday") {
+      startDate = yesterday; endDate = yesterday;
+    } else if (!isNaN(n)) {
+      endDate = yesterday; startDate = addDaysISO(endDate, -(n - 1));
+    } else {
+      endDate = yesterday; startDate = addDaysISO(endDate, -6);
+    }
+    const len = Math.round((new Date(endDate).getTime() - new Date(startDate).getTime()) / 86400000) + 1;
+    cmpEndDate = addDaysISO(startDate, -1);
+    cmpStartDate = addDaysISO(cmpEndDate, -(len - 1));
+    const hasCmp = f.comparison !== "none";
+
+    // GSC lag: when yesterday, offset 2 extra days
+    const gscStart = f.dateRange === "yesterday" ? addDaysISO(today, -3) : startDate;
+    const gscEnd   = f.dateRange === "yesterday" ? addDaysISO(today, -3) : endDate;
+    const gscCmpStart = hasCmp ? (f.dateRange === "yesterday" ? addDaysISO(cmpStartDate, -2) : cmpStartDate) : "";
+    const gscCmpEnd   = hasCmp ? (f.dateRange === "yesterday" ? addDaysISO(cmpEndDate, -2) : cmpEndDate) : "";
+
+    type GscRow = { keys: string[]; clicks: number; impressions: number; ctr: number; position: number };
+    type Ga4Resp = { rows?: { dimensionValues: { value: string }[]; metricValues: { value: string }[] }[] };
+
+    const fetchGsc = async (s: string, e: string): Promise<GscRow[]> => {
+      const body = JSON.stringify({ startDate: s, endDate: e, dimensions: ["page", "query"], rowLimit: 25000 });
+      const res = await fetch(gscBase, { method: "POST", headers, body }).then((r) => r.json());
+      return (res?.rows ?? []) as GscRow[];
+    };
+
+    const fetchForGA4 = async (ga4Id: string, propLabel: string): Promise<SnapResult> => {
+      const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${ga4Id}:runReport`;
+      const ga4Fetch = (body: object): Promise<Ga4Resp> =>
+        fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(body) }).then((r) => r.json() as Promise<Ga4Resp>);
+
+      const [gscCur, gscCmp, ga4FspCur, ga4FspCmp, ga4SessCur, ga4SessCmp, ga4AioSess, ga4AioLeads] = await Promise.all([
+        fetchGsc(gscStart, gscEnd),
+        hasCmp && gscCmpStart ? fetchGsc(gscCmpStart, gscCmpEnd) : Promise.resolve<GscRow[]>([]),
+        ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [{ filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } }, { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } }] } }, limit: 10000 }),
+        hasCmp ? ga4Fetch({ dateRanges: [{ startDate: cmpStartDate, endDate: cmpEndDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [{ filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } }, { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } }] } }, limit: 10000 }) : Promise.resolve<Ga4Resp>({}),
+        ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "sessions" }], dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } }, limit: 10000 }),
+        hasCmp ? ga4Fetch({ dateRanges: [{ startDate: cmpStartDate, endDate: cmpEndDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "sessions" }], dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } }, limit: 10000 }) : Promise.resolve<Ga4Resp>({}),
+        ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "sessions" }], dimensionFilter: aiRegexFilter, limit: 100 }),
+        ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [{ filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } }, aiRegexFilter] } }, limit: 100 }),
+      ]);
+
+      // GSC: click-weighted NB ratio per page
+      type PerPage = { b: number; nb: number };
+      const aggGsc = (rows: GscRow[]) => {
+        const m = new Map<string, PerPage>();
+        rows.forEach((r) => {
+          const path = normPath(r.keys[0]);
+          const clicks = Math.round(r.clicks ?? 0);
+          if (!clicks) return;
+          let p = m.get(path); if (!p) { p = { b: 0, nb: 0 }; m.set(path, p); }
+          if (classify(r.keys[1] ?? "") === "brand") p.b += clicks; else p.nb += clicks;
+        });
+        return m;
+      };
+      const perPageCur = aggGsc(gscCur);
+      const perPageCmp = aggGsc(gscCmp);
+
+      let totalB = 0, totalNb = 0, totalBCmp = 0, totalNbCmp = 0;
+      perPageCur.forEach((v) => { totalB += v.b; totalNb += v.nb; });
+      perPageCmp.forEach((v) => { totalBCmp += v.b; totalNbCmp += v.nb; });
+      const siteWideNbRatio = (totalB + totalNb) > 0 ? totalNb / (totalB + totalNb) : 0;
+      const siteWideNbRatioCmp = (totalBCmp + totalNbCmp) > 0 ? totalNbCmp / (totalBCmp + totalNbCmp) : siteWideNbRatio;
+      const nbClicks = totalNb;
+      const nbClicksCmp = totalNbCmp;
+
+      // NB top-3 keywords
+      const nbBestPos = new Map<string, number>();
+      gscCur.forEach((r) => { if (classify(r.keys[1] ?? "") !== "nonBrand") return; const prev = nbBestPos.get(r.keys[1]); if (prev == null || r.position < prev) nbBestPos.set(r.keys[1], r.position); });
+      const nbTop3 = Array.from(nbBestPos.values()).filter((p) => p <= 3).length;
+      const nbBestPosCmp = new Map<string, number>();
+      gscCmp.forEach((r) => { if (classify(r.keys[1] ?? "") !== "nonBrand") return; const prev = nbBestPosCmp.get(r.keys[1]); if (prev == null || r.position < prev) nbBestPosCmp.set(r.keys[1], r.position); });
+      const nbTop3Cmp = Array.from(nbBestPosCmp.values()).filter((p) => p <= 3).length;
+
+      // GA4 leads per page
+      const leadsMap = (resp: Ga4Resp) => { const m = new Map<string, number>(); (resp.rows ?? []).forEach((r) => { const v = parseInt(r.metricValues[0]?.value ?? "0", 10); if (v) m.set(normPath(r.dimensionValues[0]?.value ?? ""), (m.get(normPath(r.dimensionValues[0]?.value ?? "")) ?? 0) + v); }); return m; };
+      const sessMap = (resp: Ga4Resp) => { const m = new Map<string, number>(); (resp.rows ?? []).forEach((r) => { m.set(normPath(r.dimensionValues[0]?.value ?? ""), (m.get(normPath(r.dimensionValues[0]?.value ?? "")) ?? 0) + parseInt(r.metricValues[0]?.value ?? "0", 10)); }); return m; };
+      const fspCur  = leadsMap(ga4FspCur);
+      const fspCmp  = leadsMap(ga4FspCmp);
+      const sessCur = sessMap(ga4SessCur);
+      const sessCmp = sessMap(ga4SessCmp);
+
+      let totFsp = 0, totNbLeads = 0, totFspCmp = 0, totNbLeadsCmp = 0;
+      const allPaths = new Set([...perPageCur.keys(), ...fspCur.keys()]);
+      allPaths.forEach((path) => {
+        const fsp = fspCur.get(path) ?? 0; if (!fsp) return;
+        const cur = perPageCur.get(path); const tc = (cur?.b ?? 0) + (cur?.nb ?? 0);
+        const ratio = tc > 0 ? (cur!.nb / tc) : siteWideNbRatio;
+        totFsp += fsp; totNbLeads += fsp * ratio;
+      });
+      const allPathsCmp = new Set([...perPageCmp.keys(), ...fspCmp.keys()]);
+      allPathsCmp.forEach((path) => {
+        const fsp = fspCmp.get(path) ?? 0; if (!fsp) return;
+        const cur = perPageCmp.get(path); const tc = (cur?.b ?? 0) + (cur?.nb ?? 0);
+        const ratio = tc > 0 ? (cur!.nb / tc) : siteWideNbRatioCmp;
+        totFspCmp += fsp; totNbLeadsCmp += fsp * ratio;
+      });
+
+      const orgSessions    = Array.from(sessCur.values()).reduce((a, b) => a + b, 0);
+      const orgSessionsCmp = Array.from(sessCmp.values()).reduce((a, b) => a + b, 0);
+      const aioSessions = (ga4AioSess.rows ?? []).reduce((s, r) => s + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
+      const aioSignUps  = (ga4AioLeads.rows ?? []).reduce((s, r) => s + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
+
+      return {
+        propLabel, propId: ga4Id,
+        period: { start: startDate, end: endDate },
+        cmpPeriod: { start: hasCmp ? cmpStartDate : "", end: hasCmp ? cmpEndDate : "" },
+        orgSessions, orgSessionsCmp,
+        nbClicks, nbClicksCmp,
+        nbLeads: Math.round(totNbLeads), nbLeadsCmp: Math.round(totNbLeadsCmp),
+        fspLeads: Math.round(totFsp), fspLeadsCmp: Math.round(totFspCmp),
+        nbTop3, nbTop3Cmp,
+        siteWideNbRatio,
+        aioSessions, aioSignUps,
+      };
+    };
+
+    try {
+      const jobs: Promise<void>[] = [];
+      if (selectedGA4) {
+        const vccLabel = ga4Properties.find((p) => p.value === selectedGA4)?.label ?? "VCC";
+        jobs.push(fetchForGA4(selectedGA4, vccLabel).then(setSnapVCC));
+      }
+      if (avGA4Id) {
+        const avLabel = ga4Properties.find((p) => p.value === avGA4Id)?.label ?? "Arcavindi";
+        jobs.push(fetchForGA4(avGA4Id, avLabel).then(setSnapAV));
+      }
+      await Promise.all(jobs);
+    } catch (e) { console.error("fetchDailySnapshot", e); }
+    setSnapLoading(false);
+  }, [selectedGSC, selectedGA4, avGA4Id, accessToken, nbsBrandTerms, nbsuFetchFilters, ga4Properties]);
+
   // Per-landing-page non-brand calculation for /items-we-buy/ pages:
   //   1. Fixed 7-day window vs previous 7 days.
   //   2. GSC [page, query] data: for each landing page, calculate an IMPRESSION-WEIGHTED
@@ -5565,6 +5750,10 @@ export default function App() {
   useEffect(() => {
     if ((activeView === "nbSignUps" || activeView === "dailySnapshot") && selectedGSC && selectedGA4 && accessToken) void fetchNbsuData();
   }, [activeView, selectedGSC, selectedGA4, accessToken, fetchNbsuData]);
+
+  useEffect(() => {
+    if (activeView === "dailySnapshot" && selectedGSC && selectedGA4 && accessToken) void fetchDailySnapshot();
+  }, [activeView, selectedGSC, selectedGA4, avGA4Id, accessToken, fetchDailySnapshot]);
 
   // ── Auto-check mentions: for every page in gscPages, fetch copy and check query presence ──
   useEffect(() => {
@@ -10349,71 +10538,145 @@ ${combinedHtml}
             )}
 
             {activeView === "dailySnapshot" && (() => {
-              const d = nbsuData;
-              const loading = nbsuLoading;
+              const VCC_DAILY = { nbSignUps: 170, nbClicks: 1700, nbTop3: 17000, aioSessions: 40, aioSignUps: 3 };
+              const AV_DAILY  = { nbSignUps: 100, nbClicks: 1700, nbTop3: 17000, aioSessions: 40, aioSignUps: 3 };
+              const getDailyTargets = (abbr: string) => abbr === "VCC" ? VCC_DAILY : AV_DAILY;
+              const periodDays = (s: SnapResult) => Math.max(1, Math.round((new Date(s.period.end).getTime() - new Date(s.period.start).getTime()) / 86400000) + 1);
+              const hasCmp = (s: SnapResult) => !!s.cmpPeriod.start;
+              const chg = (a: number, b: number) => b > 0 ? ` (${a >= b ? "+" : ""}${((a - b) / b * 100).toFixed(1)}% vs prev)` : "";
+              const tgtPct = (val: number, t: number) => `${Math.round((val / t) * 100)}% of target`;
 
-              // Build the slack message from nbsuData
               const buildSlack = () => {
-                if (!d) return "";
-                const hasCmp = !!d.cmpPeriod.start;
-                const TARGETS = { nbSignUps: 170, nbClicks: 1700, nbTop3: 17000 };
-                const tgtPct = (val: number, target: number) => `${Math.round((val / target) * 100)}% of target`;
-                const chg = (a: number, b: number) => b > 0 ? ` (${((a - b) / b * 100) >= 0 ? "+" : ""}${((a - b) / b * 100).toFixed(1)}% vs prev)` : "";
+                const lines: string[] = [`📊 *Daily Snapshot — ${snapVCC?.period.start ?? snapAV?.period.start ?? ""}*`, ``];
+                const addProp = (s: SnapResult | null, abbr: string) => {
+                  if (!s) return;
+                  const D = getDailyTargets(abbr);
+                  const days = periodDays(s);
+                  const T = { nbSignUps: D.nbSignUps * days, nbClicks: D.nbClicks * days, nbTop3: D.nbTop3, aioSessions: D.aioSessions * days, aioSignUps: D.aioSignUps * days };
+                  const hc = hasCmp(s);
+                  const dayLabel = days === 1 ? "/day" : `/${days}d`;
+                  lines.push(`*${abbr} NB SEO DATA*`);
+                  lines.push(`• NB Sign Ups: *${s.nbLeads.toLocaleString()}* — ${tgtPct(s.nbLeads, T.nbSignUps)} (target ${T.nbSignUps}${dayLabel})${hc ? chg(s.nbLeads, s.nbLeadsCmp) : ""}`);
+                  lines.push(`• NB Clicks: *${s.nbClicks.toLocaleString()}* — ${tgtPct(s.nbClicks, T.nbClicks)} (target ${T.nbClicks.toLocaleString()}${dayLabel})${hc ? chg(s.nbClicks, s.nbClicksCmp) : ""}`);
+                  lines.push(`• NB Keywords Top 3: *${s.nbTop3.toLocaleString()}* — ${tgtPct(s.nbTop3, T.nbTop3)} (target ${T.nbTop3.toLocaleString()})${hc ? chg(s.nbTop3, s.nbTop3Cmp) : ""}`);
+                  lines.push(`• Organic Sessions: *${s.orgSessions.toLocaleString()}*${hc ? chg(s.orgSessions, s.orgSessionsCmp) : ""}`);
+                  lines.push(``);
+                  lines.push(`*${abbr} AIO DATA* (Q4 target ×10)`);
+                  lines.push(`• AIO Sessions: *${s.aioSessions.toLocaleString()}* — ${tgtPct(s.aioSessions, T.aioSessions)} (target ${T.aioSessions}${dayLabel} · 1,000/mth)`);
+                  lines.push(`• AIO Sign Ups: *${s.aioSignUps.toLocaleString()}* — ${tgtPct(s.aioSignUps, T.aioSignUps)} (target ${T.aioSignUps}${dayLabel} · 100/mth)`);
+                  lines.push(``);
+                };
+                addProp(snapVCC, "VCC");
+                addProp(snapAV, "AV");
+                return lines.join("\n").trim();
+              };
 
-                const nbBestPos = new Map<string, number>();
-                d.queryPageRowsCur.forEach((r) => {
-                  if (r.cls !== "nonBrand") return;
-                  const prev = nbBestPos.get(r.query);
-                  if (prev == null || r.position < prev) nbBestPos.set(r.query, r.position);
-                });
-                const nbTop3Count = Array.from(nbBestPos.values()).filter((p) => p <= 3).length;
-                const nbTop3Cmp = (() => {
-                  const m = new Map<string, number>();
-                  d.queryPageRowsCmp.forEach((r) => { if (r.cls !== "nonBrand") return; const p = m.get(r.query); if (p == null || r.position < p) m.set(r.query, r.position); });
-                  return Array.from(m.values()).filter((p) => p <= 3).length;
-                })();
-
-                const nbClicksCur = d.queryPageRowsCur.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
-                const nbClicksCmp = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
-                const nbLeads = Math.round(d.totals.nbLeads);
-                const nbLeadsCmp = Math.round(d.totals.nbLeadsCmp);
-
-                return [
-                  `📊 *Daily Snapshot — ${d.period.start}${d.period.start !== d.period.end ? ` → ${d.period.end}` : ""}*`,
-                  ``,
-                  `• NB Sign Ups: *${nbLeads.toLocaleString()}* — ${tgtPct(nbLeads, TARGETS.nbSignUps)}${hasCmp ? chg(nbLeads, nbLeadsCmp) : ""}`,
-                  `• NB Clicks: *${nbClicksCur.toLocaleString()}* — ${tgtPct(nbClicksCur, TARGETS.nbClicks)}${hasCmp ? chg(nbClicksCur, nbClicksCmp) : ""}`,
-                  `• NB Keywords Top 3: *${nbTop3Count.toLocaleString()}* — ${tgtPct(nbTop3Count, TARGETS.nbTop3)}${hasCmp ? chg(nbTop3Count, nbTop3Cmp) : ""}`,
-                  `• Organic Sessions: *${Math.round(d.totals.orgSessions).toLocaleString()}*${hasCmp ? chg(d.totals.orgSessions, d.totals.orgSessionsCmp) : ""}`,
-                ].join("\n");
+              const PropBlock = ({ s, abbr }: { s: SnapResult; abbr: string }) => {
+                const D = getDailyTargets(abbr);
+                const days = periodDays(s);
+                const T = { nbSignUps: D.nbSignUps * days, nbClicks: D.nbClicks * days, nbTop3: D.nbTop3, aioSessions: D.aioSessions * days, aioSignUps: D.aioSignUps * days };
+                const dayLabel = days === 1 ? "/day" : `/${days}d`;
+                const hc = hasCmp(s);
+                const pct = (a: number, b: number) => (b > 0 ? ((a - b) / b) * 100 : (a > 0 ? 100 : 0));
+                const Delta = ({ a, b }: { a: number; b: number }) => {
+                  if (!hc || !b) return null;
+                  const p = pct(a, b); const up = p >= 0;
+                  return <span className={`text-[11px] font-bold ${up ? "text-emerald-600" : "text-red-500"}`}>{up ? "+" : ""}{p.toFixed(1)}%</span>;
+                };
+                const TargetCard = ({ label, value, target, cmpValue, sublabel }: { label: string; value: number; target: number; cmpValue?: number; sublabel?: string }) => {
+                  const p = Math.round((value / target) * 100);
+                  const bar = Math.min(p, 100);
+                  const barCol = p >= 100 ? "bg-emerald-500" : p >= 70 ? "bg-yellow-400" : "bg-red-400";
+                  return (
+                    <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                      <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">{label}</div>
+                      <div className="flex items-end justify-between gap-2 mb-2">
+                        <span className="text-2xl font-bold text-emerald-600 tabular-nums">{value.toLocaleString()}</span>
+                        <div className="flex flex-col items-end gap-0.5">
+                          <span className={`text-sm font-bold ${p >= 100 ? "text-emerald-600" : p >= 70 ? "text-yellow-600" : "text-red-500"}`}>{p}%</span>
+                          {hc && cmpValue != null && <Delta a={value} b={cmpValue} />}
+                        </div>
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-1.5 mb-1.5">
+                        <div className={`h-1.5 rounded-full transition-all ${barCol}`} style={{ width: `${bar}%` }} />
+                      </div>
+                      <div className="text-[10px] text-gray-400">target {target.toLocaleString()}{sublabel ? ` ${sublabel}` : ""}{hc && cmpValue != null ? ` · prev ${cmpValue.toLocaleString()}` : ""}</div>
+                    </div>
+                  );
+                };
+                const AioCard = ({ label, value, target, sublabel }: { label: string; value: number; target: number; sublabel: string }) => {
+                  const p = Math.round((value / target) * 100);
+                  const bar = Math.min(p, 100);
+                  const barCol = p >= 100 ? "bg-emerald-500" : p >= 70 ? "bg-yellow-400" : "bg-red-400";
+                  return (
+                    <div className="bg-sky-50 border border-sky-100 rounded-2xl p-4 shadow-sm">
+                      <div className="text-[10px] uppercase tracking-wider text-sky-400 font-semibold mb-1">{label}</div>
+                      <div className="flex items-end justify-between gap-2 mb-2">
+                        <span className="text-2xl font-bold text-sky-700 tabular-nums">{value.toLocaleString()}</span>
+                        <span className={`text-sm font-bold ${p >= 100 ? "text-emerald-600" : p >= 70 ? "text-yellow-600" : "text-red-500"}`}>{p}%</span>
+                      </div>
+                      <div className="w-full bg-sky-100 rounded-full h-1.5 mb-1.5">
+                        <div className={`h-1.5 rounded-full transition-all ${barCol}`} style={{ width: `${bar}%` }} />
+                      </div>
+                      <div className="text-[10px] text-sky-400">target {target} {sublabel}</div>
+                    </div>
+                  );
+                };
+                return (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-gray-700 bg-yellow-100 border border-yellow-200 rounded-lg px-2.5 py-1">{s.propLabel}</span>
+                      {hc && <span className="text-[11px] text-gray-400">{formatDisplayDate(s.period.start)} – {formatDisplayDate(s.period.end)} vs {formatDisplayDate(s.cmpPeriod.start)} – {formatDisplayDate(s.cmpPeriod.end)}</span>}
+                    </div>
+                    <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{abbr} — Non-Brand SEO</div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                        <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Organic Sessions</div>
+                        <div className="flex items-end justify-between gap-2">
+                          <span className="text-2xl font-bold text-gray-900 tabular-nums">{s.orgSessions.toLocaleString()}</span>
+                          <Delta a={s.orgSessions} b={s.orgSessionsCmp} />
+                        </div>
+                        <div className="text-[10px] text-gray-400 mt-1">{hc ? `${s.orgSessionsCmp.toLocaleString()} previously` : "organic"}</div>
+                      </div>
+                      <TargetCard label="NB Clicks" value={s.nbClicks} target={T.nbClicks} cmpValue={s.nbClicksCmp} sublabel={dayLabel} />
+                      <TargetCard label="NB Sign Ups" value={s.nbLeads} target={T.nbSignUps} cmpValue={s.nbLeadsCmp} sublabel={dayLabel} />
+                      <TargetCard label="NB Keywords Top 3" value={s.nbTop3} target={T.nbTop3} cmpValue={s.nbTop3Cmp} />
+                    </div>
+                    <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{abbr} — AIO (AI-Influenced Organic) · Q4 target ×10</div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <AioCard label="AIO Sessions" value={s.aioSessions} target={T.aioSessions} sublabel={`${dayLabel} · 1,000/mth`} />
+                      <AioCard label="AIO Sign Ups" value={s.aioSignUps} target={T.aioSignUps} sublabel={`${dayLabel} · 100/mth`} />
+                    </div>
+                  </div>
+                );
               };
 
               return (
                 <>
                   <SectionDivider label="DAILY SNAPSHOT" />
-                  <section className="space-y-4">
+                  <section className="space-y-6">
                     <div className="flex items-center justify-between gap-4 flex-wrap">
                       <div className="flex items-center gap-3">
                         <div className="bg-yellow-100 border border-yellow-200 rounded-xl p-2"><Activity size={16} className="text-yellow-700" /></div>
                         <div>
                           <h2 className="text-sm font-bold text-gray-900">Daily Snapshot</h2>
-                          <p className="text-xs text-gray-400">Non-brand SEO KPIs · same data as Non-Brand Sign Ups · copy for Slack</p>
+                          <p className="text-xs text-gray-400">VCC + Arcavindi · NB SEO & AIO · copy for Slack</p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        {d && <SlackCopyButton buildMessage={buildSlack} />}
+                        {(snapVCC || snapAV) && <SlackCopyButton buildMessage={buildSlack} />}
                         <button
-                          onClick={() => void fetchNbsuData()}
-                          disabled={loading}
+                          onClick={() => void fetchDailySnapshot()}
+                          disabled={snapLoading}
                           className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-yellow-400 text-yellow-900 hover:bg-yellow-500 transition-all disabled:opacity-50 flex items-center gap-1.5"
                         >
-                          <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
-                          {loading ? "Loading…" : "Refresh"}
+                          <RefreshCw size={12} className={snapLoading ? "animate-spin" : ""} />
+                          {snapLoading ? "Loading…" : "Refresh"}
                         </button>
                       </div>
                     </div>
 
-                    {/* Reuse the same date filter as nbSignUps */}
+                    {/* Date filter */}
                     <div className="bg-yellow-50/60 border border-yellow-100 rounded-2xl p-4">
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div>
@@ -10444,93 +10707,33 @@ ${combinedHtml}
                           />
                         </div>
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1.5 font-medium">GA4 Property</label>
-                          <Select value={selectedGA4} onChange={setSelectedGA4} options={ga4Properties} placeholder="Select GA4 Property" disabled={ga4Properties.length === 0} />
+                          <label className="block text-xs text-gray-500 mb-1.5 font-medium">GSC Property</label>
+                          <Select value={selectedGSC} onChange={setSelectedGSC} options={gscProperties} placeholder="Select GSC Property" disabled={gscProperties.length === 0} />
                         </div>
                       </div>
                     </div>
 
-                    {loading && (
+                    {snapLoading && (
                       <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center text-sm text-gray-400">
                         <div className="inline-block w-6 h-6 border-2 border-gray-200 border-t-yellow-400 rounded-full animate-spin mb-3" />
-                        <p>Pulling data…</p>
+                        <p>Fetching VCC + Arcavindi data…</p>
                       </div>
                     )}
 
-                    {!loading && !d && (
+                    {!snapLoading && !snapVCC && !snapAV && (
                       <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center text-sm text-gray-400">
-                        {selectedGSC && selectedGA4 ? "Click Refresh to load data." : "Connect both a GA4 and a GSC property to use this section."}
+                        {selectedGSC ? "Click Refresh to load data." : "Select a GSC property to continue."}
                       </div>
                     )}
 
-                    {!loading && d && (() => {
-                      const hasCmp = !!d.cmpPeriod.start && !!d.cmpPeriod.end;
-                      const pct = (a: number, b: number) => (b > 0 ? ((a - b) / b) * 100 : (a > 0 ? 100 : 0));
-                      const Delta = ({ p }: { p: number | null }) => {
-                        if (p == null || !isFinite(p)) return <span className="text-[10px] text-gray-400">—</span>;
-                        const up = p >= 0;
-                        return <span className={`text-[11px] font-bold ${up ? "text-emerald-600" : "text-red-500"}`}>{up ? "+" : ""}{p.toFixed(1)}%</span>;
-                      };
-
-                      const nbClicksCur = d.queryPageRowsCur.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
-                      const nbClicksCmp = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
-
-                      const nbBestPos = new Map<string, number>();
-                      d.queryPageRowsCur.forEach((r) => { if (r.cls !== "nonBrand") return; const p = nbBestPos.get(r.query); if (p == null || r.position < p) nbBestPos.set(r.query, r.position); });
-                      const nbTop3Cur = Array.from(nbBestPos.values()).filter((p) => p <= 3).length;
-                      const nbTop3Cmp = (() => { const m = new Map<string, number>(); d.queryPageRowsCmp.forEach((r) => { if (r.cls !== "nonBrand") return; const p = m.get(r.query); if (p == null || r.position < p) m.set(r.query, r.position); }); return Array.from(m.values()).filter((p) => p <= 3).length; })();
-
-                      return (
-                        <>
-                          <div className="text-[11px] text-gray-500 flex items-center gap-4 flex-wrap">
-                            <span><strong>Current:</strong> {formatDisplayDate(d.period.start)} – {formatDisplayDate(d.period.end)}</span>
-                            {hasCmp && <span className="text-gray-300">vs</span>}
-                            {hasCmp && <span><strong>Previous:</strong> {formatDisplayDate(d.cmpPeriod.start)} – {formatDisplayDate(d.cmpPeriod.end)}</span>}
-                          </div>
-
-                          {/* KPI cards with targets */}
-                          {(() => {
-                            const TARGETS = { nbSignUps: 170, nbClicks: 1700, nbTop3: 17000 };
-                            const TargetCard = ({ label, value, target, cmpValue, color = "text-emerald-600" }: { label: string; value: number; target: number; cmpValue?: number; color?: string }) => {
-                              const pctOfTarget = Math.round((value / target) * 100);
-                              const barWidth = Math.min(pctOfTarget, 100);
-                              const barColor = pctOfTarget >= 100 ? "bg-emerald-500" : pctOfTarget >= 70 ? "bg-yellow-400" : "bg-red-400";
-                              return (
-                                <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                                  <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">{label}</div>
-                                  <div className="flex items-end justify-between gap-2 mb-2">
-                                    <span className={`text-2xl font-bold tabular-nums ${color}`}>{value.toLocaleString()}</span>
-                                    <span className={`text-sm font-bold tabular-nums ${pctOfTarget >= 100 ? "text-emerald-600" : pctOfTarget >= 70 ? "text-yellow-600" : "text-red-500"}`}>{pctOfTarget}%</span>
-                                  </div>
-                                  <div className="w-full bg-gray-100 rounded-full h-1.5 mb-1.5">
-                                    <div className={`h-1.5 rounded-full transition-all ${barColor}`} style={{ width: `${barWidth}%` }} />
-                                  </div>
-                                  <div className="text-[10px] text-gray-400">target {target.toLocaleString()}{hasCmp && cmpValue != null ? ` · prev ${cmpValue.toLocaleString()}` : ""}</div>
-                                </div>
-                              );
-                            };
-                            return (
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                                <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                                  <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Organic Sessions</div>
-                                  <div className="flex items-end justify-between gap-2">
-                                    <span className="text-2xl font-bold text-gray-900 tabular-nums">{Math.round(d.totals.orgSessions).toLocaleString()}</span>
-                                    {hasCmp && <Delta p={pct(d.totals.orgSessions, d.totals.orgSessionsCmp)} />}
-                                  </div>
-                                  <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.orgSessionsCmp).toLocaleString()} previously` : "whole site · organic"}</div>
-                                </div>
-                                <TargetCard label="NB Clicks" value={nbClicksCur} target={TARGETS.nbClicks} cmpValue={nbClicksCmp} />
-                                <TargetCard label="NB Sign Ups" value={Math.round(d.totals.nbLeads)} target={TARGETS.nbSignUps} cmpValue={hasCmp ? Math.round(d.totals.nbLeadsCmp) : undefined} />
-                                <TargetCard label="NB Keywords Top 3" value={nbTop3Cur} target={TARGETS.nbTop3} cmpValue={hasCmp ? nbTop3Cmp : undefined} />
-                              </div>
-                            );
-                          })()}
-
-                          {/* Slack preview */}
-                          <SlackPreview buildMessage={buildSlack} />
-                        </>
-                      );
-                    })()}
+                    {!snapLoading && (snapVCC || snapAV) && (
+                      <div className="space-y-8">
+                        {snapVCC && <PropBlock s={snapVCC} abbr="VCC" />}
+                        {snapVCC && snapAV && <div className="border-t border-gray-100" />}
+                        {snapAV  && <PropBlock s={snapAV}  abbr="AV" />}
+                        <SlackPreview buildMessage={buildSlack} />
+                      </div>
+                    )}
                   </section>
                 </>
               );
