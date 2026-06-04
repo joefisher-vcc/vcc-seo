@@ -3189,7 +3189,6 @@ function DailySnapshotView({
   snapshotLoading,
   snapshotTargets,
   setSnapshotTargets,
-  onFetch,
   selectedGA4,
   selectedGSC,
 }: {
@@ -3197,7 +3196,6 @@ function DailySnapshotView({
   snapshotLoading: boolean;
   snapshotTargets: SnapshotTargets;
   setSnapshotTargets: (t: SnapshotTargets) => void;
-  onFetch: () => void;
   selectedGA4: string;
   selectedGSC: string;
 }) {
@@ -3272,15 +3270,6 @@ function DailySnapshotView({
               {copied ? "✓ Copied!" : "📋 Copy for Slack"}
             </button>
           )}
-          <button
-            type="button"
-            onClick={onFetch}
-            disabled={missingProps || snapshotLoading}
-            className="flex items-center gap-1.5 text-xs font-semibold bg-[#5b4fa8] hover:bg-[#4a3f96] disabled:bg-purple-300 text-white px-3 py-1.5 rounded-lg transition-colors"
-          >
-            <RefreshCw size={12} className={snapshotLoading ? "animate-spin" : ""} />
-            {snapshotLoading ? "Fetching…" : "Fetch Snapshot"}
-          </button>
         </div>
       </div>
 
@@ -3409,7 +3398,7 @@ function DailySnapshotView({
       {!snapshotLoading && !snapshotData && !missingProps && (
         <div className="bg-white border border-dashed border-gray-200 rounded-2xl p-12 text-center text-gray-400">
           <Activity size={32} className="mx-auto mb-3 opacity-30" />
-          <p className="text-sm font-medium">Click "Fetch Snapshot" to load yesterday's data</p>
+          <p className="text-sm font-medium">Loading data…</p>
           <p className="text-xs mt-1 text-gray-300">GA4 uses yesterday · GSC uses 48h ago for reliable data</p>
         </div>
       )}
@@ -6003,6 +5992,10 @@ export default function App() {
   useEffect(() => {
     if (activeView === "nbSignUps" && selectedGSC && selectedGA4 && accessToken) void fetchNbsuData();
   }, [activeView, selectedGSC, selectedGA4, accessToken, fetchNbsuData]);
+
+  useEffect(() => {
+    if (activeView === "dailySnapshot" && selectedGSC && selectedGA4 && accessToken) void fetchSnapshotData();
+  }, [activeView, selectedGSC, selectedGA4, accessToken, fetchSnapshotData]);
 
   // ── Auto-check mentions: for every page in gscPages, fetch copy and check query presence ──
   useEffect(() => {
@@ -10788,7 +10781,6 @@ ${combinedHtml}
                 snapshotLoading={snapshotLoading}
                 snapshotTargets={snapshotTargets}
                 setSnapshotTargets={setSnapshotTargets}
-                onFetch={fetchSnapshotData}
                 selectedGA4={selectedGA4}
                 selectedGSC={selectedGSC}
               />
