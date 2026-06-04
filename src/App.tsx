@@ -159,6 +159,7 @@ const LS_SELECTED_GSC = "vcc_selected_gsc";
 const LS_ACTIVE_VIEW = "vcc_active_view";
 const LS_BRAND_TERMS = "vcc_brand_terms_v5";
 const LS_BRAND_TERMS_HISTORY = "vcc_brand_terms_history_v5";
+const LS_SNAPSHOT_TARGETS = "vcc_snapshot_targets_v1";
 
 function persistGoogleToken(r: { access_token?: string; expires_in?: number }) {
   if (!r.access_token) return;
@@ -212,7 +213,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -3129,6 +3130,293 @@ ${el.outerHTML}
 }
 
 
+// ─── Daily SEO/AIO Snapshot ──────────────────────────────────────────────────
+
+interface SnapshotTargets {
+  nbClicks: string;
+  nbSignUps: string;
+  nbKeywordsTop3: string;
+  aioSignUps: string;
+  aioSessions: string;
+}
+
+const DEFAULT_SNAPSHOT_TARGETS: SnapshotTargets = {
+  nbClicks: "",
+  nbSignUps: "",
+  nbKeywordsTop3: "",
+  aioSignUps: "",
+  aioSessions: "",
+};
+
+interface SnapshotData {
+  // GA4 yesterday
+  ga4Date: string;         // "yesterday" YYYY-MM-DD
+  totalSessions: number;
+  // NB metrics
+  nbClicks: number;
+  nbImpressions: number;
+  nbKeywordsTop3: number;  // count of non-brand queries in positions 1-3
+  nbSignUps: number;       // modelled non-brand generate_lead
+  // AIO (AI Overview / AI-influenced) metrics
+  aioSignUps: number;      // generate_lead events in sessions matching AIO regex
+  aioSessions: number;     // sessions matching AIO regex
+  // Top NB keywords in top 3
+  topNbKeywords: { query: string; position: number; clicks: number }[];
+  // GSC date used
+  gscDate: string;
+}
+
+function SnapTarget({ label, value, target, unit = "" }: { label: string; value: number; target: string; unit?: string }) {
+  const tNum = parseFloat(target);
+  const hasTarget = !isNaN(tNum) && target.trim() !== "";
+  const pct = hasTarget ? Math.round((value / tNum) * 100) : null;
+  const met = hasTarget && value >= tNum;
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-xs text-gray-500">{label}</span>
+      <span className="text-lg font-bold text-gray-900">{value.toLocaleString()}{unit}</span>
+      {hasTarget && (
+        <span className={`text-xs font-semibold ${met ? "text-emerald-600" : "text-amber-600"}`}>
+          {pct}% of target ({tNum.toLocaleString()}{unit}) {met ? "✓" : ""}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function DailySnapshotView({
+  snapshotData,
+  snapshotLoading,
+  snapshotTargets,
+  setSnapshotTargets,
+  onFetch,
+  selectedGA4,
+  selectedGSC,
+}: {
+  snapshotData: SnapshotData | null;
+  snapshotLoading: boolean;
+  snapshotTargets: SnapshotTargets;
+  setSnapshotTargets: (t: SnapshotTargets) => void;
+  onFetch: () => void;
+  selectedGA4: string;
+  selectedGSC: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  function buildSlackMessage(): string {
+    if (!snapshotData) return "";
+    const d = snapshotData;
+    const tgt = (val: number, target: string) => {
+      const n = parseFloat(target);
+      if (isNaN(n) || target.trim() === "") return "";
+      const pct = Math.round((val / n) * 100);
+      return ` (${pct}% of ${n.toLocaleString()} target)`;
+    };
+
+    const lines: string[] = [
+      `📊 *Daily SEO/AIO Snapshot — ${d.ga4Date}*`,
+      ``,
+      `*Non-Brand (GSC as of ${d.gscDate})*`,
+      `• NB Clicks: ${d.nbClicks.toLocaleString()}${tgt(d.nbClicks, snapshotTargets.nbClicks)}`,
+      `• NB Impressions: ${d.nbImpressions.toLocaleString()}`,
+      `• NB Keywords in Top 3: ${d.nbKeywordsTop3.toLocaleString()}${tgt(d.nbKeywordsTop3, snapshotTargets.nbKeywordsTop3)}`,
+      `• NB Sign Ups (modelled): ${d.nbSignUps.toLocaleString()}${tgt(d.nbSignUps, snapshotTargets.nbSignUps)}`,
+      ``,
+      `*AIO (AI-Influenced Organic) — GA4 Yesterday*`,
+      `• AIO Sessions: ${d.aioSessions.toLocaleString()}${tgt(d.aioSessions, snapshotTargets.aioSessions)}`,
+      `• AIO Sign Ups: ${d.aioSignUps.toLocaleString()}${tgt(d.aioSignUps, snapshotTargets.aioSignUps)}`,
+    ];
+    if (d.topNbKeywords.length > 0) {
+      lines.push(``);
+      lines.push(`*Top NB Keywords (pos 1–3)*`);
+      d.topNbKeywords.slice(0, 5).forEach((kw, i) => {
+        lines.push(`${i + 1}. "${kw.query}" — pos ${kw.position.toFixed(1)}, ${kw.clicks} clicks`);
+      });
+    }
+    return lines.join("\n");
+  }
+
+  async function handleCopy() {
+    const msg = buildSlackMessage();
+    if (!msg) return;
+    await navigator.clipboard.writeText(msg);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  const missingProps = !selectedGA4 || !selectedGSC;
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-3">
+          <div className="bg-blue-100 rounded-xl p-2">
+            <Activity size={16} className="text-blue-700" />
+          </div>
+          <div>
+            <h2 className="text-sm font-bold text-gray-900">Daily SEO/AIO Snapshot</h2>
+            <p className="text-xs text-gray-400">Yesterday's GA4 + GSC (48h lag) · ready to paste into Slack</p>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          {snapshotData && (
+            <button
+              type="button"
+              onClick={handleCopy}
+              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
+                copied
+                  ? "bg-emerald-50 border-emerald-300 text-emerald-700"
+                  : "bg-white border-gray-200 text-gray-600 hover:border-blue-300 hover:text-blue-700"
+              }`}
+            >
+              {copied ? "✓ Copied!" : "📋 Copy for Slack"}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onFetch}
+            disabled={missingProps || snapshotLoading}
+            className="flex items-center gap-1.5 text-xs font-semibold bg-[#5b4fa8] hover:bg-[#4a3f96] disabled:bg-purple-300 text-white px-3 py-1.5 rounded-lg transition-colors"
+          >
+            <RefreshCw size={12} className={snapshotLoading ? "animate-spin" : ""} />
+            {snapshotLoading ? "Fetching…" : "Fetch Snapshot"}
+          </button>
+        </div>
+      </div>
+
+      {missingProps && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800 mb-6">
+          Please select both a GA4 property and a GSC property above to use the snapshot.
+        </div>
+      )}
+
+      {/* Targets config */}
+      <div className="bg-white border border-gray-100 rounded-2xl p-5 mb-6 shadow-sm">
+        <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-4">Daily Targets (optional)</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+          {(
+            [
+              { key: "nbClicks", label: "NB Clicks" },
+              { key: "nbSignUps", label: "NB Sign Ups" },
+              { key: "nbKeywordsTop3", label: "NB Keywords Top 3" },
+              { key: "aioSignUps", label: "AIO Sign Ups" },
+              { key: "aioSessions", label: "AIO Sessions" },
+            ] as { key: keyof SnapshotTargets; label: string }[]
+          ).map(({ key, label }) => (
+            <div key={key} className="flex flex-col gap-1">
+              <label className="text-xs text-gray-500 font-medium">{label}</label>
+              <input
+                type="number"
+                min="0"
+                value={snapshotTargets[key]}
+                onChange={(e) => setSnapshotTargets({ ...snapshotTargets, [key]: e.target.value })}
+                placeholder="—"
+                className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-purple-300 w-full"
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {snapshotLoading && (
+        <div className="flex items-center justify-center py-16 text-gray-400 gap-3">
+          <RefreshCw size={16} className="animate-spin" />
+          <span className="text-sm">Fetching yesterday's data…</span>
+        </div>
+      )}
+
+      {!snapshotLoading && snapshotData && (
+        <>
+          <div className="text-xs text-gray-400 mb-3">
+            GA4: {snapshotData.ga4Date} · GSC: {snapshotData.gscDate} (48h lag)
+          </div>
+
+          {/* KPI cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+              <SnapTarget label="NB Clicks" value={snapshotData.nbClicks} target={snapshotTargets.nbClicks} />
+            </div>
+            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+              <SnapTarget label="NB Sign Ups" value={snapshotData.nbSignUps} target={snapshotTargets.nbSignUps} />
+            </div>
+            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+              <SnapTarget label="NB Keywords Top 3" value={snapshotData.nbKeywordsTop3} target={snapshotTargets.nbKeywordsTop3} />
+            </div>
+            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 shadow-sm">
+              <SnapTarget label="AIO Sessions" value={snapshotData.aioSessions} target={snapshotTargets.aioSessions} />
+            </div>
+            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 shadow-sm">
+              <SnapTarget label="AIO Sign Ups" value={snapshotData.aioSignUps} target={snapshotTargets.aioSignUps} />
+            </div>
+          </div>
+
+          {/* Top NB keywords in top 3 */}
+          {snapshotData.topNbKeywords.length > 0 && (
+            <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm mb-6">
+              <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-3">
+                Non-Brand Keywords in Top 3 (GSC {snapshotData.gscDate})
+              </h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100">
+                      <th className="text-left py-2 pr-4 text-xs text-gray-500 font-semibold">Query</th>
+                      <th className="text-right py-2 px-3 text-xs text-gray-500 font-semibold">Position</th>
+                      <th className="text-right py-2 px-3 text-xs text-gray-500 font-semibold">Clicks</th>
+                      <th className="text-right py-2 px-3 text-xs text-gray-500 font-semibold">Impressions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {snapshotData.topNbKeywords.map((kw) => (
+                      <tr key={kw.query} className="border-b border-gray-50 hover:bg-gray-50">
+                        <td className="py-2 pr-4 text-gray-900 max-w-xs truncate">{kw.query}</td>
+                        <td className="py-2 px-3 text-right">
+                          <span className="inline-flex items-center justify-center bg-emerald-100 text-emerald-800 text-xs font-bold rounded px-1.5 py-0.5 min-w-[2rem]">
+                            {kw.position.toFixed(1)}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-right text-gray-700 font-medium">{kw.clicks.toLocaleString()}</td>
+                        <td className="py-2 px-3 text-right text-gray-500">{(kw as { query: string; position: number; clicks: number; impressions: number }).impressions?.toLocaleString() ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Slack preview */}
+          <div className="bg-gray-900 rounded-2xl p-5 shadow-sm">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-bold text-gray-400 uppercase tracking-wide">Slack Preview</span>
+              <button
+                type="button"
+                onClick={handleCopy}
+                className={`text-xs font-semibold px-2.5 py-1 rounded-lg transition-colors ${
+                  copied ? "bg-emerald-700 text-emerald-100" : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                }`}
+              >
+                {copied ? "✓ Copied!" : "Copy"}
+              </button>
+            </div>
+            <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">
+              {buildSlackMessage()}
+            </pre>
+          </div>
+        </>
+      )}
+
+      {!snapshotLoading && !snapshotData && !missingProps && (
+        <div className="bg-white border border-dashed border-gray-200 rounded-2xl p-12 text-center text-gray-400">
+          <Activity size={32} className="mx-auto mb-3 opacity-30" />
+          <p className="text-sm font-medium">Click "Fetch Snapshot" to load yesterday's data</p>
+          <p className="text-xs mt-1 text-gray-300">GA4 uses yesterday · GSC uses 48h ago for reliable data</p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function App() {
   const [accessToken, setAccessToken]   = useState("");
   const [isLoggingIn, setIsLoggingIn]   = useState(false);
@@ -3505,6 +3793,22 @@ export default function App() {
   const [brandLoading, setBrandLoading] = useState(false);
   const [brandTab, setBrandTab] = useState<"overview" | "queries" | "pages" | "leads">("overview");
   const [convLoading, setConvLoading] = useState(false);
+
+  // ── Daily Snapshot state ──────────────────────────────────────────────────
+  const [snapshotData, setSnapshotData] = useState<SnapshotData | null>(null);
+  const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const [snapshotTargets, setSnapshotTargets] = useState<SnapshotTargets>(() => {
+    try {
+      const raw = localStorage.getItem(LS_SNAPSHOT_TARGETS);
+      if (raw) return { ...DEFAULT_SNAPSHOT_TARGETS, ...JSON.parse(raw) };
+    } catch { /* ignore */ }
+    return DEFAULT_SNAPSHOT_TARGETS;
+  });
+
+  // Persist snapshot targets
+  useEffect(() => {
+    localStorage.setItem(LS_SNAPSHOT_TARGETS, JSON.stringify(snapshotTargets));
+  }, [snapshotTargets]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -4721,7 +5025,153 @@ export default function App() {
     setBrandLoading(false);
   }, [selectedGSC, selectedGA4, accessToken, gscFetchFilters, ga4FetchFilters]);
 
-  // ── Non-Brand SEO fetch ────────────────────────────────────────────────────
+  // ── Daily Snapshot fetch ───────────────────────────────────────────────────
+  const fetchSnapshotData = useCallback(async () => {
+    if (!selectedGSC || !selectedGA4 || !accessToken) return;
+    setSnapshotLoading(true);
+    setSnapshotData(null);
+    try {
+      const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+      const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
+      const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
+
+      // GA4: yesterday
+      const yesterdayDate = addDaysISO(toISODate(new Date()), -1);
+      // GSC: 48h lag (2 days ago for a single-day snapshot)
+      const gscDate = addDaysISO(toISODate(new Date()), -2);
+
+      const classifyQ = (q: string) => nbSeoClassify(q, nbsBrandTerms);
+
+      type GscRow = { keys: string[]; clicks: number; impressions: number; ctr: number; position: number };
+      type Ga4Resp = { rows?: { dimensionValues: { value: string }[]; metricValues: { value: string }[] }[] };
+
+      // ── GSC: single-day query-level data ────────────────────────────────────
+      const gscQueryFetch = async (): Promise<GscRow[]> => {
+        const body = JSON.stringify({ startDate: gscDate, endDate: gscDate, dimensions: ["query"], rowLimit: 25000 });
+        const res = await fetch(gscBase, { method: "POST", headers, body }).then((r) => r.json());
+        return (res?.rows ?? []) as GscRow[];
+      };
+
+      // ── GA4: total organic sessions yesterday ─────────────────────────────
+      const ga4OrgSessionsBody = JSON.stringify({
+        dateRanges: [{ startDate: yesterdayDate, endDate: yesterdayDate }],
+        metrics: [{ name: "sessions" }],
+        dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } },
+        limit: 1,
+      });
+
+      // ── GA4: AIO sessions (sessions where sessionSource matches AI_MASTER_PATTERN) ─
+      // We use sessionSourceMedium dimension and filter for organic, then check source
+      const ga4AioSessionsBody = JSON.stringify({
+        dateRanges: [{ startDate: yesterdayDate, endDate: yesterdayDate }],
+        dimensions: [{ name: "sessionSource" }],
+        metrics: [{ name: "sessions" }],
+        dimensionFilter: { filter: { fieldName: "sessionMedium", stringFilter: { matchType: "EXACT", value: "organic" } } },
+        limit: 500,
+      });
+
+      // ── GA4: AIO sign ups (generate_lead key events in AIO-source sessions) ─
+      const ga4AioSignUpsBody = JSON.stringify({
+        dateRanges: [{ startDate: yesterdayDate, endDate: yesterdayDate }],
+        dimensions: [{ name: "sessionSource" }],
+        metrics: [{ name: "keyEvents" }],
+        dimensionFilter: {
+          andGroup: { expressions: [
+            { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
+            { filter: { fieldName: "sessionMedium", stringFilter: { matchType: "EXACT", value: "organic" } } },
+          ]},
+        },
+        limit: 500,
+      });
+
+      // ── GA4: NB sign ups — generate_lead via organic search yesterday ─────
+      // We'll use the site-wide NB ratio from GSC to model NB sign ups
+      const ga4OrgSignUpsBody = JSON.stringify({
+        dateRanges: [{ startDate: yesterdayDate, endDate: yesterdayDate }],
+        metrics: [{ name: "keyEvents" }],
+        dimensionFilter: {
+          andGroup: { expressions: [
+            { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
+            { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } },
+          ]},
+        },
+        limit: 1,
+      });
+
+      const ga4Fetch = (body: string): Promise<Ga4Resp> =>
+        fetch(ga4Base, { method: "POST", headers, body }).then((r) => r.json() as Promise<Ga4Resp>);
+
+      const [gscRows, ga4OrgSessResp, ga4AioSessResp, ga4AioSignUpsResp, ga4OrgSignUpsResp] = await Promise.all([
+        gscQueryFetch(),
+        ga4Fetch(ga4OrgSessionsBody),
+        ga4Fetch(ga4AioSessionsBody),
+        ga4Fetch(ga4AioSignUpsBody),
+        ga4Fetch(ga4OrgSignUpsBody),
+      ]);
+
+      // ── Process GSC data ──────────────────────────────────────────────────
+      let nbClicks = 0, nbImpressions = 0;
+      let totalBrandClicks = 0, totalNbClicksAll = 0;
+      const top3NbKeywords: { query: string; position: number; clicks: number; impressions: number }[] = [];
+
+      gscRows.forEach((r) => {
+        const query = r.keys[0];
+        const cls = classifyQ(query);
+        const clicks = Math.round(r.clicks ?? 0);
+        const impr = Math.round(r.impressions ?? 0);
+        if (cls === "nonBrand") {
+          nbClicks += clicks;
+          nbImpressions += impr;
+          totalNbClicksAll += clicks;
+          if (r.position <= 3.5) {
+            top3NbKeywords.push({ query, position: r.position, clicks, impressions: impr });
+          }
+        } else {
+          totalBrandClicks += clicks;
+        }
+      });
+
+      const totalGscClicks = totalBrandClicks + totalNbClicksAll;
+      const siteWideNbRatio = totalGscClicks > 0 ? totalNbClicksAll / totalGscClicks : 0;
+
+      top3NbKeywords.sort((a, b) => a.position - b.position);
+
+      // ── Process GA4 data ──────────────────────────────────────────────────
+      const totalOrgSessions = parseInt((ga4OrgSessResp.rows?.[0]?.metricValues?.[0]?.value ?? "0"), 10);
+      const totalOrgSignUps = parseInt((ga4OrgSignUpsResp.rows?.[0]?.metricValues?.[0]?.value ?? "0"), 10);
+      const nbSignUps = Math.round(totalOrgSignUps * siteWideNbRatio);
+
+      // AIO sessions/signups: filter sources matching AI_MASTER_PATTERN
+      let aioSessions = 0;
+      (ga4AioSessResp.rows ?? []).forEach((r) => {
+        const src = r.dimensionValues[0]?.value ?? "";
+        if (AI_MASTER_PATTERN.test(src)) {
+          aioSessions += parseInt(r.metricValues[0]?.value ?? "0", 10);
+        }
+      });
+      let aioSignUps = 0;
+      (ga4AioSignUpsResp.rows ?? []).forEach((r) => {
+        const src = r.dimensionValues[0]?.value ?? "";
+        if (AI_MASTER_PATTERN.test(src)) {
+          aioSignUps += parseInt(r.metricValues[0]?.value ?? "0", 10);
+        }
+      });
+
+      setSnapshotData({
+        ga4Date: yesterdayDate,
+        gscDate,
+        totalSessions: totalOrgSessions,
+        nbClicks,
+        nbImpressions,
+        nbKeywordsTop3: top3NbKeywords.length,
+        nbSignUps,
+        aioSessions,
+        aioSignUps,
+        topNbKeywords: top3NbKeywords,
+      });
+    } catch (e) { console.error("fetchSnapshotData", e); }
+    setSnapshotLoading(false);
+  }, [selectedGSC, selectedGA4, accessToken, nbsBrandTerms]);
   // Per-landing-page non-brand calculation for /items-we-buy/ pages:
   //   1. Fixed 7-day window vs previous 7 days.
   //   2. GSC [page, query] data: for each landing page, calculate an IMPRESSION-WEIGHTED
@@ -6217,6 +6667,7 @@ export default function App() {
     { key: "conversions", label: "Conversions", icon: ShoppingCart },
     { key: "seoIssues", label: "SEO Issues", icon: AlertTriangle },
     { key: "performance", label: "Performance", icon: BarChart2 },
+    { key: "dailySnapshot", label: "Daily Snapshot", icon: Activity },
   ];
 
   const VIEW_TOOLTIPS: Record<ActiveView, string> = {
@@ -6233,6 +6684,7 @@ export default function App() {
     conversions: "Conversions — monitor key conversion events and goal completions tracked in GA4.",
     seoIssues: "SEO Issues — surface technical and on-page problems that may be hurting your rankings.",
     performance: "Performance — analyse Core Web Vitals and page speed signals from your Search Console data.",
+    dailySnapshot: "Daily Snapshot — yesterday's GA4 + GSC (48h lag) non-brand and AIO metrics, ready to paste into Slack.",
   };
 
   const [isPdfBuilding, setIsPdfBuilding] = useState(false);
@@ -10288,6 +10740,18 @@ ${combinedHtml}
                 ga4Loading={ga4Loading}
                 hasCmp={hasCmp}
                 hasGscCmp={hasGscCmp}
+              />
+            )}
+
+            {activeView === "dailySnapshot" && (
+              <DailySnapshotView
+                snapshotData={snapshotData}
+                snapshotLoading={snapshotLoading}
+                snapshotTargets={snapshotTargets}
+                setSnapshotTargets={setSnapshotTargets}
+                onFetch={fetchSnapshotData}
+                selectedGA4={selectedGA4}
+                selectedGSC={selectedGSC}
               />
             )}
           </>
