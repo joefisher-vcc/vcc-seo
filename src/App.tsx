@@ -5026,6 +5026,9 @@ export default function App() {
   }, [selectedGSC, selectedGA4, accessToken, gscFetchFilters, ga4FetchFilters]);
 
   // ── Daily Snapshot fetch ───────────────────────────────────────────────────
+  // Mirrors the nbSignUps fetch exactly: GSC [page,query] click-weighted NB ratio,
+  // GA4 generate_lead per landing page (Organic Search), site-wide NB ratio applied.
+  // AIO uses the same sessionSourceMedium PARTIAL_REGEXP as the main GA4 fetch.
   const fetchSnapshotData = useCallback(async () => {
     if (!selectedGSC || !selectedGA4 || !accessToken) return;
     setSnapshotLoading(true);
@@ -5035,35 +5038,61 @@ export default function App() {
       const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
       const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
 
-      // GA4: yesterday
-      const yesterdayDate = addDaysISO(toISODate(new Date()), -1);
-      // GSC: 48h lag (2 days ago for a single-day snapshot)
-      const gscDate = addDaysISO(toISODate(new Date()), -2);
+      // GA4 = yesterday; GSC = 2 days ago (48h lag, same as nbSignUps "yesterday" branch)
+      const today = toISODate(new Date());
+      const yesterdayDate = addDaysISO(today, -1);
+      const gscDate = addDaysISO(today, -2);
 
-      const classifyQ = (q: string) => nbSeoClassify(q, nbsBrandTerms);
+      const classify = (q: string) => nbSeoClassify(q, nbsBrandTerms);
+      const normPath = (url: string): string => {
+        try { return new URL(url).pathname.replace(/\/$/, "") || "/"; }
+        catch { return url.replace(/^https?:\/\/[^/]+/, "").replace(/\/$/, "") || "/"; }
+      };
 
       type GscRow = { keys: string[]; clicks: number; impressions: number; ctr: number; position: number };
       type Ga4Resp = { rows?: { dimensionValues: { value: string }[]; metricValues: { value: string }[] }[] };
 
-      // ── GSC: single-day query-level data ────────────────────────────────────
+      // ── GSC: [page, query] single day — same as nbSignUps ─────────────────
+      const gscPageQueryFetch = async (): Promise<GscRow[]> => {
+        const body = JSON.stringify({ startDate: gscDate, endDate: gscDate, dimensions: ["page", "query"], rowLimit: 25000 });
+        const res = await fetch(gscBase, { method: "POST", headers, body }).then((r) => r.json());
+        return (res?.rows ?? []) as GscRow[];
+      };
+
+      // ── GSC: [query] single day for top-3 keywords with position data ─────
       const gscQueryFetch = async (): Promise<GscRow[]> => {
         const body = JSON.stringify({ startDate: gscDate, endDate: gscDate, dimensions: ["query"], rowLimit: 25000 });
         const res = await fetch(gscBase, { method: "POST", headers, body }).then((r) => r.json());
         return (res?.rows ?? []) as GscRow[];
       };
 
-      // ── GA4: total organic sessions yesterday ─────────────────────────────
-      const ga4OrgSessionsBody = JSON.stringify({
+      // ── GA4: generate_lead per landing page (Organic Search) — same as nbSignUps ─
+      const ga4FspLeadsBody = JSON.stringify({
         dateRanges: [{ startDate: yesterdayDate, endDate: yesterdayDate }],
-        metrics: [{ name: "sessions" }],
-        dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } },
-        limit: 1,
+        dimensions: [{ name: "landingPagePlusQueryString" }],
+        metrics: [{ name: "keyEvents" }],
+        dimensionFilter: {
+          andGroup: { expressions: [
+            { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
+            { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } },
+          ]},
+        },
+        limit: 10000,
       });
 
+      // ── GA4: organic sessions per landing page — same as nbSignUps ─────────
+      const ga4OrgSessionsBody = JSON.stringify({
+        dateRanges: [{ startDate: yesterdayDate, endDate: yesterdayDate }],
+        dimensions: [{ name: "landingPagePlusQueryString" }],
+        metrics: [{ name: "sessions" }],
+        dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } },
+        limit: 10000,
+      });
+
+      // ── GA4: AIO sessions — same regex as main GA4 fetch ──────────────────
       const AI_REGEXP = "(chat\\.openai\\.com|chatgpt\\.com|perplexity\\.ai|claude\\.ai|bard\\.google\\.com|gemini\\.google\\.com|copilot\\.microsoft\\.com|bing\\.com|you\\.com|poe\\.com|phind\\.com|komo\\.ai|reka\\.ai|pi\\.ai|character\\.ai|huggingface\\.co)";
       const aiRegexFilter = { filter: { fieldName: "sessionSourceMedium", stringFilter: { matchType: "PARTIAL_REGEXP", value: AI_REGEXP } } };
 
-      // ── GA4: AIO sessions — filter sessionSourceMedium with AI regex ─────
       const ga4AioSessionsBody = JSON.stringify({
         dateRanges: [{ startDate: yesterdayDate, endDate: yesterdayDate }],
         dimensions: [{ name: "sessionSourceMedium" }],
@@ -5073,7 +5102,7 @@ export default function App() {
         limit: 100,
       });
 
-      // ── GA4: AIO sign ups (generate_lead key events in AIO-source sessions) ─
+      // ── GA4: AIO sign ups (generate_lead in AIO sessions) ─────────────────
       const ga4AioSignUpsBody = JSON.stringify({
         dateRanges: [{ startDate: yesterdayDate, endDate: yesterdayDate }],
         dimensions: [{ name: "sessionSourceMedium" }],
@@ -5088,64 +5117,82 @@ export default function App() {
         limit: 100,
       });
 
-      // ── GA4: NB sign ups — generate_lead via organic search yesterday ─────
-      // We'll use the site-wide NB ratio from GSC to model NB sign ups
-      const ga4OrgSignUpsBody = JSON.stringify({
-        dateRanges: [{ startDate: yesterdayDate, endDate: yesterdayDate }],
-        metrics: [{ name: "keyEvents" }],
-        dimensionFilter: {
-          andGroup: { expressions: [
-            { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } },
-            { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } },
-          ]},
-        },
-        limit: 1,
-      });
-
       const ga4Fetch = (body: string): Promise<Ga4Resp> =>
         fetch(ga4Base, { method: "POST", headers, body }).then((r) => r.json() as Promise<Ga4Resp>);
 
-      const [gscRows, ga4OrgSessResp, ga4AioSessResp, ga4AioSignUpsResp, ga4OrgSignUpsResp] = await Promise.all([
+      const [pageQueryRows, queryRows, ga4FspResp, ga4SessResp, ga4AioSessResp, ga4AioSignUpsResp] = await Promise.all([
+        gscPageQueryFetch(),
         gscQueryFetch(),
+        ga4Fetch(ga4FspLeadsBody),
         ga4Fetch(ga4OrgSessionsBody),
         ga4Fetch(ga4AioSessionsBody),
         ga4Fetch(ga4AioSignUpsBody),
-        ga4Fetch(ga4OrgSignUpsBody),
       ]);
 
-      // ── Process GSC data ──────────────────────────────────────────────────
-      let nbClicks = 0, nbImpressions = 0;
-      let totalBrandClicks = 0, totalNbClicksAll = 0;
-      const top3NbKeywords: { query: string; position: number; clicks: number; impressions: number }[] = [];
-
-      gscRows.forEach((r) => {
-        const query = r.keys[0];
-        const cls = classifyQ(query);
+      // ── GSC: click-weighted NB ratio per page (mirrors nbSignUps exactly) ──
+      type PerPage = { brandClicks: number; nonBrandClicks: number };
+      const perPageMap = new Map<string, PerPage>();
+      pageQueryRows.forEach((r) => {
+        const path = normPath(r.keys[0]);
+        const query = r.keys[1] ?? "";
         const clicks = Math.round(r.clicks ?? 0);
-        const impr = Math.round(r.impressions ?? 0);
-        if (cls === "nonBrand") {
-          nbClicks += clicks;
-          nbImpressions += impr;
-          totalNbClicksAll += clicks;
-          if (r.position <= 3.5) {
-            top3NbKeywords.push({ query, position: r.position, clicks, impressions: impr });
-          }
-        } else {
-          totalBrandClicks += clicks;
-        }
+        if (clicks === 0) return;
+        let p = perPageMap.get(path);
+        if (!p) { p = { brandClicks: 0, nonBrandClicks: 0 }; perPageMap.set(path, p); }
+        if (classify(query) === "brand") p.brandClicks += clicks; else p.nonBrandClicks += clicks;
       });
 
-      const totalGscClicks = totalBrandClicks + totalNbClicksAll;
-      const siteWideNbRatio = totalGscClicks > 0 ? totalNbClicksAll / totalGscClicks : 0;
+      let totalBrandClicks = 0, totalNbClicks = 0;
+      perPageMap.forEach((v) => { totalBrandClicks += v.brandClicks; totalNbClicks += v.nonBrandClicks; });
+      const siteWideNbRatio = (totalBrandClicks + totalNbClicks) > 0
+        ? totalNbClicks / (totalBrandClicks + totalNbClicks) : 0;
+      const nbClicks = totalNbClicks;
 
+      // ── GSC: impressions and top-3 NB keywords (from query-level data) ─────
+      let nbImpressions = 0;
+      const top3NbKeywords: { query: string; position: number; clicks: number; impressions: number }[] = [];
+      queryRows.forEach((r) => {
+        const query = r.keys[0];
+        if (classify(query) !== "nonBrand") return;
+        const clicks = Math.round(r.clicks ?? 0);
+        const impr = Math.round(r.impressions ?? 0);
+        nbImpressions += impr;
+        if (r.position <= 3.5) {
+          top3NbKeywords.push({ query, position: r.position, clicks, impressions: impr });
+        }
+      });
       top3NbKeywords.sort((a, b) => a.position - b.position);
 
-      // ── Process GA4 data ──────────────────────────────────────────────────
-      const totalOrgSessions = parseInt((ga4OrgSessResp.rows?.[0]?.metricValues?.[0]?.value ?? "0"), 10);
-      const totalOrgSignUps = parseInt((ga4OrgSignUpsResp.rows?.[0]?.metricValues?.[0]?.value ?? "0"), 10);
-      const nbSignUps = Math.round(totalOrgSignUps * siteWideNbRatio);
+      // ── GA4: aggregate organic sessions and leads per landing page ──────────
+      const sessMap = new Map<string, number>();
+      (ga4SessResp.rows ?? []).forEach((r) => {
+        const path = normPath(r.dimensionValues[0]?.value ?? "");
+        sessMap.set(path, (sessMap.get(path) ?? 0) + parseInt(r.metricValues[0]?.value ?? "0", 10));
+      });
+      const fspMap = new Map<string, number>();
+      (ga4FspResp.rows ?? []).forEach((r) => {
+        const path = normPath(r.dimensionValues[0]?.value ?? "");
+        const v = parseInt(r.metricValues[0]?.value ?? "0", 10);
+        if (v > 0) fspMap.set(path, (fspMap.get(path) ?? 0) + v);
+      });
 
-      // AIO: API already filtered by AI regex — just sum all rows
+      // ── Apply per-page NB ratio to FSP leads (same model as nbSignUps) ─────
+      let totalNbLeads = 0;
+      let totalFspLeads = 0;
+      const allPaths = new Set([...perPageMap.keys(), ...fspMap.keys()]);
+      allPaths.forEach((path) => {
+        const fspLeads = fspMap.get(path) ?? 0;
+        if (fspLeads === 0) return;
+        const cur = perPageMap.get(path);
+        const totalClicks = (cur?.brandClicks ?? 0) + (cur?.nonBrandClicks ?? 0);
+        const ratio = totalClicks > 0 ? (cur!.nonBrandClicks / totalClicks) : siteWideNbRatio;
+        totalNbLeads += fspLeads * ratio;
+        totalFspLeads += fspLeads;
+      });
+
+      const totalOrgSessions = Array.from(sessMap.values()).reduce((a, b) => a + b, 0);
+
+      // ── AIO: sum all rows (API already filtered by AI regex) ──────────────
       const aioSessions = (ga4AioSessResp.rows ?? []).reduce((sum, r) => sum + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
       const aioSignUps  = (ga4AioSignUpsResp.rows ?? []).reduce((sum, r) => sum + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
 
@@ -5156,7 +5203,7 @@ export default function App() {
         nbClicks,
         nbImpressions,
         nbKeywordsTop3: top3NbKeywords.length,
-        nbSignUps,
+        nbSignUps: Math.round(totalNbLeads),
         aioSessions,
         aioSignUps,
         topNbKeywords: top3NbKeywords,
