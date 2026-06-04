@@ -1766,6 +1766,9 @@ const NBSEO_DEFAULT_BRAND_TERMS = [
   // Misspellings / alternate brand renderings of the company name itself
   "arcavindi",
   "arca vindi",
+  // Additional brand variants
+  "cahcow",
+  "vintagecow",
 ];
 
 /**
@@ -10353,47 +10356,36 @@ ${combinedHtml}
               const buildSlack = () => {
                 if (!d) return "";
                 const hasCmp = !!d.cmpPeriod.start;
-                const pct = (a: number, b: number) => b > 0 ? `${((a - b) / b * 100).toFixed(1)}%` : "";
-                const arrow = (a: number, b: number) => b > 0 ? (a >= b ? " ↑" : " ↓") : "";
+                const TARGETS = { nbSignUps: 170, nbClicks: 1700, nbTop3: 17000 };
+                const tgtPct = (val: number, target: number) => `${Math.round((val / target) * 100)}% of target`;
+                const chg = (a: number, b: number) => b > 0 ? ` (${((a - b) / b * 100) >= 0 ? "+" : ""}${((a - b) / b * 100).toFixed(1)}% vs prev)` : "";
 
-                // NB top-3 keywords
                 const nbBestPos = new Map<string, number>();
                 d.queryPageRowsCur.forEach((r) => {
                   if (r.cls !== "nonBrand") return;
                   const prev = nbBestPos.get(r.query);
                   if (prev == null || r.position < prev) nbBestPos.set(r.query, r.position);
                 });
-                const top3queries = Array.from(nbBestPos.entries())
-                  .filter(([, p]) => p <= 3)
-                  .sort((a, b) => a[1] - b[1])
-                  .slice(0, 5);
                 const nbTop3Count = Array.from(nbBestPos.values()).filter((p) => p <= 3).length;
-
-                const nbClicksCur = d.queryPageRowsCur.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
-                const nbClicksCmp = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
                 const nbTop3Cmp = (() => {
                   const m = new Map<string, number>();
                   d.queryPageRowsCmp.forEach((r) => { if (r.cls !== "nonBrand") return; const p = m.get(r.query); if (p == null || r.position < p) m.set(r.query, r.position); });
                   return Array.from(m.values()).filter((p) => p <= 3).length;
                 })();
 
-                const lines = [
+                const nbClicksCur = d.queryPageRowsCur.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
+                const nbClicksCmp = d.queryPageRowsCmp.reduce((s, r) => s + (r.cls === "nonBrand" ? r.clicks : 0), 0);
+                const nbLeads = Math.round(d.totals.nbLeads);
+                const nbLeadsCmp = Math.round(d.totals.nbLeadsCmp);
+
+                return [
                   `📊 *Daily Snapshot — ${d.period.start}${d.period.start !== d.period.end ? ` → ${d.period.end}` : ""}*`,
                   ``,
-                  `*Non-Brand SEO*`,
-                  `• NB Organic Sessions: ${Math.round(d.totals.orgSessions).toLocaleString()}${hasCmp ? ` (${pct(d.totals.orgSessions, d.totals.orgSessionsCmp)}${arrow(d.totals.orgSessions, d.totals.orgSessionsCmp)} vs prev)` : ""}`,
-                  `• NB Clicks: ${nbClicksCur.toLocaleString()}${hasCmp ? ` (${pct(nbClicksCur, nbClicksCmp)}${arrow(nbClicksCur, nbClicksCmp)} vs prev)` : ""}`,
-                  `• NB Sign Ups: ${Math.round(d.totals.nbLeads).toLocaleString()}${hasCmp ? ` (${pct(d.totals.nbLeads, d.totals.nbLeadsCmp)}${arrow(d.totals.nbLeads, d.totals.nbLeadsCmp)} vs prev)` : ""}`,
-                  `• Total SEO Sign Ups: ${Math.round(d.totals.fspLeads).toLocaleString()}${hasCmp ? ` (${pct(d.totals.fspLeads, d.totals.fspLeadsCmp)}${arrow(d.totals.fspLeads, d.totals.fspLeadsCmp)} vs prev)` : ""}`,
-                  `• NB Keywords in Top 3: ${nbTop3Count}${hasCmp ? ` (prev: ${nbTop3Cmp})` : ""}`,
-                  `• Site-wide NB ratio: ${(d.totals.siteWideNbRatio * 100).toFixed(1)}%`,
-                ];
-                if (top3queries.length > 0) {
-                  lines.push(``);
-                  lines.push(`*Top NB Keywords (pos 1–3)*`);
-                  top3queries.forEach(([q, p], i) => lines.push(`${i + 1}. "${q}" — pos ${p.toFixed(1)}`));
-                }
-                return lines.join("\n");
+                  `• NB Sign Ups: *${nbLeads.toLocaleString()}* — ${tgtPct(nbLeads, TARGETS.nbSignUps)}${hasCmp ? chg(nbLeads, nbLeadsCmp) : ""}`,
+                  `• NB Clicks: *${nbClicksCur.toLocaleString()}* — ${tgtPct(nbClicksCur, TARGETS.nbClicks)}${hasCmp ? chg(nbClicksCur, nbClicksCmp) : ""}`,
+                  `• NB Keywords Top 3: *${nbTop3Count.toLocaleString()}* — ${tgtPct(nbTop3Count, TARGETS.nbTop3)}${hasCmp ? chg(nbTop3Count, nbTop3Cmp) : ""}`,
+                  `• Organic Sessions: *${Math.round(d.totals.orgSessions).toLocaleString()}*${hasCmp ? chg(d.totals.orgSessions, d.totals.orgSessionsCmp) : ""}`,
+                ].join("\n");
               };
 
               return (
@@ -10488,8 +10480,6 @@ ${combinedHtml}
                       const nbTop3Cur = Array.from(nbBestPos.values()).filter((p) => p <= 3).length;
                       const nbTop3Cmp = (() => { const m = new Map<string, number>(); d.queryPageRowsCmp.forEach((r) => { if (r.cls !== "nonBrand") return; const p = m.get(r.query); if (p == null || r.position < p) m.set(r.query, r.position); }); return Array.from(m.values()).filter((p) => p <= 3).length; })();
 
-                      const top3keywords = Array.from(nbBestPos.entries()).filter(([, p]) => p <= 3).sort((a, b) => a[1] - b[1]).slice(0, 10);
-
                       return (
                         <>
                           <div className="text-[11px] text-gray-500 flex items-center gap-4 flex-wrap">
@@ -10498,64 +10488,43 @@ ${combinedHtml}
                             {hasCmp && <span><strong>Previous:</strong> {formatDisplayDate(d.cmpPeriod.start)} – {formatDisplayDate(d.cmpPeriod.end)}</span>}
                           </div>
 
-                          {/* KPI cards */}
-                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                              <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Organic Sessions</div>
-                              <div className="flex items-end justify-between gap-2">
-                                <span className="text-2xl font-bold text-gray-900 tabular-nums">{Math.round(d.totals.orgSessions).toLocaleString()}</span>
-                                {hasCmp && <Delta p={pct(d.totals.orgSessions, d.totals.orgSessionsCmp)} />}
+                          {/* KPI cards with targets */}
+                          {(() => {
+                            const TARGETS = { nbSignUps: 170, nbClicks: 1700, nbTop3: 17000 };
+                            const TargetCard = ({ label, value, target, cmpValue, color = "text-emerald-600" }: { label: string; value: number; target: number; cmpValue?: number; color?: string }) => {
+                              const pctOfTarget = Math.round((value / target) * 100);
+                              const barWidth = Math.min(pctOfTarget, 100);
+                              const barColor = pctOfTarget >= 100 ? "bg-emerald-500" : pctOfTarget >= 70 ? "bg-yellow-400" : "bg-red-400";
+                              return (
+                                <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                  <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">{label}</div>
+                                  <div className="flex items-end justify-between gap-2 mb-2">
+                                    <span className={`text-2xl font-bold tabular-nums ${color}`}>{value.toLocaleString()}</span>
+                                    <span className={`text-sm font-bold tabular-nums ${pctOfTarget >= 100 ? "text-emerald-600" : pctOfTarget >= 70 ? "text-yellow-600" : "text-red-500"}`}>{pctOfTarget}%</span>
+                                  </div>
+                                  <div className="w-full bg-gray-100 rounded-full h-1.5 mb-1.5">
+                                    <div className={`h-1.5 rounded-full transition-all ${barColor}`} style={{ width: `${barWidth}%` }} />
+                                  </div>
+                                  <div className="text-[10px] text-gray-400">target {target.toLocaleString()}{hasCmp && cmpValue != null ? ` · prev ${cmpValue.toLocaleString()}` : ""}</div>
+                                </div>
+                              );
+                            };
+                            return (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                                <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                                  <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Organic Sessions</div>
+                                  <div className="flex items-end justify-between gap-2">
+                                    <span className="text-2xl font-bold text-gray-900 tabular-nums">{Math.round(d.totals.orgSessions).toLocaleString()}</span>
+                                    {hasCmp && <Delta p={pct(d.totals.orgSessions, d.totals.orgSessionsCmp)} />}
+                                  </div>
+                                  <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.orgSessionsCmp).toLocaleString()} previously` : "whole site · organic"}</div>
+                                </div>
+                                <TargetCard label="NB Clicks" value={nbClicksCur} target={TARGETS.nbClicks} cmpValue={nbClicksCmp} />
+                                <TargetCard label="NB Sign Ups" value={Math.round(d.totals.nbLeads)} target={TARGETS.nbSignUps} cmpValue={hasCmp ? Math.round(d.totals.nbLeadsCmp) : undefined} />
+                                <TargetCard label="NB Keywords Top 3" value={nbTop3Cur} target={TARGETS.nbTop3} cmpValue={hasCmp ? nbTop3Cmp : undefined} />
                               </div>
-                              <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.orgSessionsCmp).toLocaleString()} previously` : "whole site · organic"}</div>
-                            </div>
-                            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                              <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">NB Clicks</div>
-                              <div className="flex items-end justify-between gap-2">
-                                <span className="text-2xl font-bold text-emerald-600 tabular-nums">{nbClicksCur.toLocaleString()}</span>
-                                {hasCmp && <Delta p={pct(nbClicksCur, nbClicksCmp)} />}
-                              </div>
-                              <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${nbClicksCmp.toLocaleString()} previously` : "non-brand GSC clicks"}</div>
-                            </div>
-                            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                              <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">NB Sign Ups</div>
-                              <div className="flex items-end justify-between gap-2">
-                                <span className="text-2xl font-bold text-emerald-600 tabular-nums">{Math.round(d.totals.nbLeads).toLocaleString()}</span>
-                                {hasCmp && <Delta p={pct(d.totals.nbLeads, d.totals.nbLeadsCmp)} />}
-                              </div>
-                              <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.nbLeadsCmp).toLocaleString()} previously` : `NB ratio ${(d.totals.siteWideNbRatio * 100).toFixed(1)}%`}</div>
-                            </div>
-                            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                              <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Total SEO Sign Ups</div>
-                              <div className="flex items-end justify-between gap-2">
-                                <span className="text-2xl font-bold text-sky-700 tabular-nums">{Math.round(d.totals.fspLeads).toLocaleString()}</span>
-                                {hasCmp && <Delta p={pct(d.totals.fspLeads, d.totals.fspLeadsCmp)} />}
-                              </div>
-                              <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${Math.round(d.totals.fspLeadsCmp).toLocaleString()} previously` : "generate_lead · organic"}</div>
-                            </div>
-                            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                              <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">NB Keywords Top 3</div>
-                              <div className="flex items-end justify-between gap-2">
-                                <span className="text-2xl font-bold text-emerald-600 tabular-nums">{nbTop3Cur.toLocaleString()}</span>
-                                {hasCmp && <Delta p={pct(nbTop3Cur, nbTop3Cmp)} />}
-                              </div>
-                              <div className="text-[10px] text-gray-400 mt-1">{hasCmp ? `${nbTop3Cmp.toLocaleString()} previously` : "unique NB queries pos ≤ 3"}</div>
-                            </div>
-                          </div>
-
-                          {/* Top 3 NB keywords list */}
-                          {top3keywords.length > 0 && (
-                            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                              <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-3">NB Keywords in Top 3 positions</div>
-                              <div className="flex flex-wrap gap-2">
-                                {top3keywords.map(([q, p]) => (
-                                  <span key={q} className="inline-flex items-center gap-1.5 bg-emerald-50 border border-emerald-100 text-emerald-800 text-xs font-medium rounded-lg px-2.5 py-1">
-                                    <span className="bg-emerald-600 text-white text-[10px] font-bold rounded px-1 py-0.5">{p.toFixed(1)}</span>
-                                    {q}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                          )}
+                            );
+                          })()}
 
                           {/* Slack preview */}
                           <SlackPreview buildMessage={buildSlack} />
