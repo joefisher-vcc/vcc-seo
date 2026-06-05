@@ -3569,6 +3569,8 @@ export default function App() {
     cmpPeriod: { start: string; end: string };
     // NB SEO
     orgSessions: number; orgSessionsCmp: number;
+    totalClicks: number; totalClicksCmp: number;
+    brandClicks: number; brandClicksCmp: number;
     nbClicks: number; nbClicksCmp: number;
     nbLeads: number; nbLeadsCmp: number;
     fspLeads: number; fspLeadsCmp: number;
@@ -4919,6 +4921,10 @@ export default function App() {
       perPageCmp.forEach((v) => { totalBCmp += v.b; totalNbCmp += v.nb; });
       const siteWideNbRatio    = (totalB + totalNb) > 0 ? totalNb / (totalB + totalNb) : 0;
       const siteWideNbRatioCmp = (totalBCmp + totalNbCmp) > 0 ? totalNbCmp / (totalBCmp + totalNbCmp) : siteWideNbRatio;
+      const totalClicks    = totalB + totalNb;
+      const totalClicksCmp = totalBCmp + totalNbCmp;
+      const brandClicks    = totalB;
+      const brandClicksCmp = totalBCmp;
       const nbClicks    = totalNb;
       const nbClicksCmp = totalNbCmp;
 
@@ -4960,6 +4966,8 @@ export default function App() {
         period: { start: startDate, end: endDate },
         cmpPeriod: { start: hasCmp ? cmpStartDate : "", end: hasCmp ? cmpEndDate : "" },
         orgSessions, orgSessionsCmp,
+        totalClicks, totalClicksCmp,
+        brandClicks, brandClicksCmp,
         nbClicks, nbClicksCmp,
         nbLeads: Math.round(totNbLeads), nbLeadsCmp: Math.round(totNbLeadsCmp),
         fspLeads: Math.round(totFsp), fspLeadsCmp: Math.round(totFspCmp),
@@ -10678,6 +10686,33 @@ ${combinedHtml}
                       <TargetCard label="NB Clicks" value={s.nbClicks} target={T.nbClicks} cmpValue={s.nbClicksCmp} sublabel={dayLabel} />
                       <TargetCard label="NB Sign Ups" value={s.nbLeads} target={T.nbSignUps} cmpValue={s.nbLeadsCmp} sublabel={dayLabel} />
                       <TargetCard label="NB Keywords Top 3" value={s.nbTop3} target={T.nbTop3} cmpValue={s.nbTop3Cmp} />
+                    </div>
+                    <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{abbr} — GSC Clicks</div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                        <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Total Clicks</div>
+                        <div className="flex items-end justify-between gap-2">
+                          <span className="text-2xl font-bold text-gray-900 tabular-nums">{s.totalClicks.toLocaleString()}</span>
+                          {hc && (
+                            <span className={`text-[11px] font-bold flex items-center gap-0.5 ${s.totalClicks >= s.totalClicksCmp ? "text-emerald-600" : "text-red-500"}`}>
+                              {s.totalClicks >= s.totalClicksCmp ? "+" : ""}{s.totalClicksCmp > 0 ? (((s.totalClicks - s.totalClicksCmp) / s.totalClicksCmp) * 100).toFixed(1) : "—"}% <span className="text-[9px] font-semibold text-gray-400">vs prev</span>
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-gray-400 mt-1">{hc ? `${s.totalClicksCmp.toLocaleString()} previously` : "all GSC clicks"}</div>
+                      </div>
+                      <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                        <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Branded Clicks</div>
+                        <div className="flex items-end justify-between gap-2">
+                          <span className="text-2xl font-bold text-[#5b4fa8] tabular-nums">{s.brandClicks.toLocaleString()}</span>
+                          {hc && (
+                            <span className={`text-[11px] font-bold flex items-center gap-0.5 ${s.brandClicks >= s.brandClicksCmp ? "text-emerald-600" : "text-red-500"}`}>
+                              {s.brandClicks >= s.brandClicksCmp ? "+" : ""}{s.brandClicksCmp > 0 ? (((s.brandClicks - s.brandClicksCmp) / s.brandClicksCmp) * 100).toFixed(1) : "—"}% <span className="text-[9px] font-semibold text-gray-400">vs prev</span>
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-gray-400 mt-1">{hc ? `${s.brandClicksCmp.toLocaleString()} previously` : "brand-classified clicks"}</div>
+                      </div>
                     </div>
                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{abbr} — AIO (AI-Influenced Organic) · Q4 target ×10</div>
                     <div className="grid grid-cols-2 gap-3">
