@@ -3584,6 +3584,8 @@ export default function App() {
   const [snapAV, setSnapAV]   = useState<SnapResult | null>(null);
   const [snapVCCLoading, setSnapVCCLoading] = useState(false);
   const [snapAVLoading,  setSnapAVLoading]  = useState(false);
+  // Monotonic run-ID — lets in-flight fetches detect they've been superseded.
+  const snapRunIdRef = useRef(0);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -4812,6 +4814,10 @@ export default function App() {
   const fetchDailySnapshot = useCallback(async () => {
     if (!accessToken) return;
 
+    // Increment the run ID so any previously-running fetch knows it's stale.
+    const runId = ++snapRunIdRef.current;
+    const isCurrent = () => snapRunIdRef.current === runId;
+
     setSnapVCC(null);
     setSnapAV(null);
     if (selectedGA4) setSnapVCCLoading(true);
@@ -4977,15 +4983,27 @@ export default function App() {
       };
     };
 
-    // Fire both property fetches in parallel — each uses its own GA4 + GSC property
+    // Fire both property fetches in parallel — each uses its own GA4 + GSC property.
+    // Guard every setState with isCurrent() so a stale in-flight fetch can't overwrite
+    // results from a newer run that started while this one was still awaiting.
     const jobs: Promise<void>[] = [];
     if (selectedGA4 && selectedGSC) {
       const label = ga4Properties.find((p) => p.value === selectedGA4)?.label ?? "Vintage Cash Cow";
-      jobs.push(fetchForGA4(selectedGA4, label, selectedGSC).then(setSnapVCC).catch(console.error).finally(() => setSnapVCCLoading(false)));
+      jobs.push(
+        fetchForGA4(selectedGA4, label, selectedGSC)
+          .then((r) => { if (isCurrent()) setSnapVCC(r); })
+          .catch(console.error)
+          .finally(() => { if (isCurrent()) setSnapVCCLoading(false); })
+      );
     }
     if (avGA4Id && avGscId) {
       const label = ga4Properties.find((p) => p.value === avGA4Id)?.label ?? "Arcavindi";
-      jobs.push(fetchForGA4(avGA4Id, label, avGscId).then(setSnapAV).catch(console.error).finally(() => setSnapAVLoading(false)));
+      jobs.push(
+        fetchForGA4(avGA4Id, label, avGscId)
+          .then((r) => { if (isCurrent()) setSnapAV(r); })
+          .catch(console.error)
+          .finally(() => { if (isCurrent()) setSnapAVLoading(false); })
+      );
     }
     await Promise.all(jobs);
   }, [selectedGSC, avGscId, selectedGA4, avGA4Id, accessToken, nbsBrandTerms, nbsuFetchFilters, ga4Properties]);
@@ -5782,7 +5800,7 @@ export default function App() {
     return () => clearTimeout(t);
   }, [nbsuFilters]);
   useEffect(() => {
-    if ((activeView === "nbSignUps" || activeView === "dailySnapshot") && selectedGSC && selectedGA4 && accessToken) void fetchNbsuData();
+    if (activeView === "nbSignUps" && selectedGSC && selectedGA4 && accessToken) void fetchNbsuData();
   }, [activeView, selectedGSC, selectedGA4, accessToken, fetchNbsuData]);
 
   useEffect(() => {
