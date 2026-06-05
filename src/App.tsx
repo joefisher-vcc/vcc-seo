@@ -3199,6 +3199,7 @@ export default function App() {
   const [selectedGSC, setSelectedGSC]     = useState(() => localStorage.getItem(LS_SELECTED_GSC) ?? "");
   // Second GA4 property for Daily Snapshot (Arcavindi)
   const [avGA4Id, setAvGA4Id] = useState("");
+  const [avGscId,  setAvGscId]  = useState("");
 
   // ── Auto-decorate every <table> with a Copy button and every <section> with a Download-PDF button ──
   useEffect(() => {
@@ -3638,6 +3639,7 @@ export default function App() {
   const VCC_GA4_LABEL = "Vintage Cash Cow - GA4";
   const AV_GA4_LABEL  = "Arcavindi - GA4";
   const VCC_GSC_URL   = "https://www.vintagecashcow.co.uk/";
+  const AV_GSC_URL    = "https://www.arcavindi.com/";
 
   const loadProperties = useCallback(async (token: string) => {
     const [a, b] = await Promise.all([
@@ -3667,6 +3669,9 @@ export default function App() {
     // Auto-select Arcavindi GA4 property for snapshot
     const av = props.find((p) => p.label === AV_GA4_LABEL || p.label.toLowerCase().includes("arcavindi"));
     if (av) setAvGA4Id(av.value);
+    // Auto-select Arcavindi GSC property for snapshot
+    const avGsc = gscProps.find((p) => p.value === AV_GSC_URL || p.value === AV_GSC_URL.replace(/\/$/, "") || p.value.toLowerCase().includes("arcavindi"));
+    if (avGsc) setAvGscId(avGsc.value);
   }, []);
 
   useEffect(() => { if (accessToken) loadProperties(accessToken); }, [accessToken, loadProperties]);
@@ -4803,7 +4808,7 @@ export default function App() {
 
   // ── Daily Snapshot fetch — GSC fetched once, both GA4 properties fire in parallel ──
   const fetchDailySnapshot = useCallback(async () => {
-    if (!selectedGSC || !accessToken) return;
+    if (!accessToken) return;
 
     setSnapVCC(null);
     setSnapAV(null);
@@ -4811,7 +4816,6 @@ export default function App() {
     if (avGA4Id)     setSnapAVLoading(true);
 
     const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
-    const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
 
     const AI_REGEXP = "(chat\\.openai\\.com|chatgpt\\.com|perplexity\\.ai|claude\\.ai|bard\\.google\\.com|gemini\\.google\\.com|copilot\\.microsoft\\.com|bing\\.com|you\\.com|poe\\.com|phind\\.com|komo\\.ai|reka\\.ai|pi\\.ai|character\\.ai|huggingface\\.co)";
     const aiRegexFilter = { filter: { fieldName: "sessionSourceMedium", stringFilter: { matchType: "PARTIAL_REGEXP", value: AI_REGEXP } } };
@@ -4831,7 +4835,6 @@ export default function App() {
     if (f.dateRange === "yesterday") {
       startDate = yesterday; endDate = yesterday;
     } else if (f.dateRange === "lastWeek") {
-      // Last full week: Sunday → Saturday
       const dow = todayD.getDay();
       const lastSat = addDaysISO(today, -(dow + 1));
       const lastSun = addDaysISO(lastSat, -6);
@@ -4852,8 +4855,7 @@ export default function App() {
     // GSC has a ~4-day data lag in practice. For "yesterday" mode we pin the GSC
     // current window to today-4 (last reliably available date) and the comparison
     // to today-5 so both single-day queries are guaranteed to return data.
-    // For multi-day presets the windows are wide enough that lag doesn't blank results,
-    // so we apply a standard -3 offset to align with the GA4 window.
+    // For multi-day presets the windows are wide enough that lag doesn't blank results.
     let gscStart: string, gscEnd: string, gscCmpStart: string, gscCmpEnd: string;
     if (f.dateRange === "yesterday") {
       gscStart    = addDaysISO(today, -4);
@@ -4870,66 +4872,61 @@ export default function App() {
     type GscRow = { keys: string[]; clicks: number; impressions: number; ctr: number; position: number };
     type Ga4Resp = { rows?: { dimensionValues: { value: string }[]; metricValues: { value: string }[] }[] };
 
-    // ── Fetch GSC once — shared by both properties ────────────────────────────
-    const fetchGsc = (s: string, e: string): Promise<GscRow[]> =>
-      fetch(gscBase, { method: "POST", headers, body: JSON.stringify({ startDate: s, endDate: e, dimensions: ["page", "query"], rowLimit: 25000 }) })
-        .then((r) => r.json()).then((res) => (res?.rows ?? []) as GscRow[]);
-
-    const [gscCur, gscCmp] = await Promise.all([
-      fetchGsc(gscStart, gscEnd),
-      hasCmp && gscCmpStart ? fetchGsc(gscCmpStart, gscCmpEnd) : Promise.resolve<GscRow[]>([]),
-    ]);
-
-    // Pre-compute GSC NB ratios per page — used by both properties
-    type PerPage = { b: number; nb: number };
-    const aggGsc = (rows: GscRow[]) => {
-      const m = new Map<string, PerPage>();
-      rows.forEach((r) => {
-        const path = normPath(r.keys[0]);
-        const clicks = Math.round(r.clicks ?? 0);
-        if (!clicks) return;
-        let p = m.get(path); if (!p) { p = { b: 0, nb: 0 }; m.set(path, p); }
-        if (classify(r.keys[1] ?? "") === "brand") p.b += clicks; else p.nb += clicks;
-      });
-      return m;
-    };
-    const perPageCur = aggGsc(gscCur);
-    const perPageCmp = aggGsc(gscCmp);
-
-    let totalB = 0, totalNb = 0, totalBCmp = 0, totalNbCmp = 0;
-    perPageCur.forEach((v) => { totalB += v.b; totalNb += v.nb; });
-    perPageCmp.forEach((v) => { totalBCmp += v.b; totalNbCmp += v.nb; });
-    const siteWideNbRatio    = (totalB + totalNb) > 0 ? totalNb / (totalB + totalNb) : 0;
-    const siteWideNbRatioCmp = (totalBCmp + totalNbCmp) > 0 ? totalNbCmp / (totalBCmp + totalNbCmp) : siteWideNbRatio;
-    const nbClicks    = totalNb;
-    const nbClicksCmp = totalNbCmp;
-
-    // NB top-3 keywords from GSC
-    const bestPos = (rows: GscRow[]) => {
-      const m = new Map<string, number>();
-      rows.forEach((r) => { if (classify(r.keys[1] ?? "") !== "nonBrand") return; const prev = m.get(r.keys[1]); if (prev == null || r.position < prev) m.set(r.keys[1], r.position); });
-      return m;
-    };
-    const nbTop3    = Array.from(bestPos(gscCur).values()).filter((p) => p <= 3).length;
-    const nbTop3Cmp = Array.from(bestPos(gscCmp).values()).filter((p) => p <= 3).length;
-
-    // ── Fetch GA4 for one property — fires independently ─────────────────────
-    const fetchForGA4 = async (ga4Id: string, propLabel: string): Promise<SnapResult> => {
-      const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${ga4Id}:runReport`;
+    // ── Fetch GA4 + GSC for one property — each property uses its own GSC property ─
+    const fetchForGA4 = async (ga4Id: string, propLabel: string, gscPropertyUrl: string): Promise<SnapResult> => {
+      const ga4Base  = `https://analyticsdata.googleapis.com/v1beta/properties/${ga4Id}:runReport`;
+      const gscBase  = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(gscPropertyUrl)}/searchAnalytics/query`;
       const ga4Fetch = (body: object): Promise<Ga4Resp> =>
         fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(body) }).then((r) => r.json() as Promise<Ga4Resp>);
+      const fetchGsc = (s: string, e: string): Promise<GscRow[]> =>
+        fetch(gscBase, { method: "POST", headers, body: JSON.stringify({ startDate: s, endDate: e, dimensions: ["page", "query"], rowLimit: 25000 }) })
+          .then((r) => r.json()).then((res) => (res?.rows ?? []) as GscRow[]);
 
-      const orgFilter = { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } };
+      const orgFilter  = { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } };
       const leadFilter = { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } };
 
-      const [ga4FspCur, ga4FspCmp, ga4SessCur, ga4SessCmp, ga4AioSess, ga4AioLeads] = await Promise.all([
+      const [ga4FspCur, ga4FspCmp, ga4SessCur, ga4SessCmp, ga4AioSess, ga4AioLeads, gscCur, gscCmp] = await Promise.all([
         ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [leadFilter, orgFilter] } }, limit: 10000 }),
         hasCmp ? ga4Fetch({ dateRanges: [{ startDate: cmpStartDate, endDate: cmpEndDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [leadFilter, orgFilter] } }, limit: 10000 }) : Promise.resolve<Ga4Resp>({}),
         ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "sessions" }], dimensionFilter: orgFilter, limit: 10000 }),
         hasCmp ? ga4Fetch({ dateRanges: [{ startDate: cmpStartDate, endDate: cmpEndDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "sessions" }], dimensionFilter: orgFilter, limit: 10000 }) : Promise.resolve<Ga4Resp>({}),
         ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "sessions" }], dimensionFilter: aiRegexFilter, limit: 100 }),
         ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [leadFilter, aiRegexFilter] } }, limit: 100 }),
+        fetchGsc(gscStart, gscEnd),
+        hasCmp && gscCmpStart ? fetchGsc(gscCmpStart, gscCmpEnd) : Promise.resolve<GscRow[]>([]),
       ]);
+
+      // Per-page GSC NB click ratios for this property
+      type PerPage = { b: number; nb: number };
+      const aggGsc = (rows: GscRow[]) => {
+        const m = new Map<string, PerPage>();
+        rows.forEach((r) => {
+          const path = normPath(r.keys[0]);
+          const clicks = Math.round(r.clicks ?? 0);
+          if (!clicks) return;
+          let p = m.get(path); if (!p) { p = { b: 0, nb: 0 }; m.set(path, p); }
+          if (classify(r.keys[1] ?? "") === "brand") p.b += clicks; else p.nb += clicks;
+        });
+        return m;
+      };
+      const perPageCur = aggGsc(gscCur);
+      const perPageCmp = aggGsc(gscCmp);
+
+      let totalB = 0, totalNb = 0, totalBCmp = 0, totalNbCmp = 0;
+      perPageCur.forEach((v) => { totalB += v.b; totalNb += v.nb; });
+      perPageCmp.forEach((v) => { totalBCmp += v.b; totalNbCmp += v.nb; });
+      const siteWideNbRatio    = (totalB + totalNb) > 0 ? totalNb / (totalB + totalNb) : 0;
+      const siteWideNbRatioCmp = (totalBCmp + totalNbCmp) > 0 ? totalNbCmp / (totalBCmp + totalNbCmp) : siteWideNbRatio;
+      const nbClicks    = totalNb;
+      const nbClicksCmp = totalNbCmp;
+
+      const bestPos = (rows: GscRow[]) => {
+        const m = new Map<string, number>();
+        rows.forEach((r) => { if (classify(r.keys[1] ?? "") !== "nonBrand") return; const prev = m.get(r.keys[1]); if (prev == null || r.position < prev) m.set(r.keys[1], r.position); });
+        return m;
+      };
+      const nbTop3    = Array.from(bestPos(gscCur).values()).filter((p) => p <= 3).length;
+      const nbTop3Cmp = Array.from(bestPos(gscCmp).values()).filter((p) => p <= 3).length;
 
       const leadsMap = (resp: Ga4Resp) => { const m = new Map<string, number>(); (resp.rows ?? []).forEach((r) => { const v = parseInt(r.metricValues[0]?.value ?? "0", 10); if (v) { const k = normPath(r.dimensionValues[0]?.value ?? ""); m.set(k, (m.get(k) ?? 0) + v); } }); return m; };
       const sessMap  = (resp: Ga4Resp) => { const m = new Map<string, number>(); (resp.rows ?? []).forEach((r) => { const k = normPath(r.dimensionValues[0]?.value ?? ""); m.set(k, (m.get(k) ?? 0) + parseInt(r.metricValues[0]?.value ?? "0", 10)); }); return m; };
@@ -4968,18 +4965,18 @@ export default function App() {
       };
     };
 
-    // Fire both GA4 fetches in parallel — each resolves its own state independently
+    // Fire both property fetches in parallel — each uses its own GA4 + GSC property
     const jobs: Promise<void>[] = [];
-    if (selectedGA4) {
+    if (selectedGA4 && selectedGSC) {
       const label = ga4Properties.find((p) => p.value === selectedGA4)?.label ?? "Vintage Cash Cow";
-      jobs.push(fetchForGA4(selectedGA4, label).then(setSnapVCC).catch(console.error).finally(() => setSnapVCCLoading(false)));
+      jobs.push(fetchForGA4(selectedGA4, label, selectedGSC).then(setSnapVCC).catch(console.error).finally(() => setSnapVCCLoading(false)));
     }
-    if (avGA4Id) {
+    if (avGA4Id && avGscId) {
       const label = ga4Properties.find((p) => p.value === avGA4Id)?.label ?? "Arcavindi";
-      jobs.push(fetchForGA4(avGA4Id, label).then(setSnapAV).catch(console.error).finally(() => setSnapAVLoading(false)));
+      jobs.push(fetchForGA4(avGA4Id, label, avGscId).then(setSnapAV).catch(console.error).finally(() => setSnapAVLoading(false)));
     }
     await Promise.all(jobs);
-  }, [selectedGSC, selectedGA4, avGA4Id, accessToken, nbsBrandTerms, nbsuFetchFilters, ga4Properties]);
+  }, [selectedGSC, avGscId, selectedGA4, avGA4Id, accessToken, nbsBrandTerms, nbsuFetchFilters, ga4Properties]);
 
   // Per-landing-page non-brand calculation for /items-we-buy/ pages:
   //   1. Fixed 7-day window vs previous 7 days.
@@ -10703,7 +10700,7 @@ ${combinedHtml}
 
                     {/* Date filter */}
                     <div className="bg-yellow-50/60 border border-yellow-100 rounded-2xl p-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                         <div>
                           <label className="block text-xs text-gray-500 mb-1.5 font-medium">Date Range</label>
                           <Select
@@ -10732,15 +10729,19 @@ ${combinedHtml}
                           />
                         </div>
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1.5 font-medium">GSC Property</label>
-                          <Select value={selectedGSC} onChange={setSelectedGSC} options={gscProperties} placeholder="Select GSC Property" disabled={gscProperties.length === 0} />
+                          <label className="block text-xs text-gray-500 mb-1.5 font-medium">VCC GSC Property</label>
+                          <Select value={selectedGSC} onChange={setSelectedGSC} options={gscProperties} placeholder="Select VCC GSC" disabled={gscProperties.length === 0} />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1.5 font-medium">AV GSC Property</label>
+                          <Select value={avGscId} onChange={setAvGscId} options={gscProperties} placeholder="Select AV GSC" disabled={gscProperties.length === 0} />
                         </div>
                       </div>
                     </div>
 
                     {!snapVCCLoading && !snapAVLoading && !snapVCC && !snapAV && (
                       <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center text-sm text-gray-400">
-                        {selectedGSC ? "Click Refresh to load data." : "Select a GSC property to continue."}
+                        {(selectedGSC && avGscId) ? "Click Refresh to load data." : "Select both GSC properties to continue."}
                       </div>
                     )}
 
