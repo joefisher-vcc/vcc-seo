@@ -4849,12 +4849,23 @@ export default function App() {
     cmpStartDate = addDaysISO(cmpEndDate, -(len - 1));
     const hasCmp = f.comparison !== "none";
 
-    // GSC has a ~3-day data lag — offset both current and comparison windows back by 3 days
-    // so we only query dates where GSC data is reliably available.
-    const gscStart    = addDaysISO(startDate, -3);
-    const gscEnd      = addDaysISO(endDate, -3);
-    const gscCmpStart = hasCmp ? addDaysISO(cmpStartDate, -3) : "";
-    const gscCmpEnd   = hasCmp ? addDaysISO(cmpEndDate, -3) : "";
+    // GSC has a ~4-day data lag in practice. For "yesterday" mode we pin the GSC
+    // current window to today-4 (last reliably available date) and the comparison
+    // to today-5 so both single-day queries are guaranteed to return data.
+    // For multi-day presets the windows are wide enough that lag doesn't blank results,
+    // so we apply a standard -3 offset to align with the GA4 window.
+    let gscStart: string, gscEnd: string, gscCmpStart: string, gscCmpEnd: string;
+    if (f.dateRange === "yesterday") {
+      gscStart    = addDaysISO(today, -4);
+      gscEnd      = addDaysISO(today, -4);
+      gscCmpStart = hasCmp ? addDaysISO(today, -5) : "";
+      gscCmpEnd   = hasCmp ? addDaysISO(today, -5) : "";
+    } else {
+      gscStart    = addDaysISO(startDate, -3);
+      gscEnd      = addDaysISO(endDate, -3);
+      gscCmpStart = hasCmp ? addDaysISO(cmpStartDate, -3) : "";
+      gscCmpEnd   = hasCmp ? addDaysISO(cmpEndDate, -3) : "";
+    }
 
     type GscRow = { keys: string[]; clicks: number; impressions: number; ctr: number; position: number };
     type Ga4Resp = { rows?: { dimensionValues: { value: string }[]; metricValues: { value: string }[] }[] };
@@ -5379,13 +5390,14 @@ export default function App() {
       const { start: startDate, end: endDate, cmpStart: cmpStartDate, cmpEnd: cmpEndDate } = resolveWindow();
       const hasCmp = !!cmpStartDate && !!cmpEndDate;
 
-      // GSC has a ~3-day data lag. When "yesterday" is selected, GA4 uses actual
-      // yesterday but GSC is offset back by 3 days so we only query dates where
-      // GSC data is reliably available. The comparison period uses the same offset.
-      const gscStartDate = nbsuFetchFilters.dateRange === "yesterday" ? addDaysISO(today, -3) : startDate;
-      const gscEndDate   = nbsuFetchFilters.dateRange === "yesterday" ? addDaysISO(today, -3) : endDate;
-      const gscCmpStartDate = (nbsuFetchFilters.dateRange === "yesterday" && cmpStartDate) ? addDaysISO(cmpStartDate, -3) : cmpStartDate;
-      const gscCmpEndDate   = (nbsuFetchFilters.dateRange === "yesterday" && cmpEndDate)   ? addDaysISO(cmpEndDate,   -3) : cmpEndDate;
+      // GSC has a ~4-day data lag in practice. When "yesterday" is selected, GA4 uses actual
+      // yesterday, but we pin GSC to today-4 (the last reliably available GSC date) for the
+      // current window and today-5 for the comparison window so both days have data.
+      // For all other presets the window is wide enough that the lag doesn't blank the result.
+      const gscStartDate = nbsuFetchFilters.dateRange === "yesterday" ? addDaysISO(today, -4) : startDate;
+      const gscEndDate   = nbsuFetchFilters.dateRange === "yesterday" ? addDaysISO(today, -4) : endDate;
+      const gscCmpStartDate = (nbsuFetchFilters.dateRange === "yesterday" && cmpStartDate) ? addDaysISO(today, -5) : cmpStartDate;
+      const gscCmpEndDate   = (nbsuFetchFilters.dateRange === "yesterday" && cmpEndDate)   ? addDaysISO(today, -5) : cmpEndDate;
 
       const classify = (q: string) => nbSeoClassify(q, nbsBrandTerms);
       const normPath = (url: string): string => {
