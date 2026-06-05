@@ -3575,8 +3575,8 @@ export default function App() {
     nbTop3: number; nbTop3Cmp: number;
     siteWideNbRatio: number;
     // AIO
-    aioSessions: number;
-    aioSignUps: number;
+    aioSessions: number; aioSessionsCmp: number;
+    aioSignUps: number;  aioSignUpsCmp: number;
   }
   const [snapVCC, setSnapVCC] = useState<SnapResult | null>(null);
   const [snapAV, setSnapAV]   = useState<SnapResult | null>(null);
@@ -4885,13 +4885,15 @@ export default function App() {
       const orgFilter  = { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } };
       const leadFilter = { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } };
 
-      const [ga4FspCur, ga4FspCmp, ga4SessCur, ga4SessCmp, ga4AioSess, ga4AioLeads, gscCur, gscCmp] = await Promise.all([
+      const [ga4FspCur, ga4FspCmp, ga4SessCur, ga4SessCmp, ga4AioSess, ga4AioLeads, ga4AioSessCmp, ga4AioLeadsCmp, gscCur, gscCmp] = await Promise.all([
         ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [leadFilter, orgFilter] } }, limit: 10000 }),
         hasCmp ? ga4Fetch({ dateRanges: [{ startDate: cmpStartDate, endDate: cmpEndDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [leadFilter, orgFilter] } }, limit: 10000 }) : Promise.resolve<Ga4Resp>({}),
         ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "sessions" }], dimensionFilter: orgFilter, limit: 10000 }),
         hasCmp ? ga4Fetch({ dateRanges: [{ startDate: cmpStartDate, endDate: cmpEndDate }], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "sessions" }], dimensionFilter: orgFilter, limit: 10000 }) : Promise.resolve<Ga4Resp>({}),
         ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "sessions" }], dimensionFilter: aiRegexFilter, limit: 100 }),
         ga4Fetch({ dateRanges: [{ startDate, endDate }], dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [leadFilter, aiRegexFilter] } }, limit: 100 }),
+        hasCmp ? ga4Fetch({ dateRanges: [{ startDate: cmpStartDate, endDate: cmpEndDate }], dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "sessions" }], dimensionFilter: aiRegexFilter, limit: 100 }) : Promise.resolve<Ga4Resp>({}),
+        hasCmp ? ga4Fetch({ dateRanges: [{ startDate: cmpStartDate, endDate: cmpEndDate }], dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [leadFilter, aiRegexFilter] } }, limit: 100 }) : Promise.resolve<Ga4Resp>({}),
         fetchGsc(gscStart, gscEnd),
         hasCmp && gscCmpStart ? fetchGsc(gscCmpStart, gscCmpEnd) : Promise.resolve<GscRow[]>([]),
       ]);
@@ -4948,8 +4950,10 @@ export default function App() {
 
       const orgSessions    = Array.from(sessCur.values()).reduce((a, b) => a + b, 0);
       const orgSessionsCmp = Array.from(sessCmp.values()).reduce((a, b) => a + b, 0);
-      const aioSessions = (ga4AioSess.rows ?? []).reduce((s, r) => s + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
-      const aioSignUps  = (ga4AioLeads.rows ?? []).reduce((s, r) => s + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
+      const aioSessions    = (ga4AioSess.rows      ?? []).reduce((s, r) => s + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
+      const aioSignUps     = (ga4AioLeads.rows     ?? []).reduce((s, r) => s + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
+      const aioSessionsCmp = (ga4AioSessCmp.rows   ?? []).reduce((s, r) => s + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
+      const aioSignUpsCmp  = (ga4AioLeadsCmp.rows  ?? []).reduce((s, r) => s + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
 
       return {
         propLabel, propId: ga4Id,
@@ -4961,7 +4965,7 @@ export default function App() {
         fspLeads: Math.round(totFsp), fspLeadsCmp: Math.round(totFspCmp),
         nbTop3, nbTop3Cmp,
         siteWideNbRatio,
-        aioSessions, aioSignUps,
+        aioSessions, aioSessionsCmp, aioSignUps, aioSignUpsCmp,
       };
     };
 
@@ -10630,7 +10634,7 @@ ${combinedHtml}
                     </div>
                   );
                 };
-                const AioCard = ({ label, value, target, sublabel }: { label: string; value: number; target: number; sublabel: string }) => {
+                const AioCard = ({ label, value, target, cmpValue, sublabel }: { label: string; value: number; target: number; cmpValue?: number; sublabel: string }) => {
                   const p = Math.round((value / target) * 100);
                   const bar = Math.min(p, 100);
                   const barCol = p >= 100 ? "bg-emerald-500" : p >= 70 ? "bg-yellow-400" : "bg-red-400";
@@ -10639,12 +10643,19 @@ ${combinedHtml}
                       <div className="text-[10px] uppercase tracking-wider text-sky-400 font-semibold mb-1">{label}</div>
                       <div className="flex items-end justify-between gap-2 mb-2">
                         <span className="text-2xl font-bold text-sky-700 tabular-nums">{value.toLocaleString()}</span>
-                        <span className="text-sm font-bold text-blue-900">{p}% <span className="text-[10px] font-semibold text-blue-700">out of target</span></span>
+                        <div className="flex flex-col items-end gap-0.5">
+                          <span className="text-sm font-bold text-blue-900">{p}% <span className="text-[10px] font-semibold text-blue-700">out of target</span></span>
+                          {hc && cmpValue != null && (
+                            <span className={`text-[11px] font-bold flex items-center gap-0.5 ${value >= cmpValue ? "text-emerald-600" : "text-red-500"}`}>
+                              {value >= cmpValue ? "+" : ""}{(((value - cmpValue) / Math.max(cmpValue, 1)) * 100).toFixed(1)}% <span className="text-[9px] font-semibold text-gray-400">vs prev</span>
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <div className="w-full bg-sky-100 rounded-full h-1.5 mb-1.5">
                         <div className={`h-1.5 rounded-full transition-all ${barCol}`} style={{ width: `${bar}%` }} />
                       </div>
-                      <div className="text-[10px] text-sky-400">target {target} {sublabel}</div>
+                      <div className="text-[10px] text-sky-400">target {target} {sublabel}{hc && cmpValue != null ? ` · prev ${cmpValue.toLocaleString()}` : ""}</div>
                     </div>
                   );
                 };
@@ -10670,8 +10681,8 @@ ${combinedHtml}
                     </div>
                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{abbr} — AIO (AI-Influenced Organic) · Q4 target ×10</div>
                     <div className="grid grid-cols-2 gap-3">
-                      <AioCard label="AIO Sessions" value={s.aioSessions} target={T.aioSessions} sublabel={`${dayLabel} · 1,000/mth`} />
-                      <AioCard label="AIO Sign Ups" value={s.aioSignUps} target={T.aioSignUps} sublabel={`${dayLabel} · 100/mth`} />
+                      <AioCard label="AIO Sessions" value={s.aioSessions} target={T.aioSessions} cmpValue={s.aioSessionsCmp} sublabel={`${dayLabel} · 1,000/mth`} />
+                      <AioCard label="AIO Sign Ups" value={s.aioSignUps} target={T.aioSignUps} cmpValue={s.aioSignUpsCmp} sublabel={`${dayLabel} · 100/mth`} />
                     </div>
                   </div>
                 );
