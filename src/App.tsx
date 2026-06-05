@@ -10615,8 +10615,12 @@ ${combinedHtml}
                       <div className="flex items-end justify-between gap-2 mb-2">
                         <span className="text-2xl font-bold text-emerald-600 tabular-nums">{value.toLocaleString()}</span>
                         <div className="flex flex-col items-end gap-0.5">
-                          <span className={`text-sm font-bold ${p >= 100 ? "text-emerald-600" : p >= 70 ? "text-yellow-600" : "text-red-500"}`}>{p}%</span>
-                          {hc && cmpValue != null && <Delta a={value} b={cmpValue} />}
+                          <span className="text-sm font-bold text-blue-900">{p}% <span className="text-[10px] font-semibold text-blue-700">out of target</span></span>
+                          {hc && cmpValue != null && (
+                            <span className={`text-[11px] font-bold flex items-center gap-0.5 ${value >= cmpValue ? "text-emerald-600" : "text-red-500"}`}>
+                              {value >= cmpValue ? "+" : ""}{(((value - cmpValue) / Math.max(cmpValue, 1)) * 100).toFixed(1)}% <span className="text-[9px] font-semibold text-gray-400">vs prev</span>
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div className="w-full bg-gray-100 rounded-full h-1.5 mb-1.5">
@@ -10635,7 +10639,7 @@ ${combinedHtml}
                       <div className="text-[10px] uppercase tracking-wider text-sky-400 font-semibold mb-1">{label}</div>
                       <div className="flex items-end justify-between gap-2 mb-2">
                         <span className="text-2xl font-bold text-sky-700 tabular-nums">{value.toLocaleString()}</span>
-                        <span className={`text-sm font-bold ${p >= 100 ? "text-emerald-600" : p >= 70 ? "text-yellow-600" : "text-red-500"}`}>{p}%</span>
+                        <span className="text-sm font-bold text-blue-900">{p}% <span className="text-[10px] font-semibold text-blue-700">out of target</span></span>
                       </div>
                       <div className="w-full bg-sky-100 rounded-full h-1.5 mb-1.5">
                         <div className={`h-1.5 rounded-full transition-all ${barCol}`} style={{ width: `${bar}%` }} />
