@@ -212,7 +212,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -3587,6 +3587,18 @@ export default function App() {
   // Monotonic run-ID — lets in-flight fetches detect they've been superseded.
   const snapRunIdRef = useRef(0);
 
+  // ── Daily Stand-Up state ──────────────────────────────────────────────────
+  const [standupVccPagesIndexed,    setStandupVccPagesIndexed]    = useState("");
+  const [standupAvPagesIndexed,     setStandupAvPagesIndexed]     = useState("");
+  const [standupVccTotalQueries,    setStandupVccTotalQueries]    = useState("");
+  const [standupAvTotalQueries,     setStandupAvTotalQueries]     = useState("");
+  const [standupVccPagesIndexedPrev, setStandupVccPagesIndexedPrev] = useState("");
+  const [standupAvPagesIndexedPrev,  setStandupAvPagesIndexedPrev]  = useState("");
+  const [standupVccTotalQueriesPrev, setStandupVccTotalQueriesPrev] = useState("");
+  const [standupAvTotalQueriesPrev,  setStandupAvTotalQueriesPrev]  = useState("");
+  const [standupDelivered, setStandupDelivered] = useState("");
+  const [standupToDo,      setStandupToDo]      = useState("");
+
   useEffect(() => {
     const t = setInterval(() => {
       if (window.google?.accounts?.oauth2) { setGoogleReady(true); clearInterval(t); }
@@ -6510,6 +6522,7 @@ export default function App() {
     { key: "seoIssues", label: "SEO Issues", icon: AlertTriangle },
     { key: "performance", label: "Performance", icon: BarChart2 },
     { key: "dailySnapshot", label: "Daily Snapshot", icon: Activity },
+    { key: "dailyStandup",  label: "Daily Stand-Up", icon: Activity },
   ];
 
   const VIEW_TOOLTIPS: Record<ActiveView, string> = {
@@ -6527,6 +6540,7 @@ export default function App() {
     seoIssues: "SEO Issues — surface technical and on-page problems that may be hurting your rankings.",
     performance: "Performance — analyse Core Web Vitals and page speed signals from your Search Console data.",
     dailySnapshot: "Daily Snapshot — yesterday's GA4 + GSC (48h lag) non-brand and AIO metrics, ready to paste into Slack.",
+    dailyStandup: "Daily Stand-Up — Fitbit-style SEO health check for VCC & Arcavindi, with deliverables section, ready to paste into Slack.",
   };
 
   const [isPdfBuilding, setIsPdfBuilding] = useState(false);
@@ -10589,6 +10603,347 @@ ${combinedHtml}
               />
             )}
 
+            {activeView === "dailyStandup" && (() => {
+              // ── helpers ──────────────────────────────────────────────────
+              const today = new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+              const parseNum = (v: string) => { const n = parseInt(v.replace(/,/g, ""), 10); return isNaN(n) ? null : n; };
+              const delta = (cur: string, prev: string) => {
+                const c = parseNum(cur), p = parseNum(prev);
+                if (c === null || p === null || p === 0) return null;
+                return ((c - p) / p) * 100;
+              };
+              const fmtDelta = (d: number | null) => {
+                if (d === null) return "";
+                const sign = d >= 0 ? "+" : "";
+                return ` (${sign}${d.toFixed(1)}% WoW)`;
+              };
+              // Health score: composite of pages indexed + total queries trend + NB clicks % of target
+              const computeHealthScore = (abbr: "VCC" | "AV") => {
+                const piCur  = parseNum(abbr === "VCC" ? standupVccPagesIndexed  : standupAvPagesIndexed);
+                const piPrev = parseNum(abbr === "VCC" ? standupVccPagesIndexedPrev : standupAvPagesIndexedPrev);
+                const qCur   = parseNum(abbr === "VCC" ? standupVccTotalQueries  : standupAvTotalQueries);
+                const qPrev  = parseNum(abbr === "VCC" ? standupVccTotalQueriesPrev : standupAvTotalQueriesPrev);
+                const snap   = abbr === "VCC" ? snapVCC : snapAV;
+                let score = 100;
+                let factors = 0;
+                if (piCur !== null && piPrev !== null && piPrev > 0) {
+                  const piChg = ((piCur - piPrev) / piPrev) * 100;
+                  score += piChg > 0 ? Math.min(piChg * 2, 10) : Math.max(piChg * 3, -20);
+                  factors++;
+                }
+                if (qCur !== null && qPrev !== null && qPrev > 0) {
+                  const qChg = ((qCur - qPrev) / qPrev) * 100;
+                  score += qChg > 0 ? Math.min(qChg * 2, 10) : Math.max(qChg * 3, -20);
+                  factors++;
+                }
+                if (snap) {
+                  const target = abbr === "VCC" ? 1700 : 1700;
+                  const pctOfTarget = (snap.nbClicks / target) * 100;
+                  score += pctOfTarget >= 100 ? 5 : pctOfTarget >= 70 ? 0 : -10;
+                  factors++;
+                }
+                const finalScore = Math.max(0, Math.min(100, Math.round(factors > 0 ? score : 75)));
+                return finalScore;
+              };
+              const healthLabel = (s: number) => s >= 85 ? { label: "Excellent", color: "text-emerald-600", bg: "bg-emerald-50", border: "border-emerald-200", bar: "bg-emerald-500", emoji: "💚" }
+                : s >= 70 ? { label: "Good", color: "text-blue-600", bg: "bg-blue-50", border: "border-blue-200", bar: "bg-blue-500", emoji: "💙" }
+                : s >= 50 ? { label: "Fair", color: "text-yellow-600", bg: "bg-yellow-50", border: "border-yellow-200", bar: "bg-yellow-400", emoji: "💛" }
+                : { label: "Needs Attention", color: "text-red-600", bg: "bg-red-50", border: "border-red-200", bar: "bg-red-400", emoji: "❤️" };
+
+              // ── Slack message builder ─────────────────────────────────────
+              const buildStandupSlack = () => {
+                const lines: string[] = [];
+                lines.push(`📋 *SEO Daily Stand-Up — ${today}*`);
+                lines.push(``);
+
+                const addSite = (abbr: "VCC" | "AV", fullName: string) => {
+                  const snap = abbr === "VCC" ? snapVCC : snapAV;
+                  const piCur  = parseNum(abbr === "VCC" ? standupVccPagesIndexed  : standupAvPagesIndexed);
+                  const piPrev = parseNum(abbr === "VCC" ? standupVccPagesIndexedPrev : standupAvPagesIndexedPrev);
+                  const qCur   = parseNum(abbr === "VCC" ? standupVccTotalQueries  : standupAvTotalQueries);
+                  const qPrev  = parseNum(abbr === "VCC" ? standupVccTotalQueriesPrev : standupAvTotalQueriesPrev);
+                  const hs     = computeHealthScore(abbr);
+                  const hl     = healthLabel(hs);
+                  lines.push(`*${fullName} (${abbr}) — SEO Health: ${hl.emoji} ${hs}/100 ${hl.label.toUpperCase()}*`);
+                  lines.push(``);
+                  lines.push(`*Site Health Vitals*`);
+                  if (piCur !== null) {
+                    const d = delta(abbr === "VCC" ? standupVccPagesIndexed : standupAvPagesIndexed, abbr === "VCC" ? standupVccPagesIndexedPrev : standupAvPagesIndexedPrev);
+                    lines.push(`• Pages Indexed: ${piCur.toLocaleString()}${fmtDelta(d)}`);
+                  }
+                  if (qCur !== null) {
+                    const d = delta(abbr === "VCC" ? standupVccTotalQueries : standupAvTotalQueries, abbr === "VCC" ? standupVccTotalQueriesPrev : standupAvTotalQueriesPrev);
+                    lines.push(`• Total Queries Ranking For: ${qCur.toLocaleString()}${fmtDelta(d)}`);
+                  }
+                  if (snap) {
+                    lines.push(``);
+                    lines.push(`*NB SEO Performance (yesterday)*`);
+                    lines.push(`• NB Clicks: ${snap.nbClicks.toLocaleString()}${snap.nbClicksCmp ? ` (${snap.nbClicks >= snap.nbClicksCmp ? "+" : ""}${(((snap.nbClicks - snap.nbClicksCmp) / Math.max(snap.nbClicksCmp, 1)) * 100).toFixed(1)}% vs prev)` : ""}`);
+                    lines.push(`• NB Sign-Ups: ${snap.nbLeads.toLocaleString()}${snap.nbLeadsCmp ? ` (${snap.nbLeads >= snap.nbLeadsCmp ? "+" : ""}${(((snap.nbLeads - snap.nbLeadsCmp) / Math.max(snap.nbLeadsCmp, 1)) * 100).toFixed(1)}% vs prev)` : ""}`);
+                    lines.push(`• NB Keywords Top 3: ${snap.nbTop3.toLocaleString()}`);
+                    lines.push(`• Organic Sessions: ${snap.orgSessions.toLocaleString()}`);
+                    lines.push(``);
+                    lines.push(`*AIO Signals*`);
+                    lines.push(`• AIO Sessions: ${snap.aioSessions.toLocaleString()}`);
+                    lines.push(`• AIO Sign-Ups: ${snap.aioSignUps.toLocaleString()}`);
+                  }
+                  lines.push(``);
+                };
+
+                addSite("VCC", "Vintage Cash Cow");
+                addSite("AV", "Arcavindi");
+
+                lines.push(`─────────────────────────`);
+                lines.push(``);
+                lines.push(`*SEO Delivered*`);
+                lines.push(standupDelivered.trim() || "_Add what was completed_");
+                lines.push(``);
+                lines.push(`*SEO To Do*`);
+                lines.push(standupToDo.trim() || "_Add what's planned_");
+
+                return lines.join("\n");
+              };
+
+              // ── HealthRing component ──────────────────────────────────────
+              const HealthRing = ({ score, size = 80 }: { score: number; size?: number }) => {
+                const hl = healthLabel(score);
+                const r = (size / 2) - 8;
+                const circ = 2 * Math.PI * r;
+                const offset = circ - (score / 100) * circ;
+                return (
+                  <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
+                    <svg width={size} height={size} className="-rotate-90">
+                      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#e5e7eb" strokeWidth="6" />
+                      <circle cx={size/2} cy={size/2} r={r} fill="none"
+                        stroke={score >= 85 ? "#10b981" : score >= 70 ? "#3b82f6" : score >= 50 ? "#eab308" : "#ef4444"}
+                        strokeWidth="6" strokeLinecap="round"
+                        strokeDasharray={circ} strokeDashoffset={offset}
+                        style={{ transition: "stroke-dashoffset 0.6s ease" }}
+                      />
+                    </svg>
+                    <div className="absolute flex flex-col items-center">
+                      <span className={`text-lg font-black tabular-nums leading-none ${hl.color}`}>{score}</span>
+                      <span className="text-[8px] font-bold text-gray-400 uppercase tracking-wide">/ 100</span>
+                    </div>
+                  </div>
+                );
+              };
+
+              // ── MetricPill component ──────────────────────────────────────
+              const MetricPill = ({ label, value, prev, unit = "", icon }: { label: string; value: string; prev: string; unit?: string; icon: string }) => {
+                const d = delta(value, prev);
+                const valNum = parseNum(value);
+                const isUp = d !== null && d >= 0;
+                return (
+                  <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm flex flex-col gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-base">{icon}</span>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{label}</span>
+                    </div>
+                    <span className="text-2xl font-black text-gray-900 tabular-nums leading-none">
+                      {valNum !== null ? valNum.toLocaleString() : "—"}{unit}
+                    </span>
+                    {d !== null ? (
+                      <span className={`text-[11px] font-bold flex items-center gap-0.5 ${isUp ? "text-emerald-600" : "text-red-500"}`}>
+                        {isUp ? "▲" : "▼"} {Math.abs(d).toFixed(1)}% WoW
+                      </span>
+                    ) : <span className="text-[11px] text-gray-300">No prior data</span>}
+                  </div>
+                );
+              };
+
+              // ── SiteHealthBlock component ─────────────────────────────────
+              const SiteHealthBlock = ({ abbr, fullName }: { abbr: "VCC" | "AV"; fullName: string }) => {
+                const snap = abbr === "VCC" ? snapVCC : snapAV;
+                const hs   = computeHealthScore(abbr);
+                const hl   = healthLabel(hs);
+                const piV  = abbr === "VCC" ? standupVccPagesIndexed   : standupAvPagesIndexed;
+                const piP  = abbr === "VCC" ? standupVccPagesIndexedPrev  : standupAvPagesIndexedPrev;
+                const qV   = abbr === "VCC" ? standupVccTotalQueries   : standupAvTotalQueries;
+                const qP   = abbr === "VCC" ? standupVccTotalQueriesPrev  : standupAvTotalQueriesPrev;
+                const setPi  = abbr === "VCC" ? setStandupVccPagesIndexed   : setStandupAvPagesIndexed;
+                const setPiP = abbr === "VCC" ? setStandupVccPagesIndexedPrev : setStandupAvPagesIndexedPrev;
+                const setQ   = abbr === "VCC" ? setStandupVccTotalQueries   : setStandupAvTotalQueries;
+                const setQP  = abbr === "VCC" ? setStandupVccTotalQueriesPrev : setStandupAvTotalQueriesPrev;
+                const nbPctTarget = snap ? Math.round((snap.nbClicks / 1700) * 100) : null;
+                const nbBarCol = nbPctTarget !== null ? (nbPctTarget >= 100 ? "bg-emerald-500" : nbPctTarget >= 70 ? "bg-yellow-400" : "bg-red-400") : "bg-gray-200";
+                return (
+                  <div className={`rounded-2xl border p-5 ${hl.bg} ${hl.border} space-y-4`}>
+                    {/* Header */}
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="flex items-center gap-3">
+                        <HealthRing score={hs} size={76} />
+                        <div>
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{abbr}</div>
+                          <div className="text-base font-black text-gray-900 leading-tight">{fullName}</div>
+                          <div className={`text-xs font-bold mt-0.5 ${hl.color}`}>{hl.emoji} SEO Health: {hl.label}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Vitals inputs */}
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-2">⚡ Site Vitals — Enter Today's Values</div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] text-gray-400 font-semibold block mb-1">Pages Indexed (today)</label>
+                          <input
+                            type="text" value={piV} onChange={e => setPi(e.target.value)} placeholder="e.g. 24500"
+                            className="w-full text-xs border border-gray-200 rounded-xl px-3 py-2 bg-white focus:outline-none focus:ring-1 focus:ring-yellow-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-gray-400 font-semibold block mb-1">Pages Indexed (prev week)</label>
+                          <input
+                            type="text" value={piP} onChange={e => setPiP(e.target.value)} placeholder="e.g. 24200"
+                            className="w-full text-xs border border-gray-200 rounded-xl px-3 py-2 bg-white focus:outline-none focus:ring-1 focus:ring-yellow-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-gray-400 font-semibold block mb-1">Queries Ranking For (today)</label>
+                          <input
+                            type="text" value={qV} onChange={e => setQ(e.target.value)} placeholder="e.g. 85000"
+                            className="w-full text-xs border border-gray-200 rounded-xl px-3 py-2 bg-white focus:outline-none focus:ring-1 focus:ring-yellow-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-gray-400 font-semibold block mb-1">Queries Ranking For (prev week)</label>
+                          <input
+                            type="text" value={qP} onChange={e => setQP(e.target.value)} placeholder="e.g. 83000"
+                            className="w-full text-xs border border-gray-200 rounded-xl px-3 py-2 bg-white focus:outline-none focus:ring-1 focus:ring-yellow-400"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Metric pills */}
+                    {(piV || qV) && (
+                      <div className="grid grid-cols-2 gap-3">
+                        {piV && <MetricPill label="Pages Indexed" value={piV} prev={piP} icon="🗂️" />}
+                        {qV  && <MetricPill label="Queries Ranking" value={qV} prev={qP} icon="🔍" />}
+                      </div>
+                    )}
+
+                    {/* NB SEO from snapshot */}
+                    {snap && (
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-2">📈 NB SEO Performance (yesterday)</div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          {[
+                            { label: "NB Clicks", val: snap.nbClicks, prev: snap.nbClicksCmp, icon: "🖱️" },
+                            { label: "NB Sign-Ups", val: snap.nbLeads, prev: snap.nbLeadsCmp, icon: "✍️" },
+                            { label: "Keywords Top 3", val: snap.nbTop3, prev: snap.nbTop3Cmp, icon: "🏆" },
+                            { label: "Organic Sessions", val: snap.orgSessions, prev: snap.orgSessionsCmp, icon: "👥" },
+                          ].map(({ label, val, prev, icon }) => {
+                            const hasPrev = prev > 0;
+                            const pct = hasPrev ? ((val - prev) / prev) * 100 : null;
+                            const isUp = pct !== null && pct >= 0;
+                            return (
+                              <div key={label} className="bg-white border border-gray-100 rounded-xl p-3 shadow-sm">
+                                <div className="text-[9px] font-bold uppercase tracking-wider text-gray-400 mb-1">{icon} {label}</div>
+                                <div className="text-lg font-black text-gray-900 tabular-nums">{val.toLocaleString()}</div>
+                                {pct !== null && (
+                                  <div className={`text-[10px] font-bold ${isUp ? "text-emerald-600" : "text-red-500"}`}>
+                                    {isUp ? "▲" : "▼"} {Math.abs(pct).toFixed(1)}%
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {/* NB Clicks target bar */}
+                        <div className="mt-3 bg-white border border-gray-100 rounded-xl p-3">
+                          <div className="flex justify-between items-center mb-1.5">
+                            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">NB Clicks vs Daily Target (1,700)</span>
+                            <span className="text-[11px] font-bold text-gray-700">{nbPctTarget}%</span>
+                          </div>
+                          <div className="w-full bg-gray-100 rounded-full h-2">
+                            <div className={`h-2 rounded-full transition-all ${nbBarCol}`} style={{ width: `${Math.min(nbPctTarget ?? 0, 100)}%` }} />
+                          </div>
+                        </div>
+                        {/* AIO */}
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          {[
+                            { label: "AIO Sessions", val: snap.aioSessions, prev: snap.aioSessionsCmp, icon: "🤖" },
+                            { label: "AIO Sign-Ups",  val: snap.aioSignUps,  prev: snap.aioSignUpsCmp,  icon: "🤖" },
+                          ].map(({ label, val, prev, icon }) => {
+                            const pct = prev > 0 ? ((val - prev) / prev) * 100 : null;
+                            const isUp = pct !== null && pct >= 0;
+                            return (
+                              <div key={label} className="bg-sky-50 border border-sky-100 rounded-xl p-3">
+                                <div className="text-[9px] font-bold uppercase tracking-wider text-sky-400 mb-1">{icon} {label}</div>
+                                <div className="text-lg font-black text-sky-700 tabular-nums">{val.toLocaleString()}</div>
+                                {pct !== null && (
+                                  <div className={`text-[10px] font-bold ${isUp ? "text-emerald-600" : "text-red-500"}`}>
+                                    {isUp ? "▲" : "▼"} {Math.abs(pct).toFixed(1)}%
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              };
+
+              return (
+                <>
+                  <SectionDivider label="DAILY STAND-UP" />
+                  <section className="space-y-6">
+                    {/* Header bar */}
+                    <div className="flex items-center justify-between gap-4 flex-wrap">
+                      <div className="flex items-center gap-3">
+                        <div className="bg-green-100 border border-green-200 rounded-xl p-2"><Activity size={16} className="text-green-700" /></div>
+                        <div>
+                          <h2 className="text-sm font-bold text-gray-900">Daily Stand-Up</h2>
+                          <p className="text-xs text-gray-400">Fitbit-style SEO health check · VCC + Arcavindi · paste into Slack</p>
+                        </div>
+                      </div>
+                      <SlackCopyButton buildMessage={buildStandupSlack} />
+                    </div>
+
+                    {/* Site blocks */}
+                    <div className="space-y-6">
+                      <SiteHealthBlock abbr="VCC" fullName="Vintage Cash Cow" />
+                      <SiteHealthBlock abbr="AV"  fullName="Arcavindi" />
+                    </div>
+
+                    {/* Deliverables section */}
+                    <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-4">
+                      <div className="text-xs font-bold text-gray-700 uppercase tracking-wider">✅ SEO Deliverables — Fill In Below</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-gray-500 block mb-1.5">SEO Delivered (yesterday)</label>
+                          <textarea
+                            rows={5}
+                            value={standupDelivered}
+                            onChange={e => setStandupDelivered(e.target.value)}
+                            placeholder={"• Published 3 category pages\n• Fixed canonical tags on /sell pages\n• Updated meta descriptions for top 10 landing pages"}
+                            className="w-full text-xs border border-gray-200 rounded-xl px-3 py-2.5 bg-gray-50 focus:outline-none focus:ring-1 focus:ring-green-400 resize-none leading-relaxed"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-gray-500 block mb-1.5">SEO To Do (today)</label>
+                          <textarea
+                            rows={5}
+                            value={standupToDo}
+                            onChange={e => setStandupToDo(e.target.value)}
+                            placeholder={"• Review AV blog content for AIO optimisation\n• Keyword research for new product category\n• Internal link audit on /sell-your-items cluster"}
+                            className="w-full text-xs border border-gray-200 rounded-xl px-3 py-2.5 bg-gray-50 focus:outline-none focus:ring-1 focus:ring-green-400 resize-none leading-relaxed"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Slack preview */}
+                    <SlackPreview buildMessage={buildStandupSlack} />
+                  </section>
+                </>
+              );
+            })()}
+
             {activeView === "dailySnapshot" && (() => {
               const VCC_DAILY = { nbSignUps: 170, nbClicks: 1700, nbTop3: 17000, aioSessions: 40, aioSignUps: 3 };
               const AV_DAILY  = { nbSignUps: 100, nbClicks: 1700, nbTop3: 17000, aioSessions: 40, aioSignUps: 3 };
@@ -10607,15 +10962,15 @@ ${combinedHtml}
                   const T = { nbSignUps: D.nbSignUps * days, nbClicks: D.nbClicks * days, nbTop3: D.nbTop3, aioSessions: D.aioSessions * days, aioSignUps: D.aioSignUps * days };
                   const hc = hasCmp(s);
                   const dayLabel = days === 1 ? "/day" : `/${days}d`;
-                  lines.push(`*${abbr} NB SEO DATA*`);
-                  lines.push(`• NB Sign Ups: *${s.nbLeads.toLocaleString()}* — ${tgtPct(s.nbLeads, T.nbSignUps)} (target ${T.nbSignUps}${dayLabel})${hc ? chg(s.nbLeads, s.nbLeadsCmp) : ""}`);
-                  lines.push(`• NB Clicks: *${s.nbClicks.toLocaleString()}* — ${tgtPct(s.nbClicks, T.nbClicks)} (target ${T.nbClicks.toLocaleString()}${dayLabel})${hc ? chg(s.nbClicks, s.nbClicksCmp) : ""}`);
-                  lines.push(`• NB Keywords Top 3: *${s.nbTop3.toLocaleString()}* — ${tgtPct(s.nbTop3, T.nbTop3)} (target ${T.nbTop3.toLocaleString()})${hc ? chg(s.nbTop3, s.nbTop3Cmp) : ""}`);
-                  lines.push(`• Organic Sessions: *${s.orgSessions.toLocaleString()}*${hc ? chg(s.orgSessions, s.orgSessionsCmp) : ""}`);
+                  lines.push(`*${abbr} — Non-Brand SEO*`);
+                  lines.push(`NB Sign Ups: ${s.nbLeads.toLocaleString()} — ${tgtPct(s.nbLeads, T.nbSignUps)} (target ${T.nbSignUps}${dayLabel})${hc ? chg(s.nbLeads, s.nbLeadsCmp) : ""}`);
+                  lines.push(`NB Clicks: ${s.nbClicks.toLocaleString()} — ${tgtPct(s.nbClicks, T.nbClicks)} (target ${T.nbClicks.toLocaleString()}${dayLabel})${hc ? chg(s.nbClicks, s.nbClicksCmp) : ""}`);
+                  lines.push(`NB Keywords Top 3: ${s.nbTop3.toLocaleString()} — ${tgtPct(s.nbTop3, T.nbTop3)} (target ${T.nbTop3.toLocaleString()})${hc ? chg(s.nbTop3, s.nbTop3Cmp) : ""}`);
+                  lines.push(`Organic Sessions: ${s.orgSessions.toLocaleString()}${hc ? chg(s.orgSessions, s.orgSessionsCmp) : ""}`);
                   lines.push(``);
-                  lines.push(`*${abbr} AIO DATA* (Q4 target ×10)`);
-                  lines.push(`• AIO Sessions: *${s.aioSessions.toLocaleString()}* — ${tgtPct(s.aioSessions, T.aioSessions)} (target ${T.aioSessions}${dayLabel} · 1,000/mth)`);
-                  lines.push(`• AIO Sign Ups: *${s.aioSignUps.toLocaleString()}* — ${tgtPct(s.aioSignUps, T.aioSignUps)} (target ${T.aioSignUps}${dayLabel} · 100/mth)`);
+                  lines.push(`*${abbr} — AIO Data* (Q4 target ×10)`);
+                  lines.push(`AIO Sessions: ${s.aioSessions.toLocaleString()} — ${tgtPct(s.aioSessions, T.aioSessions)} (target ${T.aioSessions}${dayLabel} · 1,000/mth)`);
+                  lines.push(`AIO Sign Ups: ${s.aioSignUps.toLocaleString()} — ${tgtPct(s.aioSignUps, T.aioSignUps)} (target ${T.aioSignUps}${dayLabel} · 100/mth)`);
                   lines.push(``);
                 };
                 addProp(snapVCC, "VCC");
