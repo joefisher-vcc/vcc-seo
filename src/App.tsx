@@ -25,6 +25,7 @@ import {
   ShoppingCart,
   AlertTriangle,
   LogOut,
+  Building2,
 } from "lucide-react";
 import {
   LineChart,
@@ -212,7 +213,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "crm";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -3178,6 +3179,288 @@ function SlackPreview({ buildMessage }: { buildMessage: () => string }) {
       </div>
       <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">{msg}</pre>
     </div>
+  );
+}
+
+// ─── CRM View (HubSpot OAuth) ────────────────────────────────────────────────
+
+const LS_HS_TOKEN     = "vcc_hubspot_access_token";
+const LS_HS_CLIENT_ID = "vcc_hubspot_client_id";
+
+type HsContact  = { name: string; email: string; lifecycle: string; created: string };
+type HsDeal     = { name: string; stage: string; amount: string; closeDate: string };
+type HsCompany  = { name: string; domain: string; industry: string };
+
+function CrmView() {
+  const [clientId, setClientId]           = useState(() => localStorage.getItem(LS_HS_CLIENT_ID) ?? "");
+  const [clientIdInput, setClientIdInput] = useState(() => localStorage.getItem(LS_HS_CLIENT_ID) ?? "");
+  const [hsToken, setHsToken]             = useState(() => localStorage.getItem(LS_HS_TOKEN) ?? "");
+  const [loading, setLoading]             = useState(false);
+  const [error, setError]                 = useState<string | null>(null);
+  const [contacts, setContacts]           = useState<HsContact[]>([]);
+  const [deals, setDeals]                 = useState<HsDeal[]>([]);
+  const [companies, setCompanies]         = useState<HsCompany[]>([]);
+
+  const isConnected = !!hsToken;
+
+  const handleHsLogout = useCallback(() => {
+    localStorage.removeItem(LS_HS_TOKEN);
+    setHsToken("");
+    setContacts([]);
+    setDeals([]);
+    setCompanies([]);
+  }, []);
+
+  const fetchData = useCallback(async (token: string) => {
+    setLoading(true);
+    setError(null);
+    const h = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    try {
+      const [cRes, dRes, coRes] = await Promise.all([
+        fetch("https://api.hubapi.com/crm/v3/objects/contacts?limit=10&properties=firstname,lastname,email,lifecyclestage,createdate", { headers: h }),
+        fetch("https://api.hubapi.com/crm/v3/objects/deals?limit=10&properties=dealname,dealstage,amount,closedate", { headers: h }),
+        fetch("https://api.hubapi.com/crm/v3/objects/companies?limit=10&properties=name,domain,industry", { headers: h }),
+      ]);
+      if (cRes.status === 401 || dRes.status === 401 || coRes.status === 401) {
+        handleHsLogout();
+        setError("HubSpot session expired — please reconnect.");
+        return;
+      }
+      const [cData, dData, coData] = await Promise.all([cRes.json(), dRes.json(), coRes.json()]);
+      setContacts((cData.results ?? []).map((r: { properties: Record<string, string> }) => ({
+        name: [r.properties.firstname, r.properties.lastname].filter(Boolean).join(" ") || "—",
+        email: r.properties.email || "—",
+        lifecycle: r.properties.lifecyclestage || "—",
+        created: r.properties.createdate ? new Date(r.properties.createdate).toLocaleDateString("en-GB") : "—",
+      })));
+      setDeals((dData.results ?? []).map((r: { properties: Record<string, string> }) => ({
+        name: r.properties.dealname || "—",
+        stage: r.properties.dealstage || "—",
+        amount: r.properties.amount ? `£${Number(r.properties.amount).toLocaleString()}` : "—",
+        closeDate: r.properties.closedate ? new Date(r.properties.closedate).toLocaleDateString("en-GB") : "—",
+      })));
+      setCompanies((coData.results ?? []).map((r: { properties: Record<string, string> }) => ({
+        name: r.properties.name || "—",
+        domain: r.properties.domain || "—",
+        industry: r.properties.industry || "—",
+      })));
+    } catch (e) {
+      setError("Failed to fetch HubSpot data. Please try again.");
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  }, [handleHsLogout]);
+
+  const handleHsLogin = useCallback(() => {
+    if (!clientId) return;
+    const redirectUri = encodeURIComponent(window.location.origin + window.location.pathname);
+    const scope = encodeURIComponent("crm.objects.contacts.read crm.objects.deals.read crm.objects.companies.read");
+    const url = `https://app.hubspot.com/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&scope=${scope}&response_type=token`;
+    const popup = window.open(url, "hubspot-oauth", "width=600,height=700,left=200,top=100");
+    const timer = setInterval(() => {
+      try {
+        if (!popup || popup.closed) { clearInterval(timer); return; }
+        const hash = popup.location.hash;
+        if (hash && hash.includes("access_token")) {
+          clearInterval(timer);
+          popup.close();
+          const params = new URLSearchParams(hash.slice(1));
+          const token = params.get("access_token") ?? "";
+          if (token) { localStorage.setItem(LS_HS_TOKEN, token); setHsToken(token); }
+        }
+      } catch { /* cross-origin — still waiting */ }
+    }, 500);
+  }, [clientId]);
+
+  const saveClientId = useCallback(() => {
+    const val = clientIdInput.trim();
+    localStorage.setItem(LS_HS_CLIENT_ID, val);
+    setClientId(val);
+  }, [clientIdInput]);
+
+  useEffect(() => { if (hsToken) void fetchData(hsToken); }, [hsToken, fetchData]);
+
+  // ── Setup screen (no Client ID yet) ──────────────────────────────────────
+  if (!clientId) {
+    return (
+      <section className="space-y-6">
+        <h2 className="text-lg font-semibold text-gray-900">CRM — HubSpot</h2>
+        <div className="bg-white border border-gray-100 rounded-2xl p-10 max-w-lg mx-auto shadow-sm text-center space-y-5">
+          <div className="mx-auto w-16 h-16 bg-[#ff7a59] rounded-2xl flex items-center justify-center shadow-md">
+            <Building2 size={28} className="text-white" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-gray-900 text-base mb-1">Connect HubSpot</h3>
+            <p className="text-sm text-gray-500">You need a free HubSpot OAuth app to get started. It takes about 5 minutes.</p>
+          </div>
+          <ol className="text-left text-sm text-gray-600 space-y-2 bg-gray-50 rounded-xl p-4">
+            <li><span className="font-semibold text-gray-800">1.</span> Go to <a href="https://app.hubspot.com/developer" target="_blank" rel="noreferrer" className="text-[#ff7a59] underline">app.hubspot.com/developer</a></li>
+            <li><span className="font-semibold text-gray-800">2.</span> Create an app → copy the <strong>Client ID</strong></li>
+            <li><span className="font-semibold text-gray-800">3.</span> Add <code className="bg-gray-200 px-1 rounded text-xs">{window.location.origin + window.location.pathname}</code> as a Redirect URL</li>
+            <li><span className="font-semibold text-gray-800">4.</span> Paste your Client ID below</li>
+          </ol>
+          <div className="flex gap-2">
+            <input type="text" value={clientIdInput} onChange={e => setClientIdInput(e.target.value)}
+              placeholder="Paste HubSpot Client ID…"
+              className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#ff7a59]/40" />
+            <button onClick={saveClientId} disabled={!clientIdInput.trim()}
+              className="px-4 py-2 rounded-xl text-sm font-semibold bg-[#ff7a59] text-white hover:bg-[#e8694a] disabled:opacity-40 transition-colors">
+              Save
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  // ── Login screen (has Client ID, not connected) ───────────────────────────
+  if (!isConnected) {
+    return (
+      <section className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-gray-900">CRM — HubSpot</h2>
+          <button onClick={() => { setClientId(""); setClientIdInput(""); localStorage.removeItem(LS_HS_CLIENT_ID); }}
+            className="text-xs text-gray-400 hover:text-gray-600 underline">Change Client ID</button>
+        </div>
+        <div className="bg-white border border-gray-100 rounded-2xl p-10 max-w-lg mx-auto shadow-sm text-center space-y-5">
+          <div className="mx-auto w-16 h-16 bg-[#ff7a59] rounded-2xl flex items-center justify-center shadow-md">
+            <Building2 size={28} className="text-white" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-gray-900 text-base mb-1">Sign in to HubSpot</h3>
+            <p className="text-sm text-gray-500">Authorise access to your contacts, deals and companies.</p>
+          </div>
+          <button onClick={handleHsLogin}
+            className="inline-flex items-center gap-2 bg-[#ff7a59] hover:bg-[#e8694a] text-white px-6 py-3 rounded-xl text-sm font-semibold transition-all shadow-sm">
+            <LogIn size={16} />
+            Connect HubSpot
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  // ── Connected: show data ──────────────────────────────────────────────────
+  return (
+    <section className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-gray-900">CRM — HubSpot</h2>
+        <div className="flex items-center gap-2">
+          <button onClick={() => void fetchData(hsToken)} disabled={loading}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#ff7a59] text-white hover:bg-[#e8694a] disabled:opacity-50 transition-colors">
+            <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+            {loading ? "Loading…" : "Refresh"}
+          </button>
+          <button onClick={handleHsLogout}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-500 hover:text-gray-800 hover:bg-gray-100 transition-colors">
+            <LogOut size={12} />
+            Disconnect
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">{error}</div>}
+
+      {loading && contacts.length === 0 && (
+        <div className="flex items-center justify-center h-48 text-gray-400 text-sm gap-2">
+          <div className="w-5 h-5 border-2 border-gray-200 border-t-[#ff7a59] rounded-full animate-spin" />
+          Fetching HubSpot data…
+        </div>
+      )}
+
+      {!loading && (
+        <div className="grid grid-cols-1 gap-6">
+          {/* Contacts */}
+          <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+              <Users size={14} className="text-[#ff7a59]" /> Recent Contacts ({contacts.length})
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-gray-100">
+                    <th className="text-left py-1.5 pr-4 font-medium text-gray-500">Name</th>
+                    <th className="text-left py-1.5 pr-4 font-medium text-gray-500">Email</th>
+                    <th className="text-left py-1.5 pr-4 font-medium text-gray-500">Lifecycle</th>
+                    <th className="text-left py-1.5 font-medium text-gray-500">Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {contacts.map((c, i) => (
+                    <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/50">
+                      <td className="py-1.5 pr-4 font-medium text-gray-900">{c.name}</td>
+                      <td className="py-1.5 pr-4 text-gray-600">{c.email}</td>
+                      <td className="py-1.5 pr-4"><span className="px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 text-[10px] font-medium capitalize">{c.lifecycle}</span></td>
+                      <td className="py-1.5 text-gray-500">{c.created}</td>
+                    </tr>
+                  ))}
+                  {contacts.length === 0 && <tr><td colSpan={4} className="py-4 text-center text-gray-400">No contacts found</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Deals */}
+          <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+              <TrendingUp size={14} className="text-[#ff7a59]" /> Deals ({deals.length})
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-gray-100">
+                    <th className="text-left py-1.5 pr-4 font-medium text-gray-500">Deal</th>
+                    <th className="text-left py-1.5 pr-4 font-medium text-gray-500">Stage</th>
+                    <th className="text-right py-1.5 pr-4 font-medium text-gray-500">Amount</th>
+                    <th className="text-left py-1.5 font-medium text-gray-500">Close Date</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deals.map((d, i) => (
+                    <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/50">
+                      <td className="py-1.5 pr-4 font-medium text-gray-900">{d.name}</td>
+                      <td className="py-1.5 pr-4"><span className="px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-medium capitalize">{d.stage}</span></td>
+                      <td className="py-1.5 pr-4 text-right font-semibold text-gray-800">{d.amount}</td>
+                      <td className="py-1.5 text-gray-500">{d.closeDate}</td>
+                    </tr>
+                  ))}
+                  {deals.length === 0 && <tr><td colSpan={4} className="py-4 text-center text-gray-400">No deals found</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Companies */}
+          <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+              <Building2 size={14} className="text-[#ff7a59]" /> Companies ({companies.length})
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-gray-100">
+                    <th className="text-left py-1.5 pr-4 font-medium text-gray-500">Company</th>
+                    <th className="text-left py-1.5 pr-4 font-medium text-gray-500">Domain</th>
+                    <th className="text-left py-1.5 font-medium text-gray-500">Industry</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {companies.map((c, i) => (
+                    <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/50">
+                      <td className="py-1.5 pr-4 font-medium text-gray-900">{c.name}</td>
+                      <td className="py-1.5 pr-4 text-gray-600">{c.domain}</td>
+                      <td className="py-1.5 text-gray-500">{c.industry}</td>
+                    </tr>
+                  ))}
+                  {companies.length === 0 && <tr><td colSpan={3} className="py-4 text-center text-gray-400">No companies found</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -6523,6 +6806,7 @@ export default function App() {
     { key: "performance", label: "Performance", icon: BarChart2 },
     { key: "dailySnapshot", label: "Daily Snapshot", icon: Activity },
     { key: "dailyStandup",  label: "Daily Stand-Up", icon: Activity },
+    { key: "crm",           label: "CRM",            icon: Building2 },
   ];
 
   const VIEW_TOOLTIPS: Record<ActiveView, string> = {
@@ -6541,6 +6825,7 @@ export default function App() {
     performance: "Performance — analyse Core Web Vitals and page speed signals from your Search Console data.",
     dailySnapshot: "Daily Snapshot — yesterday's GA4 + GSC (48h lag) non-brand and AIO metrics, ready to paste into Slack.",
     dailyStandup: "Daily Stand-Up — Fitbit-style SEO health check for VCC & Arcavindi, with deliverables section, ready to paste into Slack.",
+    crm: "CRM — HubSpot contacts, companies, deals and pipeline overview.",
   };
 
   const [isPdfBuilding, setIsPdfBuilding] = useState(false);
@@ -10602,6 +10887,8 @@ ${combinedHtml}
                 hasGscCmp={hasGscCmp}
               />
             )}
+
+            {activeView === "crm" && <CrmView />}
 
             {activeView === "dailyStandup" && (() => {
               // ── helpers ──────────────────────────────────────────────────
