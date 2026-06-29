@@ -26,6 +26,7 @@ import {
   AlertTriangle,
   LogOut,
   Building2,
+  Camera,
 } from "lucide-react";
 import {
   LineChart,
@@ -213,7 +214,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "crm";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "crm" | "itemIdentifier";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -3189,6 +3190,194 @@ const LS_HS_CLIENT_ID = "vcc_hubspot_client_id";
 
 type HsContact  = { name: string; email: string; lifecycle: string; created: string };
 type HsDeal     = { name: string; stage: string; amount: string; closeDate: string };
+// ─── Item Identifier ────────────────────────────────────────────────────────
+
+function ItemIdentifierView() {
+  const [image, setImage]           = useState<string | null>(null);
+  const [imageMime, setImageMime]   = useState<string>("image/jpeg");
+  const [result, setResult]         = useState<string | null>(null);
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState<string | null>(null);
+  const [dragOver, setDragOver]     = useState(false);
+  const fileInputRef                = useRef<HTMLInputElement>(null);
+  const cameraInputRef              = useRef<HTMLInputElement>(null);
+
+  const processFile = (file: File) => {
+    if (!file.type.startsWith("image/")) { setError("Please upload an image file."); return; }
+    setError(null); setResult(null);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      // strip "data:<mime>;base64," prefix → keep only base64 body
+      setImage(dataUrl.split(",")[1]);
+      setImageMime(file.type);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) processFile(file);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault(); setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) processFile(file);
+  };
+
+  const identify = async () => {
+    if (!image) return;
+    setLoading(true); setError(null); setResult(null);
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1000,
+          messages: [{
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: { type: "base64", media_type: imageMime, data: image },
+              },
+              {
+                type: "text",
+                text: `You are an expert antiques and collectibles appraiser for Vintage Cash Cow, a UK-based buyer of second-hand items.
+
+Identify the item(s) in this image and provide:
+1. **Item Name** – what it is (be specific, e.g. "Omega Seamaster automatic wristwatch, circa 1970s")
+2. **Category** – e.g. Watches, Jewellery, Silver, Coins, Militaria, Porcelain, etc.
+3. **Key Details** – notable features, maker's marks, materials, condition observations
+4. **Estimated Value Range** – rough UK market value (GBP) based on what's visible
+5. **Collectibility** – brief note on demand / desirability
+6. **Recommended Action** – should VCC buy this? Any caveats?
+
+Be concise but thorough. If the image is unclear or shows multiple items, note that.`,
+              },
+            ],
+          }],
+        }),
+      });
+      if (!res.ok) throw new Error(`API error ${res.status}`);
+      const data = await res.json();
+      const text = data.content?.filter((b: { type: string }) => b.type === "text").map((b: { text: string }) => b.text).join("\n") ?? "No response.";
+      setResult(text);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const reset = () => { setImage(null); setResult(null); setError(null); if (fileInputRef.current) fileInputRef.current.value = ""; if (cameraInputRef.current) cameraInputRef.current.value = ""; };
+
+  // Convert result markdown-ish text to rendered sections
+  const renderResult = (text: string) => {
+    const lines = text.split("\n");
+    return lines.map((line, i) => {
+      if (line.startsWith("**") && line.includes("**")) {
+        // Bold heading line
+        const parts = line.split(/\*\*(.*?)\*\*/g);
+        return (
+          <p key={i} className="mb-2">
+            {parts.map((p, j) => j % 2 === 1 ? <strong key={j} className="text-[#5b4fa8]">{p}</strong> : p)}
+          </p>
+        );
+      }
+      if (line.trim() === "") return <div key={i} className="h-2" />;
+      return <p key={i} className="mb-1 text-sm text-gray-700">{line}</p>;
+    });
+  };
+
+  return (
+    <section className="p-4 space-y-6 max-w-2xl mx-auto">
+      <div>
+        <h2 className="text-xl font-bold text-gray-900">Item Identifier</h2>
+        <p className="text-sm text-gray-500 mt-1">Upload or take a photo of an item to get an AI-powered identification and valuation.</p>
+      </div>
+
+      {/* Upload zone */}
+      {!image && (
+        <div
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+          className={`border-2 border-dashed rounded-2xl p-10 text-center transition-colors cursor-pointer ${dragOver ? "border-[#5b4fa8] bg-purple-50" : "border-gray-200 hover:border-[#5b4fa8] hover:bg-gray-50"}`}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <Camera className="mx-auto text-gray-300 mb-3" size={48} />
+          <p className="font-semibold text-gray-600">Drop an image here or click to upload</p>
+          <p className="text-xs text-gray-400 mt-1">JPG, PNG, WEBP supported</p>
+          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+        </div>
+      )}
+
+      {/* Camera capture (mobile) */}
+      {!image && (
+        <div className="flex gap-3">
+          <button
+            onClick={() => cameraInputRef.current?.click()}
+            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border border-[#5b4fa8] text-[#5b4fa8] text-sm font-semibold hover:bg-purple-50 transition"
+          >
+            <Camera size={16} /> Take Photo
+          </button>
+          <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileChange} />
+        </div>
+      )}
+
+      {error && <p className="text-red-500 text-sm bg-red-50 rounded-lg px-4 py-2">{error}</p>}
+
+      {/* Preview + controls */}
+      {image && !result && (
+        <div className="space-y-4">
+          <div className="rounded-2xl overflow-hidden border border-gray-100 shadow-sm">
+            <img src={`data:${imageMime};base64,${image}`} alt="Preview" className="w-full max-h-72 object-contain bg-gray-50" />
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={identify}
+              disabled={loading}
+              className="flex-1 py-3 rounded-xl bg-[#5b4fa8] text-white font-semibold text-sm hover:bg-[#4a3d96] transition disabled:opacity-60"
+            >
+              {loading ? "Identifying…" : "Identify Item"}
+            </button>
+            <button onClick={reset} className="px-4 py-3 rounded-xl border border-gray-200 text-gray-500 text-sm hover:bg-gray-50 transition">
+              Clear
+            </button>
+          </div>
+          {loading && (
+            <div className="flex items-center gap-2 text-sm text-gray-400">
+              <RefreshCw size={14} className="animate-spin" /> Analysing image…
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Result */}
+      {result && (
+        <div className="space-y-4">
+          <div className="rounded-2xl overflow-hidden border border-gray-100 shadow-sm">
+            <img src={`data:${imageMime};base64,${image}`} alt="Preview" className="w-full max-h-48 object-contain bg-gray-50" />
+          </div>
+          <div className="bg-white rounded-2xl border border-purple-100 p-5 shadow-sm">
+            <h3 className="text-sm font-bold text-[#5b4fa8] uppercase tracking-wide mb-3">Identification Result</h3>
+            <div className="leading-relaxed">{renderResult(result)}</div>
+          </div>
+          <button
+            onClick={reset}
+            className="w-full py-3 rounded-xl border border-gray-200 text-gray-600 text-sm font-semibold hover:bg-gray-50 transition"
+          >
+            Identify Another Item
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 type HsCompany  = { name: string; domain: string; industry: string };
 
 function CrmView() {
@@ -6807,6 +6996,7 @@ export default function App() {
     { key: "dailySnapshot", label: "Daily Snapshot", icon: Activity },
     { key: "dailyStandup",  label: "Daily Stand-Up", icon: Activity },
     { key: "crm",           label: "CRM",            icon: Building2 },
+    { key: "itemIdentifier", label: "Item Identifier", icon: Camera },
   ];
 
   const VIEW_TOOLTIPS: Record<ActiveView, string> = {
@@ -6826,6 +7016,7 @@ export default function App() {
     dailySnapshot: "Daily Snapshot — yesterday's GA4 + GSC (48h lag) non-brand and AIO metrics, ready to paste into Slack.",
     dailyStandup: "Daily Stand-Up — Fitbit-style SEO health check for VCC & Arcavindi, with deliverables section, ready to paste into Slack.",
     crm: "CRM — HubSpot contacts, companies, deals and pipeline overview.",
+    itemIdentifier: "Item Identifier — upload or photograph an item to get an AI-powered identification and valuation.",
   };
 
   const [isPdfBuilding, setIsPdfBuilding] = useState(false);
@@ -10889,6 +11080,8 @@ ${combinedHtml}
             )}
 
             {activeView === "crm" && <CrmView />}
+
+            {activeView === "itemIdentifier" && <ItemIdentifierView />}
 
             {activeView === "dailyStandup" && (() => {
               // ── helpers ──────────────────────────────────────────────────
