@@ -214,7 +214,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "crm" | "itemIdentifier";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "crm" | "goldChainIdentifier";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -3190,219 +3190,458 @@ const LS_HS_CLIENT_ID = "vcc_hubspot_client_id";
 
 type HsContact  = { name: string; email: string; lifecycle: string; created: string };
 type HsDeal     = { name: string; stage: string; amount: string; closeDate: string };
-// ─── Item Identifier ────────────────────────────────────────────────────────
 
-const LS_GEMINI_KEY = "vcc_gemini_api_key";
+// ─── Gold Chain Identifier ───────────────────────────────────────────────────
 
-function ItemIdentifierView() {
-  const [apiKey, setApiKey]         = useState(() => localStorage.getItem(LS_GEMINI_KEY) ?? "");
-  const [apiKeyInput, setApiKeyInput] = useState(() => localStorage.getItem(LS_GEMINI_KEY) ?? "");
-  const [image, setImage]           = useState<string | null>(null);
-  const [imageMime, setImageMime]   = useState<string>("image/jpeg");
-  const [result, setResult]         = useState<string | null>(null);
-  const [loading, setLoading]       = useState(false);
-  const [error, setError]           = useState<string | null>(null);
-  const [dragOver, setDragOver]     = useState(false);
-  const fileInputRef                = useRef<HTMLInputElement>(null);
-  const cameraInputRef              = useRef<HTMLInputElement>(null);
+type ChainAnswer = string | null;
 
-  const saveApiKey = () => {
-    const trimmed = apiKeyInput.trim();
-    localStorage.setItem(LS_GEMINI_KEY, trimmed);
-    setApiKey(trimmed);
-  };
+interface ChainQuestion {
+  id: string;
+  emoji: string;
+  question: string;
+  subtext: string;
+  options: { value: string; label: string; emoji: string; hint?: string }[];
+}
 
-  const processFile = (file: File) => {
-    if (!file.type.startsWith("image/")) { setError("Please upload an image file."); return; }
-    setError(null); setResult(null);
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const dataUrl = e.target?.result as string;
-      setImage(dataUrl.split(",")[1]);
-      setImageMime(file.type || "image/jpeg");
-    };
-    reader.readAsDataURL(file);
-  };
+const CHAIN_QUESTIONS: ChainQuestion[] = [
+  {
+    id: "colour",
+    emoji: "🌟",
+    question: "What colour is the chain?",
+    subtext: "Look at it in natural light if possible",
+    options: [
+      { value: "yellow", label: "Yellow Gold", emoji: "🟡", hint: "Classic warm golden colour" },
+      { value: "white", label: "White / Silver toned", emoji: "⚪", hint: "Could be white gold, platinum, or silver" },
+      { value: "rose", label: "Rose / Pink Gold", emoji: "🌸", hint: "Warm pinkish hue" },
+      { value: "mixed", label: "Mixed colours", emoji: "🎨", hint: "Two-tone or multi-colour" },
+      { value: "unsure", label: "Not sure", emoji: "🤔", hint: "Hard to tell" },
+    ],
+  },
+  {
+    id: "hallmark",
+    emoji: "🔍",
+    question: "Can you see any hallmarks or stamps?",
+    subtext: "Check the clasp, or any small tag — may need a magnifying glass",
+    options: [
+      { value: "375", label: "375", emoji: "🏷️", hint: "9ct gold (UK standard)" },
+      { value: "585", label: "585", emoji: "🏷️", hint: "14ct gold" },
+      { value: "750", label: "750", emoji: "🏷️", hint: "18ct gold" },
+      { value: "925", label: "925", emoji: "🪙", hint: "Sterling silver" },
+      { value: "950", label: "950 or PT950", emoji: "💎", hint: "Platinum" },
+      { value: "gf", label: "GF / Gold Filled / RGP", emoji: "🔖", hint: "Gold filled or rolled gold plated" },
+      { value: "plated", label: "GP / Gold Plated", emoji: "🔖", hint: "Thin gold layer over base metal" },
+      { value: "none", label: "No markings visible", emoji: "❓", hint: "Could still be gold — some older pieces lack stamps" },
+      { value: "other", label: "Other / Can't read it", emoji: "🔎", hint: "Unclear or foreign marks" },
+    ],
+  },
+  {
+    id: "weight",
+    emoji: "⚖️",
+    question: "How does it feel when you hold it?",
+    subtext: "Genuine gold is denser than it looks",
+    options: [
+      { value: "very_heavy", label: "Surprisingly heavy for its size", emoji: "🏋️", hint: "Good sign — gold is very dense" },
+      { value: "medium", label: "Medium weight, feels solid", emoji: "👌", hint: "Could be 9ct or lower carat" },
+      { value: "light", label: "Quite light or hollow feeling", emoji: "🪶", hint: "May be hollow gold, gold-filled, or plated" },
+      { value: "unsure", label: "Hard to tell", emoji: "🤷", hint: "" },
+    ],
+  },
+  {
+    id: "style",
+    emoji: "⛓️",
+    question: "What style is the chain?",
+    subtext: "The link type can help identify age and origin",
+    options: [
+      { value: "curb", label: "Curb / Cuban link", emoji: "🔗", hint: "Flat interlocking oval links, classic style" },
+      { value: "figaro", label: "Figaro", emoji: "〰️", hint: "Pattern of 2–3 small links then 1 large link" },
+      { value: "rope", label: "Rope / Twisted", emoji: "🌀", hint: "Twisted spiral appearance" },
+      { value: "belcher", label: "Belcher / Rolo", emoji: "⭕", hint: "Round or D-shaped links, chunky feel" },
+      { value: "box", label: "Box / Singapore", emoji: "🟦", hint: "Square links, very smooth" },
+      { value: "snake", label: "Snake / Omega", emoji: "🐍", hint: "Smooth, flexible, no visible links" },
+      { value: "ball", label: "Ball / Bead chain", emoji: "📿", hint: "Round beads on a wire" },
+      { value: "herringbone", label: "Herringbone", emoji: "🐟", hint: "Flat V-pattern, very smooth surface" },
+      { value: "other", label: "Other / Unusual style", emoji: "💡", hint: "" },
+    ],
+  },
+  {
+    id: "clasp",
+    emoji: "🔒",
+    question: "What type of clasp does it have?",
+    subtext: "The clasp often carries the hallmark",
+    options: [
+      { value: "lobster", label: "Lobster claw clasp", emoji: "🦞", hint: "Spring-loaded, most common on modern chains" },
+      { value: "spring", label: "Spring ring clasp", emoji: "⭕", hint: "Small circular, squeeze to open" },
+      { value: "toggle", label: "Toggle / T-bar clasp", emoji: "✝️", hint: "Bar goes through a ring" },
+      { value: "box_clasp", label: "Box / Push-in clasp", emoji: "📦", hint: "Click mechanism, common on older chains" },
+      { value: "barrel", label: "Barrel / Torpedo clasp", emoji: "🔧", hint: "Screws together" },
+      { value: "none", label: "No clasp / broken clasp", emoji: "💔", hint: "" },
+      { value: "unsure", label: "Not sure", emoji: "🤔", hint: "" },
+    ],
+  },
+  {
+    id: "length",
+    emoji: "📏",
+    question: "How long is the chain (approximately)?",
+    subtext: "Measure end to end including clasp",
+    options: [
+      { value: "choker", label: "Under 16 inches (choker)", emoji: "💋", hint: "Sits tight on the neck" },
+      { value: "princess", label: "16–18 inches (princess)", emoji: "👑", hint: "Most common necklace length" },
+      { value: "matinee", label: "20–24 inches (matinee)", emoji: "🧣", hint: "Hangs below the collarbone" },
+      { value: "opera", label: "28–36 inches (opera)", emoji: "🎭", hint: "Long, can be doubled" },
+      { value: "rope_len", label: "Over 36 inches (rope length)", emoji: "🪢", hint: "Very long, often doubled or knotted" },
+      { value: "bracelet", label: "Bracelet length (6–9 inches)", emoji: "💪", hint: "" },
+      { value: "unsure", label: "Haven't measured", emoji: "📐", hint: "" },
+    ],
+  },
+  {
+    id: "condition",
+    emoji: "✨",
+    question: "What condition is it in?",
+    subtext: "Be honest — condition affects value significantly",
+    options: [
+      { value: "excellent", label: "Excellent — like new", emoji: "⭐", hint: "No visible wear or damage" },
+      { value: "good", label: "Good — minor wear only", emoji: "👍", hint: "Light scratches, all links intact" },
+      { value: "fair", label: "Fair — noticeable wear", emoji: "👌", hint: "Scratches, slight tarnish but complete" },
+      { value: "poor", label: "Poor — damaged or broken", emoji: "🔨", hint: "Broken links, missing clasp, heavy tarnish" },
+      { value: "tangled", label: "Tangled / knotted", emoji: "🪢", hint: "Intact but knotted" },
+    ],
+  },
+  {
+    id: "age",
+    emoji: "⏳",
+    question: "Do you know roughly how old it is?",
+    subtext: "Antique pieces can carry a premium beyond their gold value",
+    options: [
+      { value: "new", label: "Modern (last 20 years)", emoji: "🆕", hint: "" },
+      { value: "vintage", label: "Vintage (20–50 years)", emoji: "📼", hint: "" },
+      { value: "antique", label: "Antique (50–100+ years)", emoji: "🏺", hint: "May have collector value" },
+      { value: "victorian", label: "Victorian / Edwardian era", emoji: "🎩", hint: "Pre-1920, often high quality" },
+      { value: "unsure", label: "Not sure of age", emoji: "❓", hint: "" },
+    ],
+  },
+];
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) processFile(file);
-  };
+// Gold value database (per gram, GBP, approximate)
+const GOLD_VALUE_DB: Record<string, { purity: number; carats: string; pencePerGram: number; description: string }> = {
+  "375": { purity: 0.375, carats: "9ct",  pencePerGram: 1950, description: "9 carat gold — most common in UK jewellery" },
+  "585": { purity: 0.585, carats: "14ct", pencePerGram: 3040, description: "14 carat gold — popular in European jewellery" },
+  "750": { purity: 0.750, carats: "18ct", pencePerGram: 3900, description: "18 carat gold — premium quality" },
+  "950": { purity: 0.950, carats: "Platinum", pencePerGram: 2600, description: "Platinum — valuable and durable" },
+  "925": { purity: 0,     carats: "Silver", pencePerGram: 48,   description: "Sterling silver — not gold" },
+  "gf":  { purity: 0,     carats: "Gold Filled", pencePerGram: 0, description: "Gold filled — base metal with gold layer, low scrap value" },
+  "plated": { purity: 0,  carats: "Gold Plated", pencePerGram: 0, description: "Gold plated — very thin layer, minimal value" },
+};
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault(); setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) processFile(file);
-  };
+// Chain style value modifiers
+const STYLE_PREMIUM: Record<string, number> = {
+  rope: 1.05, curb: 1.0, figaro: 1.0, belcher: 1.02,
+  box: 1.03, snake: 1.08, herringbone: 1.05, ball: 0.95, other: 1.0,
+};
 
-  const identify = async () => {
-    if (!image || !apiKey) return;
-    setLoading(true); setError(null); setResult(null);
-    try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{
-              parts: [
-                { inline_data: { mime_type: imageMime, data: image } },
-                {
-                  text: `You are an expert antiques and collectibles appraiser for Vintage Cash Cow, a UK-based buyer of second-hand items.
+function analyseChain(answers: Record<string, ChainAnswer>): {
+  likely: string; confidence: string; valueHint: string;
+  recommendation: string; flags: string[]; genieVerdict: string;
+} {
+  const flags: string[] = [];
+  const hallmark = answers.hallmark;
+  const colour = answers.colour;
+  const weight = answers.weight;
+  const condition = answers.condition;
+  const age = answers.age;
+  const style = answers.style;
 
-Identify the item(s) in this image and provide:
-1. **Item Name** – what it is (be specific, e.g. "Omega Seamaster automatic wristwatch, circa 1970s")
-2. **Category** – e.g. Watches, Jewellery, Silver, Coins, Militaria, Porcelain, etc.
-3. **Key Details** – notable features, maker's marks, materials, condition observations
-4. **Estimated Value Range** – rough UK market value (GBP) based on what's visible
-5. **Collectibility** – brief note on demand / desirability
-6. **Recommended Action** – should VCC buy this? Any caveats?
+  // Determine likely metal
+  let likely = "Unknown metal";
+  let confidence = "Low";
+  let valueHint = "";
+  let recommendation = "";
+  let genieVerdict = "";
 
-Be concise but thorough. If the image is unclear or shows multiple items, note that.`,
-                },
-              ],
-            }],
-          }),
-        }
-      );
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({}));
-        throw new Error((errBody as { error?: { message?: string } }).error?.message ?? `API error ${res.status}`);
-      }
-      const data = await res.json();
-      const text = data.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? "").join("\n") ?? "No response.";
-      setResult(text);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
-    } finally {
-      setLoading(false);
+  // Plated / filled — low value
+  if (hallmark === "plated" || hallmark === "gf") {
+    likely = hallmark === "plated" ? "Gold Plated (base metal)" : "Gold Filled / Rolled Gold";
+    confidence = "High";
+    valueHint = "Gold plated and gold filled chains have very little scrap value as the gold layer is extremely thin. Value is primarily as jewellery only.";
+    recommendation = "💬 Speak to our team to confirm or discuss options";
+    genieVerdict = "✨ The markings suggest this is not solid gold — but it may still have resale value as jewellery depending on style and condition.";
+    flags.push("⚠️ Likely not solid gold based on markings");
+    return { likely, confidence, valueHint, recommendation, flags, genieVerdict };
+  }
+
+  // Silver
+  if (hallmark === "925" || (colour === "white" && hallmark === "925")) {
+    likely = "Sterling Silver (925)";
+    confidence = "High";
+    valueHint = "Sterling silver has modest scrap value. Current silver prices mean most chains are worth £5–£40 depending on weight.";
+    recommendation = "💬 Speak to our team to confirm or discuss options";
+    genieVerdict = "🪙 This looks like sterling silver — a lovely metal but worth less than gold. Worth getting assessed!";
+    flags.push("ℹ️ Silver, not gold");
+    return { likely, confidence, valueHint, recommendation, flags, genieVerdict };
+  }
+
+  // Definite gold by hallmark
+  if (hallmark && ["375", "585", "750"].includes(hallmark)) {
+    const goldData = GOLD_VALUE_DB[hallmark];
+    likely = `${goldData.carats} Gold (${hallmark} hallmark)`;
+    confidence = "High";
+    const styleMod = STYLE_PREMIUM[style ?? "other"] ?? 1.0;
+    const condMod = condition === "excellent" ? 1.1 : condition === "good" ? 1.0 : condition === "fair" ? 0.85 : 0.7;
+    const ageMod = age === "antique" || age === "victorian" ? 1.15 : 1.0;
+    const basePerGram = goldData.pencePerGram * styleMod * condMod * ageMod;
+    valueHint = `Based on current gold prices, ${goldData.carats} gold chains typically fetch around £${Math.round(basePerGram * 5 / 100)}–£${Math.round(basePerGram * 20 / 100)} for a typical 5–20g chain. Actual value depends on exact weight.`;
+    if (age === "antique" || age === "victorian") flags.push("🏺 Antique — may have collector value above scrap price");
+    if (condition === "poor") flags.push("⚠️ Poor condition will reduce value");
+    if (condition === "excellent") flags.push("⭐ Excellent condition adds value");
+    recommendation = "💬 Speak to our team to confirm or discuss options";
+    genieVerdict = `🌟 Great news! The ${hallmark} hallmark confirms this is genuine ${goldData.carats} gold. This is a real find — get it properly weighed to know exactly what it's worth!`;
+    return { likely, confidence, valueHint, recommendation, flags, genieVerdict };
+  }
+
+  // Platinum
+  if (hallmark === "950") {
+    likely = "Platinum (950)";
+    confidence = "High";
+    valueHint = "Platinum is valuable and dense. Most platinum chains fetch £80–£400+ depending on weight.";
+    recommendation = "💬 Speak to our team to confirm or discuss options";
+    genieVerdict = "💎 Platinum! Rarer than gold and very valuable. This is definitely worth getting assessed by our team.";
+    flags.push("💎 Platinum — highly valuable");
+    return { likely, confidence, valueHint, recommendation, flags, genieVerdict };
+  }
+
+  // No hallmark — use colour + weight clues
+  if (hallmark === "none" || hallmark === "other") {
+    if (colour === "yellow" && weight === "very_heavy") {
+      likely = "Possibly solid gold (unverified)";
+      confidence = "Medium";
+      valueHint = "No hallmark visible, but colour and weight are consistent with gold. Older pieces and foreign imports sometimes lack UK hallmarks. Needs testing to confirm.";
+      flags.push("⚠️ No hallmark — needs acid test or XRF scan to confirm");
+      flags.push("ℹ️ Some pre-1975 UK pieces and foreign imports lack hallmarks");
+      genieVerdict = "🔮 Hmm, interesting… The colour and weight feel right for gold, but without a hallmark I can't be certain. A quick acid test from our team will give you the answer!";
+    } else if (colour === "yellow" && weight === "light") {
+      likely = "Possibly gold plated or gold filled";
+      confidence = "Medium";
+      valueHint = "Light weight and yellow colour without hallmarks often indicates gold plating over a base metal. Some hollow 9ct chains can also be light.";
+      flags.push("⚠️ Lightweight yellow metal without hallmark — could be plated");
+      genieVerdict = "🤔 The weight gives me pause… Light yellow chains without markings are often plated. But let's not give up hope — our team can test it properly!";
+    } else if (colour === "white" && weight === "very_heavy") {
+      likely = "Possibly white gold or platinum";
+      confidence = "Medium";
+      valueHint = "Heavy white metal chains may be white gold (375/585/750) or platinum. Needs testing to determine exact metal and value.";
+      flags.push("ℹ️ Could be white gold or platinum — testing needed");
+      genieVerdict = "✨ Ooh, heavy and white… This could be white gold or even platinum. Very promising — let our team take a look!";
+    } else {
+      likely = "Metal type uncertain";
+      confidence = "Low";
+      valueHint = "Without a hallmark and with mixed signals from colour/weight, it's difficult to determine the metal type without physical testing.";
+      flags.push("⚠️ Inconclusive — professional testing recommended");
+      genieVerdict = "🔮 The genie needs more information to be sure… Some things even magic can't tell from a quiz alone! Our team can test it in minutes.";
     }
+    recommendation = "💬 Speak to our team to confirm or discuss options";
+    return { likely, confidence, valueHint, recommendation, flags, genieVerdict };
+  }
+
+  // Fallback
+  likely = "Needs professional assessment";
+  confidence = "Low";
+  valueHint = "Based on your answers, more information is needed to make a reliable assessment.";
+  recommendation = "💬 Speak to our team to confirm or discuss options";
+  genieVerdict = "🔮 Even the genie has limits! Your answers are a bit of a mystery — but that's what our experts are for.";
+  return { likely, confidence, valueHint, recommendation, flags, genieVerdict };
+}
+
+function GoldChainIdentifierView() {
+  const [answers, setAnswers]       = useState<Record<string, ChainAnswer>>({});
+  const [currentQ, setCurrentQ]     = useState(0);
+  const [showResult, setShowResult] = useState(false);
+  const [animating, setAnimating]   = useState(false);
+  const resultRef                   = useRef<HTMLDivElement>(null);
+
+  const answered = Object.keys(answers).length;
+  const total    = CHAIN_QUESTIONS.length;
+  const progress = (answered / total) * 100;
+
+  const handleAnswer = (qId: string, value: string) => {
+    const newAnswers = { ...answers, [qId]: value };
+    setAnswers(newAnswers);
+    setAnimating(true);
+    setTimeout(() => {
+      setAnimating(false);
+      if (currentQ < CHAIN_QUESTIONS.length - 1) {
+        setCurrentQ(currentQ + 1);
+      } else {
+        setShowResult(true);
+        setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+      }
+    }, 350);
   };
 
   const reset = () => {
-    setImage(null); setResult(null); setError(null);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-    if (cameraInputRef.current) cameraInputRef.current.value = "";
+    setAnswers({});
+    setCurrentQ(0);
+    setShowResult(false);
   };
 
-  const renderResult = (text: string) => {
-    const lines = text.split("\n");
-    return lines.map((line, i) => {
-      if (line.trim() === "") return <div key={i} className="h-2" />;
-      if (/^\d+\.\s\*\*/.test(line) || line.startsWith("**")) {
-        const parts = line.split(/\*\*(.*?)\*\*/g);
-        return (
-          <p key={i} className="mb-2 text-sm">
-            {parts.map((p, j) => j % 2 === 1 ? <strong key={j} className="text-[#5b4fa8]">{p}</strong> : <span key={j}>{p}</span>)}
-          </p>
-        );
-      }
-      return <p key={i} className="mb-1 text-sm text-gray-700">{line}</p>;
-    });
-  };
+  const result = showResult ? analyseChain(answers) : null;
+  const q = CHAIN_QUESTIONS[currentQ];
+  const confidenceColour = result?.confidence === "High" ? "text-green-600" : result?.confidence === "Medium" ? "text-amber-600" : "text-gray-500";
 
   return (
     <section className="p-4 space-y-6 max-w-2xl mx-auto">
-      <div>
-        <h2 className="text-xl font-bold text-gray-900">Item Identifier</h2>
-        <p className="text-sm text-gray-500 mt-1">Upload or photograph an item for an AI-powered identification and valuation.</p>
+      {/* Header */}
+      <div className="text-center py-4">
+        <div className="text-5xl mb-2">🧞</div>
+        <h2 className="text-2xl font-bold text-gray-900">Gold Chain Identifier</h2>
+        <p className="text-sm text-gray-500 mt-1">Answer a few questions and the genie will reveal what your chain might be worth ✨</p>
+        <p className="text-xs text-gray-400 mt-2 italic">For guidance only — always confirm with our team before making decisions</p>
       </div>
 
-      {/* API Key */}
-      <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 space-y-2">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Gemini API Key</p>
-        <div className="flex gap-2">
-          <input
-            type="password"
-            value={apiKeyInput}
-            onChange={(e) => setApiKeyInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && saveApiKey()}
-            placeholder="AIzaSy…"
-            className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#5b4fa8]"
-          />
-          <button
-            onClick={saveApiKey}
-            className="px-4 py-2 rounded-lg bg-[#5b4fa8] text-white text-sm font-semibold hover:bg-[#4a3d96] transition"
-          >
-            Save
-          </button>
-        </div>
-        {apiKey
-          ? <p className="text-xs text-green-600">✓ Key saved — ready to identify items</p>
-          : <p className="text-xs text-amber-600">Paste your Gemini API key from <a href="https://aistudio.google.com" target="_blank" rel="noreferrer" className="underline">aistudio.google.com</a></p>
-        }
-      </div>
-
-      {/* Upload zone */}
-      {!image && (
-        <>
-          <div
-            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={handleDrop}
-            className={`border-2 border-dashed rounded-2xl p-10 text-center transition-colors cursor-pointer ${dragOver ? "border-[#5b4fa8] bg-purple-50" : "border-gray-200 hover:border-[#5b4fa8] hover:bg-gray-50"}`}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Camera className="mx-auto text-gray-300 mb-3" size={48} />
-            <p className="font-semibold text-gray-600">Drop an image here or click to upload</p>
-            <p className="text-xs text-gray-400 mt-1">JPG, PNG, WEBP supported</p>
-            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+      {/* Progress bar */}
+      {!showResult && (
+        <div className="space-y-1">
+          <div className="flex justify-between text-xs text-gray-400">
+            <span>Question {Math.min(currentQ + 1, total)} of {total}</span>
+            <span>{answered} answered</span>
           </div>
-          <button
-            onClick={() => cameraInputRef.current?.click()}
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-[#5b4fa8] text-[#5b4fa8] text-sm font-semibold hover:bg-purple-50 transition"
-          >
-            <Camera size={16} /> Take Photo
-          </button>
-          <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileChange} />
-        </>
+          <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-[#5b4fa8] to-purple-400 rounded-full transition-all duration-500"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        </div>
       )}
 
-      {error && <p className="text-red-500 text-sm bg-red-50 rounded-lg px-4 py-3">{error}</p>}
+      {/* Previous answers summary */}
+      {!showResult && answered > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {CHAIN_QUESTIONS.slice(0, currentQ).map((pq) => {
+            const ans = answers[pq.id];
+            const opt = pq.options.find(o => o.value === ans);
+            return (
+              <button
+                key={pq.id}
+                onClick={() => setCurrentQ(CHAIN_QUESTIONS.findIndex(q2 => q2.id === pq.id))}
+                className="flex items-center gap-1 px-3 py-1 bg-purple-50 border border-purple-100 rounded-full text-xs text-[#5b4fa8] hover:bg-purple-100 transition"
+              >
+                {pq.emoji} {opt?.emoji} {opt?.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
-      {/* Preview + identify */}
-      {image && !result && (
-        <div className="space-y-4">
-          <div className="rounded-2xl overflow-hidden border border-gray-100 shadow-sm">
-            <img src={`data:${imageMime};base64,${image}`} alt="Preview" className="w-full max-h-72 object-contain bg-gray-50" />
-          </div>
-          <div className="flex gap-3">
-            <button
-              onClick={identify}
-              disabled={loading || !apiKey}
-              className="flex-1 py-3 rounded-xl bg-[#5b4fa8] text-white font-semibold text-sm hover:bg-[#4a3d96] transition disabled:opacity-50"
-            >
-              {loading ? "Identifying…" : "Identify Item"}
-            </button>
-            <button onClick={reset} className="px-4 py-3 rounded-xl border border-gray-200 text-gray-500 text-sm hover:bg-gray-50 transition">
-              Clear
-            </button>
-          </div>
-          {loading && (
-            <div className="flex items-center gap-2 text-sm text-gray-400">
-              <RefreshCw size={14} className="animate-spin" /> Analysing with Gemini…
+      {/* Current question */}
+      {!showResult && (
+        <div className={`transition-opacity duration-300 ${animating ? "opacity-0" : "opacity-100"}`}>
+          <div className="bg-gradient-to-br from-purple-50 to-white rounded-3xl border border-purple-100 p-6 shadow-sm">
+            <div className="text-4xl mb-3 text-center">{q.emoji}</div>
+            <h3 className="text-lg font-bold text-gray-900 text-center mb-1">{q.question}</h3>
+            <p className="text-xs text-gray-400 text-center mb-6">{q.subtext}</p>
+
+            <div className="space-y-3">
+              {q.options.map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => handleAnswer(q.id, opt.value)}
+                  className="w-full flex items-center gap-4 p-4 rounded-2xl border-2 border-gray-100 hover:border-[#5b4fa8] hover:bg-purple-50 transition-all text-left group"
+                >
+                  <span className="text-2xl flex-shrink-0">{opt.emoji}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-gray-800 group-hover:text-[#5b4fa8] text-sm">{opt.label}</p>
+                    {opt.hint && <p className="text-xs text-gray-400 mt-0.5">{opt.hint}</p>}
+                  </div>
+                  <span className="text-gray-300 group-hover:text-[#5b4fa8] text-lg flex-shrink-0">›</span>
+                </button>
+              ))}
             </div>
-          )}
-          {!apiKey && <p className="text-xs text-amber-600">⚠ Add your Gemini API key above first.</p>}
+          </div>
         </div>
       )}
 
       {/* Result */}
-      {result && (
-        <div className="space-y-4">
-          <div className="rounded-2xl overflow-hidden border border-gray-100 shadow-sm">
-            <img src={`data:${imageMime};base64,${image}`} alt="Preview" className="w-full max-h-48 object-contain bg-gray-50" />
+      {showResult && result && (
+        <div ref={resultRef} className="space-y-4">
+          {/* Genie verdict */}
+          <div className="bg-gradient-to-br from-[#5b4fa8] to-purple-700 rounded-3xl p-6 text-white text-center shadow-lg">
+            <div className="text-5xl mb-3">🧞‍♂️</div>
+            <p className="text-lg font-bold leading-relaxed">{result.genieVerdict}</p>
           </div>
-          <div className="bg-white rounded-2xl border border-purple-100 p-5 shadow-sm">
-            <h3 className="text-xs font-bold text-[#5b4fa8] uppercase tracking-wide mb-3">Identification Result</h3>
-            <div className="leading-relaxed">{renderResult(result)}</div>
+
+          {/* Main result card */}
+          <div className="bg-white rounded-3xl border border-purple-100 shadow-sm overflow-hidden">
+            <div className="bg-purple-50 px-6 py-4 border-b border-purple-100">
+              <p className="text-xs font-semibold text-[#5b4fa8] uppercase tracking-wide">Most likely identification</p>
+              <p className="text-xl font-bold text-gray-900 mt-1">{result.likely}</p>
+              <p className={`text-xs font-semibold mt-1 ${confidenceColour}`}>
+                {result.confidence === "High" ? "✅ High confidence" : result.confidence === "Medium" ? "⚡ Medium confidence — testing advised" : "❓ Low confidence — testing required"}
+              </p>
+            </div>
+
+            <div className="px-6 py-4 space-y-4">
+              {/* Value hint */}
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">💰 Value Guidance</p>
+                <p className="text-sm text-gray-700 leading-relaxed">{result.valueHint}</p>
+              </div>
+
+              {/* Flags */}
+              {result.flags.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">📋 Key Notes</p>
+                  <div className="space-y-1">
+                    {result.flags.map((flag, i) => (
+                      <p key={i} className="text-sm text-gray-600 bg-gray-50 rounded-xl px-3 py-2">{flag}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Answers summary */}
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">📝 Your Answers</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {CHAIN_QUESTIONS.map((pq) => {
+                    const ans = answers[pq.id];
+                    const opt = pq.options.find(o => o.value === ans);
+                    if (!opt) return null;
+                    return (
+                      <div key={pq.id} className="bg-gray-50 rounded-xl px-3 py-2">
+                        <p className="text-xs text-gray-400">{pq.emoji} {pq.question.replace("?","")}</p>
+                        <p className="text-xs font-semibold text-gray-700 mt-0.5">{opt.emoji} {opt.label}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
           </div>
+
+          {/* Legal disclaimer + CTA */}
+          <div className="bg-amber-50 border border-amber-100 rounded-2xl p-5 text-center space-y-3">
+            <p className="text-2xl">💬</p>
+            <p className="font-bold text-gray-800">Speak to our team to confirm or discuss options</p>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              This tool provides indicative guidance only and does not constitute a professional valuation or offer to purchase.
+              Results are based on self-reported information and may not reflect the true metal content, weight, or market value.
+              Always have your item assessed by a qualified professional before making any decisions.
+              Vintage Cash Cow accepts no liability for decisions made based on this tool.
+            </p>
+            <a
+              href="https://vintagecashcow.co.uk/contact"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-block mt-2 px-6 py-3 bg-[#5b4fa8] text-white font-bold rounded-xl hover:bg-[#4a3d96] transition text-sm"
+            >
+              Contact Our Team →
+            </a>
+          </div>
+
+          {/* Start over */}
           <button
             onClick={reset}
-            className="w-full py-3 rounded-xl border border-gray-200 text-gray-600 text-sm font-semibold hover:bg-gray-50 transition"
+            className="w-full py-3 rounded-xl border border-gray-200 text-gray-500 text-sm font-semibold hover:bg-gray-50 transition"
           >
-            Identify Another Item
+            🔄 Start Over
           </button>
         </div>
       )}
@@ -7028,7 +7267,7 @@ export default function App() {
     { key: "dailySnapshot", label: "Daily Snapshot", icon: Activity },
     { key: "dailyStandup",  label: "Daily Stand-Up", icon: Activity },
     { key: "crm",           label: "CRM",            icon: Building2 },
-    { key: "itemIdentifier", label: "Item Identifier", icon: Camera },
+    { key: "goldChainIdentifier", label: "Gold Chain Identifier", icon: Camera },
   ];
 
   const VIEW_TOOLTIPS: Record<ActiveView, string> = {
@@ -7048,7 +7287,7 @@ export default function App() {
     dailySnapshot: "Daily Snapshot — yesterday's GA4 + GSC (48h lag) non-brand and AIO metrics, ready to paste into Slack.",
     dailyStandup: "Daily Stand-Up — Fitbit-style SEO health check for VCC & Arcavindi, with deliverables section, ready to paste into Slack.",
     crm: "CRM — HubSpot contacts, companies, deals and pipeline overview.",
-    itemIdentifier: "Item Identifier — upload or photograph an item to get an AI-powered identification and valuation.",
+    goldChainIdentifier: "Gold Chain Identifier — answer a few questions to identify your chain and get a value estimate.",
   };
 
   const [isPdfBuilding, setIsPdfBuilding] = useState(false);
@@ -11113,7 +11352,7 @@ ${combinedHtml}
 
             {activeView === "crm" && <CrmView />}
 
-            {activeView === "itemIdentifier" && <ItemIdentifierView />}
+            {activeView === "goldChainIdentifier" && <GoldChainIdentifierView />}
 
             {activeView === "dailyStandup" && (() => {
               // ── helpers ──────────────────────────────────────────────────
