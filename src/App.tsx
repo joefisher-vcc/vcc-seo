@@ -214,7 +214,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "crm" | "goldChainIdentifier";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "crm" | "watchWizard";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -3191,316 +3191,615 @@ const LS_HS_CLIENT_ID = "vcc_hubspot_client_id";
 type HsContact  = { name: string; email: string; lifecycle: string; created: string };
 type HsDeal     = { name: string; stage: string; amount: string; closeDate: string };
 
-// ─── Gold Chain Identifier ───────────────────────────────────────────────────
 
-type ChainAnswer = string | null;
 
-interface ChainQuestion {
+// ─── Watch Wizard ────────────────────────────────────────────────────────────
+
+interface WatchDB {
   id: string;
-  emoji: string;
-  question: string;
-  subtext: string;
-  options: { value: string; label: string; emoji: string; hint?: string }[];
+  brand: string;
+  model: string;
+  country: string;
+  countryFlag: string;
+  era: string[];
+  movement: string[];
+  caseShape: string[];
+  dialColour: string[];
+  bracelet: string[];
+  features: string[];
+  value: string;
+  description: string;
+  collectibility: string;
+  funFact: string;
 }
 
-const CHAIN_QUESTIONS: ChainQuestion[] = [
+const WATCH_DATABASE: WatchDB[] = [
+  // ── ROLEX ──────────────────────────────────────────────────────────────────
   {
-    id: "colour",
-    emoji: "🌟",
-    question: "What colour is the chain?",
-    subtext: "Look at it in natural light if possible",
+    id: "rolex_submariner",
+    brand: "Rolex", model: "Submariner",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic"],
+    caseShape: ["round"],
+    dialColour: ["black","blue","green"],
+    bracelet: ["metal"],
+    features: ["diver","date","bezel"],
+    value: "£5,000 – £15,000+",
+    description: "The Rolex Submariner is the world's most recognised dive watch. Introduced in 1953, it defined the modern sports watch category.",
+    collectibility: "Extremely high — one of the most collected watches in the world. Values have risen dramatically over the past decade.",
+    funFact: "The Submariner was famously worn by James Bond — first appearing on Sean Connery's wrist in Dr. No (1962).",
+  },
+  {
+    id: "rolex_datejust",
+    brand: "Rolex", model: "Datejust",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1950s","1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic"],
+    caseShape: ["round"],
+    dialColour: ["white","silver","black","champagne","blue"],
+    bracelet: ["metal","leather"],
+    features: ["date","cyclops"],
+    value: "£3,000 – £12,000",
+    description: "The Datejust, launched in 1945, was the first self-winding wristwatch to display the date in a window at 3 o'clock.",
+    collectibility: "Very high. The most versatile Rolex — equally at home in an office or at a black-tie dinner.",
+    funFact: "The magnifying 'Cyclops' lens over the date window was introduced by Rolex in 1953 — it's now a signature design element.",
+  },
+  {
+    id: "rolex_gmt",
+    brand: "Rolex", model: "GMT-Master",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic"],
+    caseShape: ["round"],
+    dialColour: ["black"],
+    bracelet: ["metal"],
+    features: ["diver","bezel","gmt"],
+    value: "£8,000 – £25,000+",
+    description: "Designed in 1955 for Pan Am pilots to track two time zones simultaneously. The two-tone bezel became an icon of the jet age.",
+    collectibility: "Very high. The 'Pepsi' (red/blue) and 'Batman' (black/blue) bezels command huge premiums.",
+    funFact: "The GMT-Master was developed in partnership with Pan American World Airways for their transatlantic flight crews.",
+  },
+  {
+    id: "rolex_explorer",
+    brand: "Rolex", model: "Explorer",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1950s","1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic"],
+    caseShape: ["round"],
+    dialColour: ["black"],
+    bracelet: ["metal"],
+    features: ["sport"],
+    value: "£5,000 – £9,000",
+    description: "Born from the 1953 Everest expedition, the Explorer was designed to perform in the most extreme conditions on earth.",
+    collectibility: "High. Understated design makes it a 'secret handshake' among watch enthusiasts.",
+    funFact: "A prototype Explorer was on Sir Edmund Hillary's wrist when he and Tenzing Norgay reached the summit of Everest in May 1953.",
+  },
+  // ── OMEGA ──────────────────────────────────────────────────────────────────
+  {
+    id: "omega_seamaster",
+    brand: "Omega", model: "Seamaster",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1990s","2000s","2010s","1960s","1970s","1980s"],
+    movement: ["automatic","quartz"],
+    caseShape: ["round"],
+    dialColour: ["blue","black","green"],
+    bracelet: ["metal","rubber"],
+    features: ["diver","date"],
+    value: "£1,500 – £6,000",
+    description: "The Omega Seamaster Professional 300m has been the watch of choice for James Bond since 1995, replacing the Rolex.",
+    collectibility: "High. Bond references drive prices up on certain references.",
+    funFact: "Pierce Brosnan's Seamaster 300m Professional in GoldenEye (1995) started the modern Bond-Omega era that continues today.",
+  },
+  {
+    id: "omega_speedmaster",
+    brand: "Omega", model: "Speedmaster",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["manual"],
+    caseShape: ["round"],
+    dialColour: ["black"],
+    bracelet: ["metal"],
+    features: ["chronograph","tachymetre"],
+    value: "£3,000 – £8,000",
+    description: "NASA's official watch for all crewed space missions since 1965. The Moonwatch is the only watch worn on the lunar surface.",
+    collectibility: "Extremely high — the Moonwatch has an unrivalled place in horological history.",
+    funFact: "The Speedmaster was hand-wound by Apollo astronauts rather than automatic — NASA worried a rotor could cause problems in zero gravity.",
+  },
+  {
+    id: "omega_constellation",
+    brand: "Omega", model: "Constellation",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1960s","1970s","1980s","1990s","2000s"],
+    movement: ["automatic","quartz"],
+    caseShape: ["round"],
+    dialColour: ["white","silver","blue","champagne"],
+    bracelet: ["metal","leather"],
+    features: ["date","dress"],
+    value: "£400 – £2,500",
+    description: "Omega's prestigious dress watch line, featuring the iconic claws and pie-pan dials that defined 1960s Swiss elegance.",
+    collectibility: "Moderate. Vintage pie-pan dial examples from the 1960s are growing in popularity.",
+    funFact: "The Constellation name refers to the Geneva Observatory star used on the caseback — Omega held timing accuracy records there.",
+  },
+  // ── SEIKO ──────────────────────────────────────────────────────────────────
+  {
+    id: "seiko_skx",
+    brand: "Seiko", model: "SKX007 / SKX009",
+    country: "Japan", countryFlag: "🇯🇵",
+    era: ["1990s","2000s","2010s"],
+    movement: ["automatic"],
+    caseShape: ["round"],
+    dialColour: ["black","blue"],
+    bracelet: ["metal","rubber"],
+    features: ["diver","date","bezel"],
+    value: "£150 – £450",
+    description: "The Seiko SKX007 is the entry-level dive watch icon — affordable, reliable, and endlessly modifiable. Discontinued in 2019.",
+    collectibility: "Growing rapidly since discontinuation. A gateway watch for millions of enthusiasts.",
+    funFact: "The SKX007 has spawned an entire cottage industry of aftermarket parts — enthusiasts swap dials, hands, and bezels endlessly.",
+  },
+  {
+    id: "seiko_presage",
+    brand: "Seiko", model: "Presage",
+    country: "Japan", countryFlag: "🇯🇵",
+    era: ["2010s","2000s"],
+    movement: ["automatic"],
+    caseShape: ["round"],
+    dialColour: ["blue","white","champagne","green"],
+    bracelet: ["metal","leather"],
+    features: ["dress","date"],
+    value: "£200 – £800",
+    description: "Seiko's premium dress line, featuring stunning enamel, urushi lacquer, and arita porcelain dials made by traditional Japanese artisans.",
+    collectibility: "Growing. Limited editions with artisanal dials are particularly sought after.",
+    funFact: "Some Presage dials are painted by craftspeople whose skills have been passed down through generations in rural Japan.",
+  },
+  {
+    id: "seiko_5",
+    brand: "Seiko", model: "Seiko 5",
+    country: "Japan", countryFlag: "🇯🇵",
+    era: ["1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic"],
+    caseShape: ["round"],
+    dialColour: ["white","black","silver","blue"],
+    bracelet: ["metal","leather"],
+    features: ["date","day"],
+    value: "£40 – £300",
+    description: "Seiko 5 stands for five attributes: automatic, day-date, water-resistant, recessed crown, and durable case. Launched in 1963.",
+    collectibility: "Low-moderate. Vintage examples from the 1960s-70s are gaining collector interest.",
+    funFact: "The Seiko 5 has been in continuous production since 1963 — making it one of the longest-running watch lines in history.",
+  },
+  // ── CITIZEN ────────────────────────────────────────────────────────────────
+  {
+    id: "citizen_ecodrive",
+    brand: "Citizen", model: "Eco-Drive",
+    country: "Japan", countryFlag: "🇯🇵",
+    era: ["1990s","2000s","2010s"],
+    movement: ["solar"],
+    caseShape: ["round"],
+    dialColour: ["black","white","blue","silver"],
+    bracelet: ["metal","leather"],
+    features: ["solar","date"],
+    value: "£80 – £500",
+    description: "Citizen's Eco-Drive technology converts any light source into energy, eliminating the need for battery replacements entirely.",
+    collectibility: "Low-moderate. Functional rather than collectible — valued for daily use.",
+    funFact: "An Eco-Drive can run for up to 6 months in complete darkness after a full charge from natural or artificial light.",
+  },
+  {
+    id: "citizen_promaster",
+    brand: "Citizen", model: "Promaster Diver",
+    country: "Japan", countryFlag: "🇯🇵",
+    era: ["1990s","2000s","2010s"],
+    movement: ["automatic","solar"],
+    caseShape: ["round"],
+    dialColour: ["black","blue","orange"],
+    bracelet: ["metal","rubber"],
+    features: ["diver","solar","date"],
+    value: "£200 – £700",
+    description: "Citizen's professional-grade dive watch range, offering ISO 6425 certified water resistance at a fraction of Swiss prices.",
+    collectibility: "Low-moderate. The Aqualand with depth gauge is the most collectible variant.",
+    funFact: "The Citizen Promaster Marine is the official watch of the Japanese Maritime Self-Defense Force.",
+  },
+  // ── CASIO ──────────────────────────────────────────────────────────────────
+  {
+    id: "casio_gshock",
+    brand: "Casio", model: "G-Shock",
+    country: "Japan", countryFlag: "🇯🇵",
+    era: ["1980s","1990s","2000s","2010s"],
+    movement: ["digital","quartz"],
+    caseShape: ["square","round"],
+    dialColour: ["black","yellow","red","blue","green"],
+    bracelet: ["rubber"],
+    features: ["digital","sport","shock"],
+    value: "£50 – £5,000",
+    description: "Born in 1983 when engineer Kikuo Ibe vowed to create an unbreakable watch after dropping his father's watch. The G-Shock redefined rugged timekeeping.",
+    collectibility: "High for rare models. Collaboration pieces with Supreme, Eminem, and Eric Haze fetch thousands.",
+    funFact: "Casio designer Kikuo Ibe threw 200 prototype G-Shocks from a building window before finding a design that survived the fall.",
+  },
+  {
+    id: "casio_frogman",
+    brand: "Casio", model: "G-Shock Frogman",
+    country: "Japan", countryFlag: "🇯🇵",
+    era: ["1990s","2000s","2010s"],
+    movement: ["digital"],
+    caseShape: ["round"],
+    dialColour: ["black","blue","green"],
+    bracelet: ["rubber"],
+    features: ["diver","digital","shock"],
+    value: "£300 – £800",
+    description: "The Frogman is the only ISO 6425-certified diver in the G-Shock lineup, with a distinctive frog-face design and 200m water resistance.",
+    collectibility: "High among G-Shock collectors. Vintage 1990s examples are particularly sought after.",
+    funFact: "The Frogman is named after Japanese Navy frogmen (combat divers) and has been used by the Japan Maritime Self-Defense Force.",
+  },
+  // ── TAG HEUER ──────────────────────────────────────────────────────────────
+  {
+    id: "tag_carrera",
+    brand: "TAG Heuer", model: "Carrera",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic","manual","quartz"],
+    caseShape: ["round"],
+    dialColour: ["black","white","silver","blue"],
+    bracelet: ["metal","leather"],
+    features: ["chronograph","sport"],
+    value: "£1,000 – £8,000",
+    description: "Named after the Carrera Panamericana — one of the most dangerous road races ever staged. Jack Heuer created it in 1963 for racing drivers.",
+    collectibility: "High, especially vintage references from the 1960s-70s. The re-editions are popular daily wears.",
+    funFact: "Jack Heuer designed the Carrera after driving the infamous Carrera Panamericana race in Mexico — a 3,000-mile open-road race with no speed limit.",
+  },
+  {
+    id: "tag_monaco",
+    brand: "TAG Heuer", model: "Monaco",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic","manual"],
+    caseShape: ["square"],
+    dialColour: ["blue","black","white"],
+    bracelet: ["leather"],
+    features: ["chronograph","sport"],
+    value: "£2,500 – £15,000",
+    description: "The Monaco was the world's first automatic chronograph in a square waterproof case — and Steve McQueen wore it in Le Mans (1971).",
+    collectibility: "Very high — the McQueen association makes this one of the most desirable vintage chronographs.",
+    funFact: "The crown on the Monaco is on the left side — the opposite of most watches — because the movement's winding mechanism faces that way.",
+  },
+  // ── IWC ────────────────────────────────────────────────────────────────────
+  {
+    id: "iwc_portugieser",
+    brand: "IWC", model: "Portugieser",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1990s","2000s","2010s","1940s","1950s"],
+    movement: ["automatic","manual"],
+    caseShape: ["round"],
+    dialColour: ["white","silver","blue"],
+    bracelet: ["leather","metal"],
+    features: ["dress","chronograph"],
+    value: "£3,000 – £15,000",
+    description: "Originally made in 1939 for Portuguese merchants who wanted the accuracy of a pocket watch in a wristwatch. Still IWC's most elegant line.",
+    collectibility: "High — especially the Chronograph Reference 3714. Clean, legible dials with a minimalist aesthetic.",
+    funFact: "The original 1939 Portugieser was so large for its era (43mm) that retailers assumed it was a pocket watch converted to wrist wear.",
+  },
+  {
+    id: "iwc_pilot",
+    brand: "IWC", model: "Pilot's Watch / Mark XVIII",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1990s","2000s","2010s","1940s"],
+    movement: ["automatic"],
+    caseShape: ["round"],
+    dialColour: ["black"],
+    bracelet: ["leather","metal"],
+    features: ["sport","pilot","date"],
+    value: "£2,500 – £7,000",
+    description: "IWC's pilot watches trace back to WWII cockpit instruments. The Mark series has equipped military aviators for over 80 years.",
+    collectibility: "High — military provenance and clean design. The original Mark 11 (RAF issued) is extremely valuable.",
+    funFact: "The IWC Mark 11 was the official watch of the British Royal Air Force from 1948 until the 1980s — serial numbers can be cross-referenced with RAF records.",
+  },
+  // ── BREITLING ──────────────────────────────────────────────────────────────
+  {
+    id: "breitling_navitimer",
+    brand: "Breitling", model: "Navitimer",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1950s","1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["manual","automatic"],
+    caseShape: ["round"],
+    dialColour: ["black","silver","blue"],
+    bracelet: ["metal","leather"],
+    features: ["chronograph","pilot","slide_rule"],
+    value: "£3,000 – £10,000",
+    description: "Launched in 1952, the Navitimer was designed for pilots with a circular slide rule for in-flight calculations. The most iconic aviation watch ever made.",
+    collectibility: "Very high — vintage references with the AOPA logo are especially prized.",
+    funFact: "The Navitimer's slide rule can calculate airspeed, distance, fuel consumption, and rate of climb — all without electricity.",
+  },
+  // ── PATEK PHILIPPE ─────────────────────────────────────────────────────────
+  {
+    id: "patek_calatrava",
+    brand: "Patek Philippe", model: "Calatrava",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1930s","1940s","1950s","1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["manual","automatic"],
+    caseShape: ["round"],
+    dialColour: ["white","silver","black"],
+    bracelet: ["leather"],
+    features: ["dress"],
+    value: "£10,000 – £50,000+",
+    description: "The Calatrava is Patek Philippe's purest expression of the dress watch — thin, round, and utterly refined since 1932.",
+    collectibility: "Exceptional. Patek's tagline — 'You never actually own a Patek Philippe, you merely look after it for the next generation' — holds true.",
+    funFact: "The Calatrava cross logo is borrowed from the Knights of Calatrava — a medieval Iberian Christian military order.",
+  },
+  // ── CARTIER ────────────────────────────────────────────────────────────────
+  {
+    id: "cartier_santos",
+    brand: "Cartier", model: "Santos",
+    country: "France", countryFlag: "🇫🇷",
+    era: ["1980s","1990s","2000s","2010s","1910s","1920s"],
+    movement: ["automatic","quartz"],
+    caseShape: ["square"],
+    dialColour: ["white","silver"],
+    bracelet: ["metal","leather"],
+    features: ["dress","sport"],
+    value: "£2,500 – £8,000",
+    description: "Created in 1904 by Louis Cartier for aviator Alberto Santos-Dumont, the Santos is widely considered the first modern wristwatch.",
+    collectibility: "High — especially stainless steel / yellow gold two-tone 'Santos de Cartier' from the 1980s.",
+    funFact: "Alberto Santos-Dumont needed both hands free while flying his airship, so Louis Cartier designed a watch he could wear on his wrist.",
+  },
+  {
+    id: "cartier_tank",
+    brand: "Cartier", model: "Tank",
+    country: "France", countryFlag: "🇫🇷",
+    era: ["1920s","1930s","1940s","1950s","1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["manual","quartz","automatic"],
+    caseShape: ["rectangular"],
+    dialColour: ["white","silver"],
+    bracelet: ["leather"],
+    features: ["dress"],
+    value: "£1,500 – £20,000+",
+    description: "Designed in 1917 inspired by the Renault FT tanks on the Western Front. Worn by Princess Diana, Andy Warhol, and Jackie Kennedy.",
+    collectibility: "Very high. One of the most recognisable watch designs ever created — the rectangular case is instantly distinctive.",
+    funFact: "Andy Warhol famously said: 'I don't wear a Tank watch to tell the time. I wear it as a piece of art on my wrist.'",
+  },
+  // ── LONGINES ────────────────────────────────────────────────────────────────
+  {
+    id: "longines_conquest",
+    brand: "Longines", model: "Conquest",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1950s","1960s","1970s","1980s","1990s","2000s"],
+    movement: ["automatic","quartz"],
+    caseShape: ["round"],
+    dialColour: ["white","silver","black","blue"],
+    bracelet: ["metal","leather"],
+    features: ["date","sport"],
+    value: "£200 – £1,500",
+    description: "Longines' sports collection with a history in precision timing. Longines has been the official timekeeper of the Olympics since 1932.",
+    collectibility: "Moderate. Vintage pieces with beautiful dials are undervalued and growing in interest.",
+    funFact: "Longines holds the world record for most timing patents — they've been innovating in precision timekeeping since 1867.",
+  },
+  // ── JUNGHANS ───────────────────────────────────────────────────────────────
+  {
+    id: "junghans_max_bill",
+    brand: "Junghans", model: "Max Bill",
+    country: "Germany", countryFlag: "🇩🇪",
+    era: ["1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic","manual","quartz"],
+    caseShape: ["round"],
+    dialColour: ["white","cream","black"],
+    bracelet: ["leather"],
+    features: ["dress","bauhaus"],
+    value: "£300 – £1,200",
+    description: "Designed by Swiss designer Max Bill in the 1960s, this watch is a Bauhaus masterpiece — the purest expression of 'form follows function'.",
+    collectibility: "Growing rapidly. Design-conscious collectors prize these for their architectural simplicity.",
+    funFact: "Max Bill studied at the Bauhaus under Walter Gropius and László Moholy-Nagy — his watch design eliminates every non-essential element.",
+  },
+  // ── HAMILTON ───────────────────────────────────────────────────────────────
+  {
+    id: "hamilton_khaki",
+    brand: "Hamilton", model: "Khaki Field",
+    country: "USA", countryFlag: "🇺🇸",
+    era: ["1990s","2000s","2010s","1940s","1950s"],
+    movement: ["manual","automatic"],
+    caseShape: ["round"],
+    dialColour: ["black","green","khaki","white"],
+    bracelet: ["leather","nato"],
+    features: ["sport","pilot","military"],
+    value: "£300 – £1,200",
+    description: "Hamilton supplied the US military with watches from WWII onwards. The Khaki Field continues that military heritage with excellent value.",
+    collectibility: "Moderate. WWII-issued originals are very collectible. Modern re-editions offer superb quality for money.",
+    funFact: "Hamilton watches have appeared in over 500 films — including Interstellar, Men in Black, and 2001: A Space Odyssey.",
+  },
+  // ── VOSTOK ─────────────────────────────────────────────────────────────────
+  {
+    id: "vostok_amphibia",
+    brand: "Vostok", model: "Amphibia",
+    country: "Russia", countryFlag: "🇷🇺",
+    era: ["1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic"],
+    caseShape: ["round"],
+    dialColour: ["black","blue","green","white"],
+    bracelet: ["metal","rubber"],
+    features: ["diver","date"],
+    value: "£30 – £150",
+    description: "The Vostok Amphibia is a Soviet-era diver that uses water pressure to seal itself tighter the deeper it goes — an ingenious design born from necessity.",
+    collectibility: "Growing cult following in the West. Thousands of dial variants were produced, making them endlessly collectible.",
+    funFact: "The Amphibia's unique case design means water pressure actually helps seal the crystal — it can technically withstand more pressure than its official rating.",
+  },
+  // ── TISSOT ─────────────────────────────────────────────────────────────────
+  {
+    id: "tissot_prx",
+    brand: "Tissot", model: "PRX",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1970s","2010s","2000s"],
+    movement: ["quartz","automatic"],
+    caseShape: ["square"],
+    dialColour: ["blue","black","white","green","grey"],
+    bracelet: ["metal"],
+    features: ["dress","sport","integrated"],
+    value: "£300 – £700",
+    description: "The PRX (Precise, Robust, and Water-resistant) was originally launched in 1978 and revived in 2021. Its integrated bracelet echoes luxury watches at a fraction of the price.",
+    collectibility: "Growing strongly. The revival has become one of the most talked-about watches in the affordable segment.",
+    funFact: "The PRX's revival in 2021 caused waiting lists — something almost unheard of for a watch under £500.",
+  },
+  // ── A. LANGE & SÖHNE ───────────────────────────────────────────────────────
+  {
+    id: "lange_1",
+    brand: "A. Lange & Söhne", model: "Lange 1",
+    country: "Germany", countryFlag: "🇩🇪",
+    era: ["1990s","2000s","2010s"],
+    movement: ["manual"],
+    caseShape: ["round"],
+    dialColour: ["white","silver","champagne"],
+    bracelet: ["leather"],
+    features: ["dress","power_reserve","date"],
+    value: "£15,000 – £60,000+",
+    description: "The Lange 1 was unveiled in 1994 after German reunification reopened the Glashütte workshops. Its asymmetric dial and outsize date are instantly recognisable.",
+    collectibility: "Exceptional. Lange & Söhne represents the pinnacle of German horology — each watch is hand-finished and takes weeks to assemble.",
+    funFact: "Every A. Lange & Söhne movement is assembled twice — once to check function, then dismantled, cleaned, and reassembled with perfectly finished components.",
+  },
+];
+
+// Quiz steps
+const WIZARD_STEPS = [
+  {
+    id: "brand",
+    emoji: "🏷️",
+    title: "What brand can you see on the dial?",
+    subtitle: "Look at the centre or top of the watch face",
+    type: "grid" as const,
     options: [
-      { value: "yellow", label: "Yellow Gold", emoji: "🟡", hint: "Classic warm golden colour" },
-      { value: "white", label: "White / Silver toned", emoji: "⚪", hint: "Could be white gold, platinum, or silver" },
-      { value: "rose", label: "Rose / Pink Gold", emoji: "🌸", hint: "Warm pinkish hue" },
-      { value: "mixed", label: "Mixed colours", emoji: "🎨", hint: "Two-tone or multi-colour" },
-      { value: "unsure", label: "Not sure", emoji: "🤔", hint: "Hard to tell" },
+      { value: "Rolex",              emoji: "👑", label: "Rolex" },
+      { value: "Omega",              emoji: "Ω",  label: "Omega" },
+      { value: "Seiko",              emoji: "🇯🇵", label: "Seiko" },
+      { value: "Citizen",            emoji: "☀️", label: "Citizen" },
+      { value: "Casio",              emoji: "🕹️", label: "Casio" },
+      { value: "TAG Heuer",          emoji: "🏎️", label: "TAG Heuer" },
+      { value: "IWC",                emoji: "✈️", label: "IWC" },
+      { value: "Breitling",          emoji: "🛩️", label: "Breitling" },
+      { value: "Cartier",            emoji: "🇫🇷", label: "Cartier" },
+      { value: "Patek Philippe",     emoji: "💎", label: "Patek Philippe" },
+      { value: "Longines",           emoji: "🇨🇭", label: "Longines" },
+      { value: "Tissot",             emoji: "🏔️", label: "Tissot" },
+      { value: "Junghans",           emoji: "🇩🇪", label: "Junghans" },
+      { value: "Hamilton",           emoji: "🦅", label: "Hamilton" },
+      { value: "Vostok",             emoji: "⭐", label: "Vostok" },
+      { value: "A. Lange & Söhne",   emoji: "🏰", label: "A. Lange & Söhne" },
     ],
   },
   {
-    id: "hallmark",
-    emoji: "🔍",
-    question: "Can you see any hallmarks or stamps?",
-    subtext: "Check the clasp, or any small tag — may need a magnifying glass",
+    id: "movement",
+    emoji: "⚙️",
+    title: "How does it run?",
+    subtitle: "Check if it needs winding, a battery, or runs itself",
+    type: "list" as const,
     options: [
-      { value: "375", label: "375", emoji: "🏷️", hint: "9ct gold (UK standard)" },
-      { value: "585", label: "585", emoji: "🏷️", hint: "14ct gold" },
-      { value: "750", label: "750", emoji: "🏷️", hint: "18ct gold" },
-      { value: "925", label: "925", emoji: "🪙", hint: "Sterling silver" },
-      { value: "950", label: "950 or PT950", emoji: "💎", hint: "Platinum" },
-      { value: "gf", label: "GF / Gold Filled / RGP", emoji: "🔖", hint: "Gold filled or rolled gold plated" },
-      { value: "plated", label: "GP / Gold Plated", emoji: "🔖", hint: "Thin gold layer over base metal" },
-      { value: "none", label: "No markings visible", emoji: "❓", hint: "Could still be gold — some older pieces lack stamps" },
-      { value: "other", label: "Other / Can't read it", emoji: "🔎", hint: "Unclear or foreign marks" },
+      { value: "automatic", emoji: "🌀", label: "Automatic / Self-winding",   hint: "Wrist movement powers it — you may see a rotor inside" },
+      { value: "manual",    emoji: "🔄", label: "Manual wind",                 hint: "You turn the crown to wind it up" },
+      { value: "quartz",    emoji: "🔋", label: "Quartz / Battery",            hint: "Ticks once per second, needs a battery" },
+      { value: "solar",     emoji: "☀️", label: "Solar powered",               hint: "Light-powered — common on Citizen Eco-Drive" },
+      { value: "digital",   emoji: "💡", label: "Digital display",             hint: "Numbers on screen rather than hands" },
     ],
   },
   {
-    id: "weight",
-    emoji: "⚖️",
-    question: "How does it feel when you hold it?",
-    subtext: "Genuine gold is denser than it looks",
+    id: "caseShape",
+    emoji: "⌚",
+    title: "What shape is the case?",
+    subtitle: "The main body of the watch",
+    type: "grid" as const,
     options: [
-      { value: "very_heavy", label: "Surprisingly heavy for its size", emoji: "🏋️", hint: "Good sign — gold is very dense" },
-      { value: "medium", label: "Medium weight, feels solid", emoji: "👌", hint: "Could be 9ct or lower carat" },
-      { value: "light", label: "Quite light or hollow feeling", emoji: "🪶", hint: "May be hollow gold, gold-filled, or plated" },
-      { value: "unsure", label: "Hard to tell", emoji: "🤷", hint: "" },
+      { value: "round",       emoji: "⭕", label: "Round" },
+      { value: "square",      emoji: "🟦", label: "Square" },
+      { value: "rectangular", emoji: "🔲", label: "Rectangular / Tank" },
+      { value: "cushion",     emoji: "🔳", label: "Cushion / Pillow" },
     ],
   },
   {
-    id: "style",
+    id: "dialColour",
+    emoji: "🎨",
+    title: "What colour is the dial?",
+    subtitle: "The face of the watch",
+    type: "grid" as const,
+    options: [
+      { value: "black",     emoji: "⚫", label: "Black" },
+      { value: "white",     emoji: "⚪", label: "White / Cream" },
+      { value: "blue",      emoji: "🔵", label: "Blue" },
+      { value: "silver",    emoji: "🔘", label: "Silver / Grey" },
+      { value: "green",     emoji: "🟢", label: "Green" },
+      { value: "champagne", emoji: "🟡", label: "Champagne / Gold" },
+      { value: "khaki",     emoji: "🟤", label: "Khaki / Brown" },
+      { value: "orange",    emoji: "🟠", label: "Orange / Red" },
+    ],
+  },
+  {
+    id: "bracelet",
     emoji: "⛓️",
-    question: "What style is the chain?",
-    subtext: "The link type can help identify age and origin",
+    title: "What's the strap or bracelet?",
+    subtitle: "What the watch is attached to your wrist with",
+    type: "list" as const,
     options: [
-      { value: "curb", label: "Curb / Cuban link", emoji: "🔗", hint: "Flat interlocking oval links, classic style" },
-      { value: "figaro", label: "Figaro", emoji: "〰️", hint: "Pattern of 2–3 small links then 1 large link" },
-      { value: "rope", label: "Rope / Twisted", emoji: "🌀", hint: "Twisted spiral appearance" },
-      { value: "belcher", label: "Belcher / Rolo", emoji: "⭕", hint: "Round or D-shaped links, chunky feel" },
-      { value: "box", label: "Box / Singapore", emoji: "🟦", hint: "Square links, very smooth" },
-      { value: "snake", label: "Snake / Omega", emoji: "🐍", hint: "Smooth, flexible, no visible links" },
-      { value: "ball", label: "Ball / Bead chain", emoji: "📿", hint: "Round beads on a wire" },
-      { value: "herringbone", label: "Herringbone", emoji: "🐟", hint: "Flat V-pattern, very smooth surface" },
-      { value: "other", label: "Other / Unusual style", emoji: "💡", hint: "" },
-    ],
-  },
-  {
-    id: "clasp",
-    emoji: "🔒",
-    question: "What type of clasp does it have?",
-    subtext: "The clasp often carries the hallmark",
-    options: [
-      { value: "lobster", label: "Lobster claw clasp", emoji: "🦞", hint: "Spring-loaded, most common on modern chains" },
-      { value: "spring", label: "Spring ring clasp", emoji: "⭕", hint: "Small circular, squeeze to open" },
-      { value: "toggle", label: "Toggle / T-bar clasp", emoji: "✝️", hint: "Bar goes through a ring" },
-      { value: "box_clasp", label: "Box / Push-in clasp", emoji: "📦", hint: "Click mechanism, common on older chains" },
-      { value: "barrel", label: "Barrel / Torpedo clasp", emoji: "🔧", hint: "Screws together" },
-      { value: "none", label: "No clasp / broken clasp", emoji: "💔", hint: "" },
-      { value: "unsure", label: "Not sure", emoji: "🤔", hint: "" },
-    ],
-  },
-  {
-    id: "length",
-    emoji: "📏",
-    question: "How long is the chain (approximately)?",
-    subtext: "Measure end to end including clasp",
-    options: [
-      { value: "choker", label: "Under 16 inches (choker)", emoji: "💋", hint: "Sits tight on the neck" },
-      { value: "princess", label: "16–18 inches (princess)", emoji: "👑", hint: "Most common necklace length" },
-      { value: "matinee", label: "20–24 inches (matinee)", emoji: "🧣", hint: "Hangs below the collarbone" },
-      { value: "opera", label: "28–36 inches (opera)", emoji: "🎭", hint: "Long, can be doubled" },
-      { value: "rope_len", label: "Over 36 inches (rope length)", emoji: "🪢", hint: "Very long, often doubled or knotted" },
-      { value: "bracelet", label: "Bracelet length (6–9 inches)", emoji: "💪", hint: "" },
-      { value: "unsure", label: "Haven't measured", emoji: "📐", hint: "" },
-    ],
-  },
-  {
-    id: "condition",
-    emoji: "✨",
-    question: "What condition is it in?",
-    subtext: "Be honest — condition affects value significantly",
-    options: [
-      { value: "excellent", label: "Excellent — like new", emoji: "⭐", hint: "No visible wear or damage" },
-      { value: "good", label: "Good — minor wear only", emoji: "👍", hint: "Light scratches, all links intact" },
-      { value: "fair", label: "Fair — noticeable wear", emoji: "👌", hint: "Scratches, slight tarnish but complete" },
-      { value: "poor", label: "Poor — damaged or broken", emoji: "🔨", hint: "Broken links, missing clasp, heavy tarnish" },
-      { value: "tangled", label: "Tangled / knotted", emoji: "🪢", hint: "Intact but knotted" },
-    ],
-  },
-  {
-    id: "age",
-    emoji: "⏳",
-    question: "Do you know roughly how old it is?",
-    subtext: "Antique pieces can carry a premium beyond their gold value",
-    options: [
-      { value: "new", label: "Modern (last 20 years)", emoji: "🆕", hint: "" },
-      { value: "vintage", label: "Vintage (20–50 years)", emoji: "📼", hint: "" },
-      { value: "antique", label: "Antique (50–100+ years)", emoji: "🏺", hint: "May have collector value" },
-      { value: "victorian", label: "Victorian / Edwardian era", emoji: "🎩", hint: "Pre-1920, often high quality" },
-      { value: "unsure", label: "Not sure of age", emoji: "❓", hint: "" },
+      { value: "metal",   emoji: "🔗", label: "Metal bracelet",    hint: "Stainless steel, gold-tone, or two-tone" },
+      { value: "leather", emoji: "🟤", label: "Leather strap",     hint: "Brown, black, or coloured leather" },
+      { value: "rubber",  emoji: "⬛", label: "Rubber / silicone", hint: "Sport or diver style" },
+      { value: "nato",    emoji: "🎽", label: "NATO / fabric strap", hint: "Woven textile strap, often striped" },
     ],
   },
 ];
 
-// Gold value database (per gram, GBP, approximate)
-const GOLD_VALUE_DB: Record<string, { purity: number; carats: string; pencePerGram: number; description: string }> = {
-  "375": { purity: 0.375, carats: "9ct",  pencePerGram: 1950, description: "9 carat gold — most common in UK jewellery" },
-  "585": { purity: 0.585, carats: "14ct", pencePerGram: 3040, description: "14 carat gold — popular in European jewellery" },
-  "750": { purity: 0.750, carats: "18ct", pencePerGram: 3900, description: "18 carat gold — premium quality" },
-  "950": { purity: 0.950, carats: "Platinum", pencePerGram: 2600, description: "Platinum — valuable and durable" },
-  "925": { purity: 0,     carats: "Silver", pencePerGram: 48,   description: "Sterling silver — not gold" },
-  "gf":  { purity: 0,     carats: "Gold Filled", pencePerGram: 0, description: "Gold filled — base metal with gold layer, low scrap value" },
-  "plated": { purity: 0,  carats: "Gold Plated", pencePerGram: 0, description: "Gold plated — very thin layer, minimal value" },
-};
-
-// Chain style value modifiers
-const STYLE_PREMIUM: Record<string, number> = {
-  rope: 1.05, curb: 1.0, figaro: 1.0, belcher: 1.02,
-  box: 1.03, snake: 1.08, herringbone: 1.05, ball: 0.95, other: 1.0,
-};
-
-function analyseChain(answers: Record<string, ChainAnswer>): {
-  likely: string; confidence: string; valueHint: string;
-  recommendation: string; flags: string[]; genieVerdict: string;
-} {
-  const flags: string[] = [];
-  const hallmark = answers.hallmark;
-  const colour = answers.colour;
-  const weight = answers.weight;
-  const condition = answers.condition;
-  const age = answers.age;
-  const style = answers.style;
-
-  // Determine likely metal
-  let likely = "Unknown metal";
-  let confidence = "Low";
-  let valueHint = "";
-  let recommendation = "";
-  let genieVerdict = "";
-
-  // Plated / filled — low value
-  if (hallmark === "plated" || hallmark === "gf") {
-    likely = hallmark === "plated" ? "Gold Plated (base metal)" : "Gold Filled / Rolled Gold";
-    confidence = "High";
-    valueHint = "Gold plated and gold filled chains have very little scrap value as the gold layer is extremely thin. Value is primarily as jewellery only.";
-    recommendation = "💬 Speak to our team to confirm or discuss options";
-    genieVerdict = "✨ The markings suggest this is not solid gold — but it may still have resale value as jewellery depending on style and condition.";
-    flags.push("⚠️ Likely not solid gold based on markings");
-    return { likely, confidence, valueHint, recommendation, flags, genieVerdict };
-  }
-
-  // Silver
-  if (hallmark === "925" || (colour === "white" && hallmark === "925")) {
-    likely = "Sterling Silver (925)";
-    confidence = "High";
-    valueHint = "Sterling silver has modest scrap value. Current silver prices mean most chains are worth £5–£40 depending on weight.";
-    recommendation = "💬 Speak to our team to confirm or discuss options";
-    genieVerdict = "🪙 This looks like sterling silver — a lovely metal but worth less than gold. Worth getting assessed!";
-    flags.push("ℹ️ Silver, not gold");
-    return { likely, confidence, valueHint, recommendation, flags, genieVerdict };
-  }
-
-  // Definite gold by hallmark
-  if (hallmark && ["375", "585", "750"].includes(hallmark)) {
-    const goldData = GOLD_VALUE_DB[hallmark];
-    likely = `${goldData.carats} Gold (${hallmark} hallmark)`;
-    confidence = "High";
-    const styleMod = STYLE_PREMIUM[style ?? "other"] ?? 1.0;
-    const condMod = condition === "excellent" ? 1.1 : condition === "good" ? 1.0 : condition === "fair" ? 0.85 : 0.7;
-    const ageMod = age === "antique" || age === "victorian" ? 1.15 : 1.0;
-    const basePerGram = goldData.pencePerGram * styleMod * condMod * ageMod;
-    valueHint = `Based on current gold prices, ${goldData.carats} gold chains typically fetch around £${Math.round(basePerGram * 5 / 100)}–£${Math.round(basePerGram * 20 / 100)} for a typical 5–20g chain. Actual value depends on exact weight.`;
-    if (age === "antique" || age === "victorian") flags.push("🏺 Antique — may have collector value above scrap price");
-    if (condition === "poor") flags.push("⚠️ Poor condition will reduce value");
-    if (condition === "excellent") flags.push("⭐ Excellent condition adds value");
-    recommendation = "💬 Speak to our team to confirm or discuss options";
-    genieVerdict = `🌟 Great news! The ${hallmark} hallmark confirms this is genuine ${goldData.carats} gold. This is a real find — get it properly weighed to know exactly what it's worth!`;
-    return { likely, confidence, valueHint, recommendation, flags, genieVerdict };
-  }
-
-  // Platinum
-  if (hallmark === "950") {
-    likely = "Platinum (950)";
-    confidence = "High";
-    valueHint = "Platinum is valuable and dense. Most platinum chains fetch £80–£400+ depending on weight.";
-    recommendation = "💬 Speak to our team to confirm or discuss options";
-    genieVerdict = "💎 Platinum! Rarer than gold and very valuable. This is definitely worth getting assessed by our team.";
-    flags.push("💎 Platinum — highly valuable");
-    return { likely, confidence, valueHint, recommendation, flags, genieVerdict };
-  }
-
-  // No hallmark — use colour + weight clues
-  if (hallmark === "none" || hallmark === "other") {
-    if (colour === "yellow" && weight === "very_heavy") {
-      likely = "Possibly solid gold (unverified)";
-      confidence = "Medium";
-      valueHint = "No hallmark visible, but colour and weight are consistent with gold. Older pieces and foreign imports sometimes lack UK hallmarks. Needs testing to confirm.";
-      flags.push("⚠️ No hallmark — needs acid test or XRF scan to confirm");
-      flags.push("ℹ️ Some pre-1975 UK pieces and foreign imports lack hallmarks");
-      genieVerdict = "🔮 Hmm, interesting… The colour and weight feel right for gold, but without a hallmark I can't be certain. A quick acid test from our team will give you the answer!";
-    } else if (colour === "yellow" && weight === "light") {
-      likely = "Possibly gold plated or gold filled";
-      confidence = "Medium";
-      valueHint = "Light weight and yellow colour without hallmarks often indicates gold plating over a base metal. Some hollow 9ct chains can also be light.";
-      flags.push("⚠️ Lightweight yellow metal without hallmark — could be plated");
-      genieVerdict = "🤔 The weight gives me pause… Light yellow chains without markings are often plated. But let's not give up hope — our team can test it properly!";
-    } else if (colour === "white" && weight === "very_heavy") {
-      likely = "Possibly white gold or platinum";
-      confidence = "Medium";
-      valueHint = "Heavy white metal chains may be white gold (375/585/750) or platinum. Needs testing to determine exact metal and value.";
-      flags.push("ℹ️ Could be white gold or platinum — testing needed");
-      genieVerdict = "✨ Ooh, heavy and white… This could be white gold or even platinum. Very promising — let our team take a look!";
-    } else {
-      likely = "Metal type uncertain";
-      confidence = "Low";
-      valueHint = "Without a hallmark and with mixed signals from colour/weight, it's difficult to determine the metal type without physical testing.";
-      flags.push("⚠️ Inconclusive — professional testing recommended");
-      genieVerdict = "🔮 The genie needs more information to be sure… Some things even magic can't tell from a quiz alone! Our team can test it in minutes.";
-    }
-    recommendation = "💬 Speak to our team to confirm or discuss options";
-    return { likely, confidence, valueHint, recommendation, flags, genieVerdict };
-  }
-
-  // Fallback
-  likely = "Needs professional assessment";
-  confidence = "Low";
-  valueHint = "Based on your answers, more information is needed to make a reliable assessment.";
-  recommendation = "💬 Speak to our team to confirm or discuss options";
-  genieVerdict = "🔮 Even the genie has limits! Your answers are a bit of a mystery — but that's what our experts are for.";
-  return { likely, confidence, valueHint, recommendation, flags, genieVerdict };
+function scoreWatch(db: WatchDB, answers: Record<string, string>): number {
+  let score = 0;
+  if (answers.brand && db.brand === answers.brand) score += 100;
+  if (answers.movement && db.movement.includes(answers.movement)) score += 20;
+  if (answers.caseShape && db.caseShape.includes(answers.caseShape)) score += 15;
+  if (answers.dialColour && db.dialColour.includes(answers.dialColour)) score += 15;
+  if (answers.bracelet && db.bracelet.includes(answers.bracelet)) score += 10;
+  return score;
 }
 
-function GoldChainIdentifierView() {
-  const [answers, setAnswers]       = useState<Record<string, ChainAnswer>>({});
-  const [currentQ, setCurrentQ]     = useState(0);
+function WatchWizardView() {
+  const [step, setStep]           = useState(0);
+  const [answers, setAnswers]     = useState<Record<string, string>>({});
+  const [animating, setAnimating] = useState(false);
   const [showResult, setShowResult] = useState(false);
-  const [animating, setAnimating]   = useState(false);
-  const resultRef                   = useRef<HTMLDivElement>(null);
+  const resultRef                 = useRef<HTMLDivElement>(null);
 
-  const answered = Object.keys(answers).length;
-  const total    = CHAIN_QUESTIONS.length;
-  const progress = (answered / total) * 100;
+  const total    = WIZARD_STEPS.length;
+  const progress = (step / total) * 100;
 
-  const handleAnswer = (qId: string, value: string) => {
-    const newAnswers = { ...answers, [qId]: value };
+  const handleAnswer = (key: string, value: string) => {
+    const newAnswers = { ...answers, [key]: value };
     setAnswers(newAnswers);
     setAnimating(true);
     setTimeout(() => {
       setAnimating(false);
-      if (currentQ < CHAIN_QUESTIONS.length - 1) {
-        setCurrentQ(currentQ + 1);
+      if (step < total - 1) {
+        setStep(step + 1);
       } else {
         setShowResult(true);
         setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
       }
-    }, 350);
+    }, 300);
   };
 
-  const reset = () => {
-    setAnswers({});
-    setCurrentQ(0);
-    setShowResult(false);
-  };
+  const reset = () => { setStep(0); setAnswers({}); setShowResult(false); };
 
-  const result = showResult ? analyseChain(answers) : null;
-  const q = CHAIN_QUESTIONS[currentQ];
-  const confidenceColour = result?.confidence === "High" ? "text-green-600" : result?.confidence === "Medium" ? "text-amber-600" : "text-gray-500";
+  // Score every watch and pick top 3
+  const ranked = [...WATCH_DATABASE]
+    .map(w => ({ watch: w, score: scoreWatch(w, answers) }))
+    .sort((a, b) => b.score - a.score);
+  const topMatches = ranked.slice(0, 3).filter(r => r.score > 0);
+
+  const current = WIZARD_STEPS[step];
 
   return (
-    <section className="p-4 space-y-6 max-w-2xl mx-auto">
+    <section className="p-4 space-y-5 max-w-2xl mx-auto">
+
       {/* Header */}
-      <div className="text-center py-4">
-        <div className="text-5xl mb-2">🧞</div>
-        <h2 className="text-2xl font-bold text-gray-900">Gold Chain Identifier</h2>
-        <p className="text-sm text-gray-500 mt-1">Answer a few questions and the genie will reveal what your chain might be worth ✨</p>
-        <p className="text-xs text-gray-400 mt-2 italic">For guidance only — always confirm with our team before making decisions</p>
+      <div className="text-center pt-2 pb-1">
+        <div className="text-5xl mb-2">🪄⌚</div>
+        <h2 className="text-2xl font-bold text-gray-900">Watch Wizard</h2>
+        <p className="text-sm text-gray-500 mt-1">Answer a few quick questions and we'll identify your watch ✨</p>
+        <p className="text-xs text-gray-400 mt-1 italic">For guidance only — speak to our team to confirm</p>
       </div>
 
-      {/* Progress bar */}
+      {/* Progress */}
       {!showResult && (
         <div className="space-y-1">
           <div className="flex justify-between text-xs text-gray-400">
-            <span>Question {Math.min(currentQ + 1, total)} of {total}</span>
-            <span>{answered} answered</span>
+            <span>Step {step + 1} of {total}</span>
+            <span>{Math.round(progress)}% complete</span>
           </div>
           <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
             <div
@@ -3511,137 +3810,163 @@ function GoldChainIdentifierView() {
         </div>
       )}
 
-      {/* Previous answers summary */}
-      {!showResult && answered > 0 && (
+      {/* Previous answer chips */}
+      {!showResult && step > 0 && (
         <div className="flex flex-wrap gap-2">
-          {CHAIN_QUESTIONS.slice(0, currentQ).map((pq) => {
-            const ans = answers[pq.id];
-            const opt = pq.options.find(o => o.value === ans);
-            return (
+          {WIZARD_STEPS.slice(0, step).map((s) => {
+            const opt = s.options.find(o => o.value === answers[s.id]);
+            return opt ? (
               <button
-                key={pq.id}
-                onClick={() => setCurrentQ(CHAIN_QUESTIONS.findIndex(q2 => q2.id === pq.id))}
+                key={s.id}
+                onClick={() => { setShowResult(false); setStep(WIZARD_STEPS.findIndex(ws => ws.id === s.id)); }}
                 className="flex items-center gap-1 px-3 py-1 bg-purple-50 border border-purple-100 rounded-full text-xs text-[#5b4fa8] hover:bg-purple-100 transition"
               >
-                {pq.emoji} {opt?.emoji} {opt?.label}
+                {opt.emoji} {opt.label}
               </button>
-            );
+            ) : null;
           })}
         </div>
       )}
 
-      {/* Current question */}
+      {/* Question */}
       {!showResult && (
         <div className={`transition-opacity duration-300 ${animating ? "opacity-0" : "opacity-100"}`}>
           <div className="bg-gradient-to-br from-purple-50 to-white rounded-3xl border border-purple-100 p-6 shadow-sm">
-            <div className="text-4xl mb-3 text-center">{q.emoji}</div>
-            <h3 className="text-lg font-bold text-gray-900 text-center mb-1">{q.question}</h3>
-            <p className="text-xs text-gray-400 text-center mb-6">{q.subtext}</p>
+            <div className="text-4xl text-center mb-2">{current.emoji}</div>
+            <h3 className="text-lg font-bold text-gray-900 text-center mb-1">{current.title}</h3>
+            <p className="text-xs text-gray-400 text-center mb-6">{current.subtitle}</p>
 
-            <div className="space-y-3">
-              {q.options.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => handleAnswer(q.id, opt.value)}
-                  className="w-full flex items-center gap-4 p-4 rounded-2xl border-2 border-gray-100 hover:border-[#5b4fa8] hover:bg-purple-50 transition-all text-left group"
-                >
-                  <span className="text-2xl flex-shrink-0">{opt.emoji}</span>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-gray-800 group-hover:text-[#5b4fa8] text-sm">{opt.label}</p>
-                    {opt.hint && <p className="text-xs text-gray-400 mt-0.5">{opt.hint}</p>}
-                  </div>
-                  <span className="text-gray-300 group-hover:text-[#5b4fa8] text-lg flex-shrink-0">›</span>
-                </button>
-              ))}
-            </div>
+            {current.type === "grid" ? (
+              <div className="grid grid-cols-2 gap-3">
+                {current.options.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => handleAnswer(current.id, opt.value)}
+                    className="flex items-center gap-3 p-3 rounded-2xl border-2 border-gray-100 hover:border-[#5b4fa8] hover:bg-purple-50 transition-all text-left group"
+                  >
+                    <span className="text-2xl flex-shrink-0">{opt.emoji}</span>
+                    <span className="font-semibold text-gray-800 group-hover:text-[#5b4fa8] text-sm leading-tight">{opt.label}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {current.options.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => handleAnswer(current.id, opt.value)}
+                    className="w-full flex items-center gap-4 p-4 rounded-2xl border-2 border-gray-100 hover:border-[#5b4fa8] hover:bg-purple-50 transition-all text-left group"
+                  >
+                    <span className="text-2xl flex-shrink-0">{opt.emoji}</span>
+                    <div className="flex-1">
+                      <p className="font-semibold text-gray-800 group-hover:text-[#5b4fa8] text-sm">{opt.label}</p>
+                      {"hint" in opt && opt.hint && <p className="text-xs text-gray-400 mt-0.5">{opt.hint}</p>}
+                    </div>
+                    <span className="text-gray-300 group-hover:text-[#5b4fa8] text-lg">›</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* Result */}
-      {showResult && result && (
+      {/* Results */}
+      {showResult && (
         <div ref={resultRef} className="space-y-4">
-          {/* Genie verdict */}
-          <div className="bg-gradient-to-br from-[#5b4fa8] to-purple-700 rounded-3xl p-6 text-white text-center shadow-lg">
-            <div className="text-5xl mb-3">🧞‍♂️</div>
-            <p className="text-lg font-bold leading-relaxed">{result.genieVerdict}</p>
-          </div>
 
-          {/* Main result card */}
-          <div className="bg-white rounded-3xl border border-purple-100 shadow-sm overflow-hidden">
-            <div className="bg-purple-50 px-6 py-4 border-b border-purple-100">
-              <p className="text-xs font-semibold text-[#5b4fa8] uppercase tracking-wide">Most likely identification</p>
-              <p className="text-xl font-bold text-gray-900 mt-1">{result.likely}</p>
-              <p className={`text-xs font-semibold mt-1 ${confidenceColour}`}>
-                {result.confidence === "High" ? "✅ High confidence" : result.confidence === "Medium" ? "⚡ Medium confidence — testing advised" : "❓ Low confidence — testing required"}
-              </p>
+          {topMatches.length === 0 ? (
+            <div className="bg-gradient-to-br from-[#5b4fa8] to-purple-700 rounded-3xl p-6 text-white text-center">
+              <div className="text-4xl mb-3">🔮</div>
+              <p className="font-bold text-lg">Hmm, no exact match found</p>
+              <p className="text-sm text-purple-200 mt-2">Your watch might be a model we haven't catalogued yet — our team can help!</p>
             </div>
-
-            <div className="px-6 py-4 space-y-4">
-              {/* Value hint */}
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">💰 Value Guidance</p>
-                <p className="text-sm text-gray-700 leading-relaxed">{result.valueHint}</p>
+          ) : (
+            <>
+              <div className="bg-gradient-to-br from-[#5b4fa8] to-purple-700 rounded-3xl p-6 text-white text-center shadow-lg">
+                <div className="text-4xl mb-2">🪄</div>
+                <p className="text-sm font-semibold text-purple-200 uppercase tracking-wide">The Wizard has spoken</p>
+                <p className="text-xl font-bold mt-1">
+                  {topMatches[0].watch.countryFlag} {topMatches[0].watch.brand} {topMatches[0].watch.model}
+                </p>
+                <p className="text-sm text-purple-200 mt-1">{topMatches[0].watch.country}</p>
               </div>
 
-              {/* Flags */}
-              {result.flags.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">📋 Key Notes</p>
-                  <div className="space-y-1">
-                    {result.flags.map((flag, i) => (
-                      <p key={i} className="text-sm text-gray-600 bg-gray-50 rounded-xl px-3 py-2">{flag}</p>
-                    ))}
+              {topMatches.map((match, i) => (
+                <div key={match.watch.id} className={`bg-white rounded-3xl border shadow-sm overflow-hidden ${i === 0 ? "border-[#5b4fa8]" : "border-gray-100"}`}>
+                  {i === 0 && (
+                    <div className="bg-[#5b4fa8] px-4 py-2 text-center">
+                      <span className="text-xs font-bold text-white uppercase tracking-wide">⭐ Best Match</span>
+                    </div>
+                  )}
+                  {i === 1 && (
+                    <div className="bg-gray-50 px-4 py-2 text-center border-b border-gray-100">
+                      <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Also possible…</span>
+                    </div>
+                  )}
+                  {i === 2 && (
+                    <div className="bg-gray-50 px-4 py-2 text-center border-b border-gray-100">
+                      <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Or perhaps…</span>
+                    </div>
+                  )}
+
+                  <div className="p-5 space-y-4">
+                    <div className="flex items-start gap-3">
+                      <span className="text-3xl">{match.watch.countryFlag}</span>
+                      <div>
+                        <p className="font-bold text-gray-900">{match.watch.brand}</p>
+                        <p className="text-lg font-bold text-[#5b4fa8]">{match.watch.model}</p>
+                        <p className="text-xs text-gray-400">{match.watch.country} · {match.watch.era.join(", ")}</p>
+                      </div>
+                    </div>
+
+                    <p className="text-sm text-gray-700 leading-relaxed">{match.watch.description}</p>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-purple-50 rounded-xl p-3">
+                        <p className="text-xs font-semibold text-[#5b4fa8] uppercase tracking-wide mb-1">💰 Est. Value</p>
+                        <p className="text-sm font-bold text-gray-900">{match.watch.value}</p>
+                      </div>
+                      <div className="bg-gray-50 rounded-xl p-3">
+                        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">🏆 Collectibility</p>
+                        <p className="text-xs text-gray-700">{match.watch.collectibility.split(".")[0]}.</p>
+                      </div>
+                    </div>
+
+                    <div className="bg-amber-50 rounded-xl p-3 border border-amber-100">
+                      <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-1">💡 Fun Fact</p>
+                      <p className="text-xs text-gray-700 italic">"{match.watch.funFact}"</p>
+                    </div>
                   </div>
                 </div>
-              )}
+              ))}
+            </>
+          )}
 
-              {/* Answers summary */}
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">📝 Your Answers</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {CHAIN_QUESTIONS.map((pq) => {
-                    const ans = answers[pq.id];
-                    const opt = pq.options.find(o => o.value === ans);
-                    if (!opt) return null;
-                    return (
-                      <div key={pq.id} className="bg-gray-50 rounded-xl px-3 py-2">
-                        <p className="text-xs text-gray-400">{pq.emoji} {pq.question.replace("?","")}</p>
-                        <p className="text-xs font-semibold text-gray-700 mt-0.5">{opt.emoji} {opt.label}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Legal disclaimer + CTA */}
-          <div className="bg-amber-50 border border-amber-100 rounded-2xl p-5 text-center space-y-3">
+          {/* Legal + CTA */}
+          <div className="bg-gray-50 border border-gray-100 rounded-2xl p-5 text-center space-y-3">
             <p className="text-2xl">💬</p>
-            <p className="font-bold text-gray-800">Speak to our team to confirm or discuss options</p>
-            <p className="text-xs text-gray-500 leading-relaxed">
-              This tool provides indicative guidance only and does not constitute a professional valuation or offer to purchase.
-              Results are based on self-reported information and may not reflect the true metal content, weight, or market value.
-              Always have your item assessed by a qualified professional before making any decisions.
+            <p className="font-bold text-gray-800 text-sm">Speak to our team to confirm or discuss options</p>
+            <p className="text-xs text-gray-400 leading-relaxed">
+              This tool provides indicative guidance only and does not constitute a professional valuation or authentication.
+              Results are based on self-reported answers and our internal database — always have your watch assessed by a qualified expert.
               Vintage Cash Cow accepts no liability for decisions made based on this tool.
             </p>
             <a
               href="https://vintagecashcow.co.uk/contact"
               target="_blank"
               rel="noreferrer"
-              className="inline-block mt-2 px-6 py-3 bg-[#5b4fa8] text-white font-bold rounded-xl hover:bg-[#4a3d96] transition text-sm"
+              className="inline-block px-6 py-3 bg-[#5b4fa8] text-white font-bold rounded-xl hover:bg-[#4a3d96] transition text-sm"
             >
               Contact Our Team →
             </a>
           </div>
 
-          {/* Start over */}
           <button
             onClick={reset}
             className="w-full py-3 rounded-xl border border-gray-200 text-gray-500 text-sm font-semibold hover:bg-gray-50 transition"
           >
-            🔄 Start Over
+            🔄 Identify Another Watch
           </button>
         </div>
       )}
@@ -7267,7 +7592,7 @@ export default function App() {
     { key: "dailySnapshot", label: "Daily Snapshot", icon: Activity },
     { key: "dailyStandup",  label: "Daily Stand-Up", icon: Activity },
     { key: "crm",           label: "CRM",            icon: Building2 },
-    { key: "goldChainIdentifier", label: "Gold Chain Identifier", icon: Camera },
+    { key: "watchWizard", label: "Watch Wizard", icon: Camera },
   ];
 
   const VIEW_TOOLTIPS: Record<ActiveView, string> = {
@@ -7287,7 +7612,7 @@ export default function App() {
     dailySnapshot: "Daily Snapshot — yesterday's GA4 + GSC (48h lag) non-brand and AIO metrics, ready to paste into Slack.",
     dailyStandup: "Daily Stand-Up — Fitbit-style SEO health check for VCC & Arcavindi, with deliverables section, ready to paste into Slack.",
     crm: "CRM — HubSpot contacts, companies, deals and pipeline overview.",
-    goldChainIdentifier: "Gold Chain Identifier — answer a few questions to identify your chain and get a value estimate.",
+    watchWizard: "Watch Wizard — answer 5 quick questions to identify your watch",
   };
 
   const [isPdfBuilding, setIsPdfBuilding] = useState(false);
@@ -11352,7 +11677,7 @@ ${combinedHtml}
 
             {activeView === "crm" && <CrmView />}
 
-            {activeView === "goldChainIdentifier" && <GoldChainIdentifierView />}
+            {activeView === "watchWizard" && <WatchWizardView />}
 
             {activeView === "dailyStandup" && (() => {
               // ── helpers ──────────────────────────────────────────────────
