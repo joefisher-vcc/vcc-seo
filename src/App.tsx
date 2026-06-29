@@ -3192,17 +3192,25 @@ type HsContact  = { name: string; email: string; lifecycle: string; created: str
 type HsDeal     = { name: string; stage: string; amount: string; closeDate: string };
 // ─── Item Identifier ────────────────────────────────────────────────────────
 
-const GEMINI_API_KEY = "AIzaSyBq8RN6K2QSUhZc_RmW4NwOYEttkyEPpLI";
+const LS_GEMINI_KEY = "vcc_gemini_api_key";
 
 function ItemIdentifierView() {
-  const [image, setImage]         = useState<string | null>(null);
-  const [imageMime, setImageMime] = useState<string>("image/jpeg");
-  const [result, setResult]       = useState<string | null>(null);
-  const [loading, setLoading]     = useState(false);
-  const [error, setError]         = useState<string | null>(null);
-  const [dragOver, setDragOver]   = useState(false);
-  const fileInputRef              = useRef<HTMLInputElement>(null);
-  const cameraInputRef            = useRef<HTMLInputElement>(null);
+  const [apiKey, setApiKey]         = useState(() => localStorage.getItem(LS_GEMINI_KEY) ?? "");
+  const [apiKeyInput, setApiKeyInput] = useState(() => localStorage.getItem(LS_GEMINI_KEY) ?? "");
+  const [image, setImage]           = useState<string | null>(null);
+  const [imageMime, setImageMime]   = useState<string>("image/jpeg");
+  const [result, setResult]         = useState<string | null>(null);
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState<string | null>(null);
+  const [dragOver, setDragOver]     = useState(false);
+  const fileInputRef                = useRef<HTMLInputElement>(null);
+  const cameraInputRef              = useRef<HTMLInputElement>(null);
+
+  const saveApiKey = () => {
+    const trimmed = apiKeyInput.trim();
+    localStorage.setItem(LS_GEMINI_KEY, trimmed);
+    setApiKey(trimmed);
+  };
 
   const processFile = (file: File) => {
     if (!file.type.startsWith("image/")) { setError("Please upload an image file."); return; }
@@ -3228,20 +3236,18 @@ function ItemIdentifierView() {
   };
 
   const identify = async () => {
-    if (!image) return;
+    if (!image || !apiKey) return;
     setLoading(true); setError(null); setResult(null);
     try {
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [{
               parts: [
-                {
-                  inline_data: { mime_type: imageMime, data: image },
-                },
+                { inline_data: { mime_type: imageMime, data: image } },
                 {
                   text: `You are an expert antiques and collectibles appraiser for Vintage Cash Cow, a UK-based buyer of second-hand items.
 
@@ -3303,6 +3309,31 @@ Be concise but thorough. If the image is unclear or shows multiple items, note t
         <p className="text-sm text-gray-500 mt-1">Upload or photograph an item for an AI-powered identification and valuation.</p>
       </div>
 
+      {/* API Key */}
+      <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 space-y-2">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Gemini API Key</p>
+        <div className="flex gap-2">
+          <input
+            type="password"
+            value={apiKeyInput}
+            onChange={(e) => setApiKeyInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && saveApiKey()}
+            placeholder="AIzaSy…"
+            className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#5b4fa8]"
+          />
+          <button
+            onClick={saveApiKey}
+            className="px-4 py-2 rounded-lg bg-[#5b4fa8] text-white text-sm font-semibold hover:bg-[#4a3d96] transition"
+          >
+            Save
+          </button>
+        </div>
+        {apiKey
+          ? <p className="text-xs text-green-600">✓ Key saved — ready to identify items</p>
+          : <p className="text-xs text-amber-600">Paste your Gemini API key from <a href="https://aistudio.google.com" target="_blank" rel="noreferrer" className="underline">aistudio.google.com</a></p>
+        }
+      </div>
+
       {/* Upload zone */}
       {!image && (
         <>
@@ -3339,7 +3370,7 @@ Be concise but thorough. If the image is unclear or shows multiple items, note t
           <div className="flex gap-3">
             <button
               onClick={identify}
-              disabled={loading}
+              disabled={loading || !apiKey}
               className="flex-1 py-3 rounded-xl bg-[#5b4fa8] text-white font-semibold text-sm hover:bg-[#4a3d96] transition disabled:opacity-50"
             >
               {loading ? "Identifying…" : "Identify Item"}
@@ -3350,9 +3381,10 @@ Be concise but thorough. If the image is unclear or shows multiple items, note t
           </div>
           {loading && (
             <div className="flex items-center gap-2 text-sm text-gray-400">
-              <RefreshCw size={14} className="animate-spin" /> Analysing image with Gemini…
+              <RefreshCw size={14} className="animate-spin" /> Analysing with Gemini…
             </div>
           )}
+          {!apiKey && <p className="text-xs text-amber-600">⚠ Add your Gemini API key above first.</p>}
         </div>
       )}
 
