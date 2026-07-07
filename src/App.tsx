@@ -1768,6 +1768,7 @@ const NBSEO_DEFAULT_BRAND_TERMS = [
   // Misspellings / alternate brand renderings of the company name itself
   "arcavindi",
   "arca vindi",
+  "vintage.com",
   // Additional brand variants
   "cahcow",
   "vintagecow",
@@ -4418,7 +4419,7 @@ export default function App() {
   const [selectedGA4, setSelectedGA4]     = useState(() => localStorage.getItem(LS_SELECTED_GA4) ?? "");
   const [gscProperties, setGscProperties] = useState<{ value: string; label: string }[]>([]);
   const [selectedGSC, setSelectedGSC]     = useState(() => localStorage.getItem(LS_SELECTED_GSC) ?? "");
-  // Second GA4 property for Daily Snapshot (Arcavindi)
+  // Second GA4 property for Daily Snapshot (Vintage.com — GA4 property still named "Arcavindi - GA4")
   const [avGA4Id, setAvGA4Id] = useState("");
   const [avGscId,  setAvGscId]  = useState("");
 
@@ -4876,7 +4877,7 @@ export default function App() {
   const VCC_GA4_LABEL = "Vintage Cash Cow - GA4";
   const AV_GA4_LABEL  = "Arcavindi - GA4";
   const VCC_GSC_URL   = "https://www.vintagecashcow.co.uk/";
-  const AV_GSC_URL    = "https://www.arcavindi.com/";
+  const AV_GSC_URL    = "https://www.vintage.com/";
 
   const loadProperties = useCallback(async (token: string) => {
     const [a, b] = await Promise.all([
@@ -4906,8 +4907,8 @@ export default function App() {
     // Auto-select Arcavindi GA4 property for snapshot
     const av = props.find((p) => p.label === AV_GA4_LABEL || p.label.toLowerCase().includes("arcavindi"));
     if (av) setAvGA4Id(av.value);
-    // Auto-select Arcavindi GSC property for snapshot
-    const avGsc = gscProps.find((p) => p.value === AV_GSC_URL || p.value === AV_GSC_URL.replace(/\/$/, "") || p.value.toLowerCase().includes("arcavindi"));
+    // Auto-select vintage.com GSC property for snapshot
+    const avGsc = gscProps.find((p) => p.value === AV_GSC_URL || p.value === AV_GSC_URL.replace(/\/$/, "") || p.value.toLowerCase().includes("vintage.com"));
     if (avGsc) setAvGscId(avGsc.value);
   }, []);
 
@@ -6230,7 +6231,7 @@ export default function App() {
       );
     }
     if (avGA4Id && avGscId) {
-      const label = ga4Properties.find((p) => p.value === avGA4Id)?.label ?? "Arcavindi";
+      const label = ga4Properties.find((p) => p.value === avGA4Id)?.label ?? "Vintage.com";
       jobs.push(
         fetchForGA4(avGA4Id, label, avGscId)
           .then((r) => { if (isCurrent()) setSnapAV(r); })
@@ -7763,7 +7764,7 @@ export default function App() {
     seoIssues: "SEO Issues — surface technical and on-page problems that may be hurting your rankings.",
     performance: "Performance — analyse Core Web Vitals and page speed signals from your Search Console data.",
     dailySnapshot: "Daily Snapshot — yesterday's GA4 + GSC (48h lag) non-brand and AIO metrics, ready to paste into Slack.",
-    dailyStandup: "Daily Stand-Up — Fitbit-style SEO health check for VCC & Arcavindi, with deliverables section, ready to paste into Slack.",
+    dailyStandup: "Daily Stand-Up — Fitbit-style SEO health check for VCC & Vintage.com, with deliverables section, ready to paste into Slack.",
     crm: "CRM — HubSpot contacts, companies, deals and pipeline overview.",
     watchWizard: "Watch Wizard — answer 5 quick questions to identify your watch",
   };
@@ -11920,7 +11921,7 @@ ${combinedHtml}
                 };
 
                 addSite("VCC", "Vintage Cash Cow");
-                addSite("AV", "Arcavindi");
+                addSite("AV", "Vintage.com");
 
                 lines.push(`─────────────────────────`);
                 lines.push(``);
@@ -12127,7 +12128,7 @@ ${combinedHtml}
                         <div className="bg-green-100 border border-green-200 rounded-xl p-2"><Activity size={16} className="text-green-700" /></div>
                         <div>
                           <h2 className="text-sm font-bold text-gray-900">Daily Stand-Up</h2>
-                          <p className="text-xs text-gray-400">Fitbit-style SEO health check · VCC + Arcavindi · paste into Slack</p>
+                          <p className="text-xs text-gray-400">Fitbit-style SEO health check · VCC + Vintage.com · paste into Slack</p>
                         </div>
                       </div>
                       <SlackCopyButton buildMessage={buildStandupSlack} />
@@ -12136,7 +12137,7 @@ ${combinedHtml}
                     {/* Site blocks */}
                     <div className="space-y-6">
                       <SiteHealthBlock abbr="VCC" fullName="Vintage Cash Cow" />
-                      <SiteHealthBlock abbr="AV"  fullName="Arcavindi" />
+                      <SiteHealthBlock abbr="AV"  fullName="Vintage.com" />
                     </div>
 
                     {/* Deliverables section */}
@@ -12334,7 +12335,7 @@ ${combinedHtml}
                         <div className="bg-yellow-100 border border-yellow-200 rounded-xl p-2"><Activity size={16} className="text-yellow-700" /></div>
                         <div>
                           <h2 className="text-sm font-bold text-gray-900">Daily Snapshot</h2>
-                          <p className="text-xs text-gray-400">VCC + Arcavindi · NB SEO & AIO · copy for Slack</p>
+                          <p className="text-xs text-gray-400">VCC + Vintage.com · NB SEO & AIO · copy for Slack</p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -12410,7 +12411,7 @@ ${combinedHtml}
                         {snapAVLoading && !snapAV && (
                           <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center text-sm text-gray-400">
                             <div className="inline-block w-5 h-5 border-2 border-gray-200 border-t-yellow-400 rounded-full animate-spin mb-2" />
-                            <p>Loading Arcavindi…</p>
+                            <p>Loading Vintage.com…</p>
                           </div>
                         )}
                         {snapAV && <PropBlock s={snapAV} abbr="AV" />}
