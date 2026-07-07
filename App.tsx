@@ -214,7 +214,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "crm" | "itemIdentifier";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "crm" | "watchWizard";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -3190,190 +3190,939 @@ const LS_HS_CLIENT_ID = "vcc_hubspot_client_id";
 
 type HsContact  = { name: string; email: string; lifecycle: string; created: string };
 type HsDeal     = { name: string; stage: string; amount: string; closeDate: string };
-// ─── Item Identifier ────────────────────────────────────────────────────────
 
-function ItemIdentifierView() {
-  const [image, setImage]           = useState<string | null>(null);
-  const [imageMime, setImageMime]   = useState<string>("image/jpeg");
-  const [result, setResult]         = useState<string | null>(null);
-  const [loading, setLoading]       = useState(false);
-  const [error, setError]           = useState<string | null>(null);
-  const [dragOver, setDragOver]     = useState(false);
-  const fileInputRef                = useRef<HTMLInputElement>(null);
-  const cameraInputRef              = useRef<HTMLInputElement>(null);
 
-  const processFile = (file: File) => {
-    if (!file.type.startsWith("image/")) { setError("Please upload an image file."); return; }
-    setError(null); setResult(null);
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const dataUrl = e.target?.result as string;
-      // strip "data:<mime>;base64," prefix → keep only base64 body
-      setImage(dataUrl.split(",")[1]);
-      setImageMime(file.type);
+
+
+// ─── Watch Wizard v2 ─────────────────────────────────────────────────────────
+
+interface WatchDB {
+  id: string;
+  brand: string;
+  model: string;
+  country: string;
+  countryFlag: string;
+  era: string[];
+  movement: string[];
+  caseShape: string[];
+  dialColour: string[];
+  bracelet: string[];
+  features: string[];
+  tagline: string;
+  description: string;
+  collectibility: string;
+  funFact: string;
+  wornBy: string;
+  heritage: string;
+  dialArt: string; // CSS gradient for the watch face preview
+  caseColour: string; // CSS colour for the case ring
+}
+
+const WATCH_DATABASE: WatchDB[] = [
+  {
+    id: "rolex_submariner", brand: "Rolex", model: "Submariner",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic"], caseShape: ["round"],
+    dialColour: ["black","blue","green"], bracelet: ["metal"],
+    features: ["diver","date","bezel"],
+    tagline: "The world's most iconic dive watch",
+    description: "Introduced in 1953, the Submariner defined what a sports watch could be. Water-resistant to 300m, it fused professional utility with effortless style.",
+    collectibility: "Extremely high — among the most sought-after watches on earth. Certain references with original parts are almost impossible to find.",
+    funFact: "Sean Connery wore it as Bond in Dr. No (1962). The watch became as famous as the spy.",
+    wornBy: "Sean Connery · Steve McQueen · Paul Newman",
+    heritage: "Born from deep-sea diving. Tested by Jacques-Yves Cousteau's team before launch.",
+    dialArt: "radial-gradient(circle at 40% 35%, #1a1a2e 0%, #0d0d1a 60%, #000 100%)",
+    caseColour: "#a8a9ad",
+  },
+  {
+    id: "rolex_datejust", brand: "Rolex", model: "Datejust",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1950s","1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic"], caseShape: ["round"],
+    dialColour: ["white","silver","black","champagne","blue"], bracelet: ["metal","leather"],
+    features: ["date","cyclops"],
+    tagline: "The first watch to show the date at a glance",
+    description: "Launched in 1945 to mark Rolex's 40th anniversary, the Datejust was the world's first self-winding watch with a date window. The magnifying Cyclops lens followed in 1953.",
+    collectibility: "Very high. The most versatile Rolex — equally at home in a boardroom or at a black-tie dinner.",
+    funFact: "The Cyclops lens magnifies the date 2.5× — it was considered so clever that competitors tried to copy it immediately.",
+    wornBy: "Martin Luther King Jr. · Dwight D. Eisenhower · Jay-Z",
+    heritage: "The Datejust defined the modern dress watch category and has been in continuous production for 80 years.",
+    dialArt: "radial-gradient(circle at 40% 35%, #e8e8e8 0%, #c0c0c0 50%, #a0a0a0 100%)",
+    caseColour: "#c9b037",
+  },
+  {
+    id: "rolex_gmt", brand: "Rolex", model: "GMT-Master",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic"], caseShape: ["round"],
+    dialColour: ["black"], bracelet: ["metal"],
+    features: ["bezel","gmt"],
+    tagline: "Built for the golden age of jet travel",
+    description: "Designed in 1955 for Pan American Airways pilots tracking two time zones simultaneously. The bi-colour rotating bezel — nicknamed 'Pepsi' and 'Batman' — became a design legend.",
+    collectibility: "Very high. The 'Pepsi' bezel (red/blue) and 'Batman' (black/blue) command serious collector attention.",
+    funFact: "Pan Am's Chief Navigator helped Rolex design the GMT-Master. The airline gave one to every transatlantic crew member.",
+    wornBy: "Pan Am pilots · Marlon Brando · Sylvester Stallone",
+    heritage: "The watch that made jet-lag fashionable. Originally only sold to airline employees.",
+    dialArt: "radial-gradient(circle at 40% 35%, #1c1c1c 0%, #0a0a0a 70%, #000 100%)",
+    caseColour: "#a8a9ad",
+  },
+  {
+    id: "rolex_explorer", brand: "Rolex", model: "Explorer",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1950s","1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic"], caseShape: ["round"],
+    dialColour: ["black"], bracelet: ["metal"],
+    features: ["sport"],
+    tagline: "Forged on the slopes of Everest",
+    description: "Born from the 1953 British Everest expedition. The Explorer was designed to keep perfect time at altitude, in extreme cold, and under crushing pressure.",
+    collectibility: "High. Its understated dial — just three Arabic numerals at 3, 6, and 9 — is a 'secret handshake' among serious collectors.",
+    funFact: "A prototype Explorer was on Hillary's wrist at the summit. Rolex received news of the climb on the morning of Queen Elizabeth II's coronation.",
+    wornBy: "Sir Edmund Hillary · Tenzing Norgay",
+    heritage: "The cleanest dial in the Rolex lineup. Every element that could be removed was removed.",
+    dialArt: "radial-gradient(circle at 40% 35%, #1a1a1a 0%, #080808 70%, #000 100%)",
+    caseColour: "#a8a9ad",
+  },
+  {
+    id: "omega_seamaster", brand: "Omega", model: "Seamaster",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1990s","2000s","2010s","1960s","1970s","1980s"],
+    movement: ["automatic","quartz"], caseShape: ["round"],
+    dialColour: ["blue","black","green"], bracelet: ["metal","rubber"],
+    features: ["diver","date"],
+    tagline: "007's watch of choice since 1995",
+    description: "The Seamaster has been Omega's flagship since 1948, but the 300m Professional transformed it into a global icon when Pierce Brosnan strapped it on in GoldenEye.",
+    collectibility: "High. Bond-era references with box and papers are particularly desirable.",
+    funFact: "Omega beat Rolex in a secret NATO tender process to become Bond's watch — the decision was kept confidential for years.",
+    wornBy: "Pierce Brosnan · Daniel Craig · Prince William",
+    heritage: "Originally developed for Royal Navy divers. Has been to the bottom of the Mariana Trench.",
+    dialArt: "radial-gradient(circle at 40% 35%, #0a2a5e 0%, #061535 60%, #020a1a 100%)",
+    caseColour: "#a8a9ad",
+  },
+  {
+    id: "omega_speedmaster", brand: "Omega", model: "Speedmaster",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["manual"], caseShape: ["round"],
+    dialColour: ["black"], bracelet: ["metal"],
+    features: ["chronograph","tachymetre"],
+    tagline: "The only watch worn on the Moon",
+    description: "NASA put every watch on the market through gruelling tests in 1964 — extreme temperatures, humidity, vibration, pressure. The Speedmaster Professional was the only one to pass.",
+    collectibility: "Extraordinary. The Moonwatch is one of the most important objects in the history of exploration, let alone watchmaking.",
+    funFact: "Apollo astronauts wore it strapped over their spacesuit on the outside — it had to read legibly in a glove.",
+    wornBy: "Neil Armstrong · Buzz Aldrin · Tom Hanks (Apollo 13)",
+    heritage: "The watch that helped save Apollo 13. Astronaut Jack Swigert used it to time the critical engine burn that brought the crew home.",
+    dialArt: "radial-gradient(circle at 40% 35%, #111 0%, #050505 70%, #000 100%)",
+    caseColour: "#a8a9ad",
+  },
+  {
+    id: "omega_constellation", brand: "Omega", model: "Constellation",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1960s","1970s","1980s","1990s","2000s"],
+    movement: ["automatic","quartz"], caseShape: ["round"],
+    dialColour: ["white","silver","blue","champagne"], bracelet: ["metal","leather"],
+    features: ["date","dress"],
+    tagline: "Observatory precision in a dress watch",
+    description: "The Constellation launched in 1952, built around movements that had just won at the Geneva Observatory timing trials. The pie-pan dial and clawed case are icons of 1960s elegance.",
+    collectibility: "Moderate to high. Vintage pie-pan dials from the 1960s are a rising star among collectors.",
+    funFact: "The caseback star logo commemorates Omega's record-breaking runs at the Neuchâtel Observatory — they broke their own record 11 times.",
+    wornBy: "Cindy Crawford · Nicole Kidman",
+    heritage: "One of the first watches marketed directly to women. The Constellation helped make Swiss watches a fashion statement.",
+    dialArt: "radial-gradient(circle at 40% 35%, #f5f0e8 0%, #d4cfc5 60%, #b8b2a8 100%)",
+    caseColour: "#c9b037",
+  },
+  {
+    id: "seiko_skx", brand: "Seiko", model: "SKX007",
+    country: "Japan", countryFlag: "🇯🇵",
+    era: ["1990s","2000s","2010s"],
+    movement: ["automatic"], caseShape: ["round"],
+    dialColour: ["black","blue"], bracelet: ["metal","rubber"],
+    features: ["diver","date","bezel"],
+    tagline: "The cult diver that launched a thousand mods",
+    description: "Discontinued in 2019 but more beloved than ever, the SKX007 is the entry point into serious watch collecting for millions of enthusiasts worldwide.",
+    collectibility: "Rapidly growing. A thriving aftermarket of custom dials, bezels, and hands makes every SKX unique.",
+    funFact: "The SKX007 has spawned an entire industry of aftermarket parts — more accessories exist for it than almost any other watch.",
+    wornBy: "Watch enthusiasts worldwide · Military divers · Paul Giamatti",
+    heritage: "Seiko's 6309 movement inside has been tested in actual diving conditions. Simple, rugged, and repairable.",
+    dialArt: "radial-gradient(circle at 40% 35%, #0d1b2a 0%, #08111c 60%, #020708 100%)",
+    caseColour: "#a8a9ad",
+  },
+  {
+    id: "seiko_presage", brand: "Seiko", model: "Presage",
+    country: "Japan", countryFlag: "🇯🇵",
+    era: ["2010s","2000s"],
+    movement: ["automatic"], caseShape: ["round"],
+    dialColour: ["blue","white","champagne","green"], bracelet: ["metal","leather"],
+    features: ["dress","date"],
+    tagline: "Artisan dials from Japan's living traditions",
+    description: "The Presage line collaborates with Japanese artisans — enamel painters, lacquerware masters, and porcelain makers — to create dials that are miniature works of art.",
+    collectibility: "Growing strongly. Limited editions with enamel dials are in high demand.",
+    funFact: "Some Presage enamel dials are painted in a technique called 'shippo' — a traditional Japanese cloisonné art form dating to the 7th century.",
+    wornBy: "Design collectors · Japanese horological enthusiasts",
+    heritage: "Seiko makes its own movements, dials, hands, and cases — one of very few manufacturers with true end-to-end production.",
+    dialArt: "radial-gradient(circle at 40% 35%, #1a3a5c 0%, #0e2035 60%, #050e1a 100%)",
+    caseColour: "#c9b037",
+  },
+  {
+    id: "seiko_5", brand: "Seiko", model: "Seiko 5",
+    country: "Japan", countryFlag: "🇯🇵",
+    era: ["1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic"], caseShape: ["round"],
+    dialColour: ["white","black","silver","blue"], bracelet: ["metal","leather"],
+    features: ["date","day"],
+    tagline: "In production since 1963. Still going.",
+    description: "Named for five principles — automatic, day-date display, water resistant, recessed crown, and durable case. One of the longest-running watch lines in history.",
+    collectibility: "Low to moderate. Vintage 'bullhead' and unusual 1970s references have real collector appeal.",
+    funFact: "The Seiko 5 has been produced in more than 1,000 different dial and case combinations since 1963.",
+    wornBy: "Everyone. Literally. Billions sold across six decades.",
+    heritage: "The watch that brought automatic movement ownership to the working class. A democratic icon.",
+    dialArt: "radial-gradient(circle at 40% 35%, #f8f5f0 0%, #ddd9d0 60%, #c0bbb0 100%)",
+    caseColour: "#a8a9ad",
+  },
+  {
+    id: "citizen_ecodrive", brand: "Citizen", model: "Eco-Drive",
+    country: "Japan", countryFlag: "🇯🇵",
+    era: ["1990s","2000s","2010s"],
+    movement: ["solar"], caseShape: ["round"],
+    dialColour: ["black","white","blue","silver"], bracelet: ["metal","leather"],
+    features: ["solar","date"],
+    tagline: "Powered by light. Never needs a battery.",
+    description: "Citizen's Eco-Drive converts any light — natural or artificial — into energy stored in a titanium lithium-ion cell. No battery changes. Ever.",
+    collectibility: "Low to moderate. Valued for reliability rather than rarity.",
+    funFact: "An Eco-Drive can run for up to 6 months in total darkness after a single full charge.",
+    wornBy: "Astronauts (Citizen's Promaster models) · Sports officials",
+    heritage: "Citizen first patented light-powered watch technology in 1976 — 20 years before it became commercially viable.",
+    dialArt: "radial-gradient(circle at 40% 35%, #0a0a1a 0%, #050510 70%, #000 100%)",
+    caseColour: "#a8a9ad",
+  },
+  {
+    id: "casio_gshock", brand: "Casio", model: "G-Shock",
+    country: "Japan", countryFlag: "🇯🇵",
+    era: ["1980s","1990s","2000s","2010s"],
+    movement: ["digital","quartz"], caseShape: ["square","round"],
+    dialColour: ["black","yellow","red","blue","green"], bracelet: ["rubber"],
+    features: ["digital","sport","shock"],
+    tagline: "Built to survive anything",
+    description: "Engineer Kikuo Ibe vowed to create an unbreakable watch after dropping his father's. After 200 prototypes and two years of throwing them from a building, the G-Shock was born.",
+    collectibility: "High for rare models. Collabs with Supreme, Eminem, and BAPE fetch serious money.",
+    funFact: "The original DW-5000C was nearly cancelled — it sat unsold in Japan for a year before a New York City store sold out its entire stock in a weekend.",
+    wornBy: "Will Smith · Eminem · Military special forces worldwide",
+    heritage: "Standard issue for the US Army, UK forces, and police units on six continents. The watch soldiers actually choose to wear.",
+    dialArt: "radial-gradient(circle at 40% 35%, #1a1a1a 0%, #0d0d0d 70%, #000 100%)",
+    caseColour: "#2d2d2d",
+  },
+  {
+    id: "tag_carrera", brand: "TAG Heuer", model: "Carrera",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic","manual","quartz"], caseShape: ["round"],
+    dialColour: ["black","white","silver","blue"], bracelet: ["metal","leather"],
+    features: ["chronograph","sport"],
+    tagline: "Named after the most dangerous road race in history",
+    description: "Jack Heuer designed the Carrera in 1963, naming it after the Carrera Panamericana — an open-road race through Mexico so dangerous it was banned after five years.",
+    collectibility: "High. Vintage references from the 1960s-70s are among the most coveted chronographs available.",
+    funFact: "The race the Carrera was named after had no speed limit and killed so many drivers it was permanently cancelled in 1954.",
+    wornBy: "Steve McQueen · Ayrton Senna · Lewis Hamilton",
+    heritage: "TAG Heuer supplied timing systems for Formula 1 for decades. The Carrera carries that precision into a wrist-worn package.",
+    dialArt: "radial-gradient(circle at 40% 35%, #f0f0f0 0%, #d0d0d0 60%, #a0a0a0 100%)",
+    caseColour: "#a8a9ad",
+  },
+  {
+    id: "tag_monaco", brand: "TAG Heuer", model: "Monaco",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic","manual"], caseShape: ["square"],
+    dialColour: ["blue","black","white"], bracelet: ["leather"],
+    features: ["chronograph","sport"],
+    tagline: "The square watch Steve McQueen made legendary",
+    description: "The Monaco was the world's first automatic chronograph in a square waterproof case — an engineering impossibility until 1969. Then Steve McQueen wore it in Le Mans and nothing was the same.",
+    collectibility: "Very high. The McQueen connection makes certain references almost priceless in the vintage market.",
+    funFact: "McQueen chose the Monaco himself from a selection of watches — he liked how its square case looked under his racing suit sleeve.",
+    wornBy: "Steve McQueen · Ryan Gosling · Jeff Goldblum",
+    heritage: "The crown is on the left side — the opposite of almost every other watch — because the Calibre 11 movement requires it.",
+    dialArt: "radial-gradient(circle at 40% 35%, #1a3a6e 0%, #0e2040 60%, #04101f 100%)",
+    caseColour: "#a8a9ad",
+  },
+  {
+    id: "iwc_portugieser", brand: "IWC", model: "Portugieser",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1990s","2000s","2010s","1940s","1950s"],
+    movement: ["automatic","manual"], caseShape: ["round"],
+    dialColour: ["white","silver","blue"], bracelet: ["leather","metal"],
+    features: ["dress","chronograph"],
+    tagline: "Pocket-watch precision on your wrist since 1939",
+    description: "Portuguese merchants commissioned IWC in 1939 to make a wristwatch with the accuracy of a marine chronometer. The result was so large it was mistaken for a pocket watch conversion.",
+    collectibility: "High. The Chronograph ref. 3714 is considered one of the most beautiful watch designs ever made.",
+    funFact: "The original 1939 Portugieser was 43mm — grotesquely large for the era when wristwatches were 32-34mm. Today it looks normal.",
+    wornBy: "Barack Obama · Bradley Cooper · Idris Elba",
+    heritage: "IWC is based in Schaffhausen, near a waterfall powerful enough to run its machinery — the reason an American founded a Swiss watch company there in 1868.",
+    dialArt: "radial-gradient(circle at 40% 35%, #f8f6f2 0%, #e8e4dc 60%, #d0cbc0 100%)",
+    caseColour: "#a8a9ad",
+  },
+  {
+    id: "breitling_navitimer", brand: "Breitling", model: "Navitimer",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1950s","1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["manual","automatic"], caseShape: ["round"],
+    dialColour: ["black","silver","blue"], bracelet: ["metal","leather"],
+    features: ["chronograph","pilot","slide_rule"],
+    tagline: "The flight computer you can wear",
+    description: "Launched in 1952 for the Aircraft Owners and Pilots Association (AOPA), the Navitimer's circular slide rule can calculate airspeed, fuel consumption, rate of climb, and distance.",
+    collectibility: "Very high. The AOPA logo variants and early references with Venus movements are exceptionally rare.",
+    funFact: "Astronaut Scott Carpenter wore a modified Navitimer into orbit in 1962 — Breitling adapted the bezel to show 24-hour time so he could tell day from night in space.",
+    wornBy: "Scott Carpenter · John Travolta · Miles Davis",
+    heritage: "The official watch of AOPA for decades. More pilots have worn a Navitimer than any other watch.",
+    dialArt: "radial-gradient(circle at 40% 35%, #111 0%, #060606 70%, #000 100%)",
+    caseColour: "#a8a9ad",
+  },
+  {
+    id: "patek_calatrava", brand: "Patek Philippe", model: "Calatrava",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1930s","1940s","1950s","1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["manual","automatic"], caseShape: ["round"],
+    dialColour: ["white","silver","black"], bracelet: ["leather"],
+    features: ["dress"],
+    tagline: "You never own a Patek. You keep it for the next generation.",
+    description: "The Calatrava launched in 1932 is Patek Philippe's purest watch — a round case, thin profile, and nothing on the dial that doesn't need to be there.",
+    collectibility: "Exceptional. Patek Philippe consistently sets auction records. The Calatrava is the definition of understated prestige.",
+    funFact: "Patek Philippe is still entirely family-owned after 185 years. They have turned down every acquisition offer — from Rolex, LVMH, and others.",
+    wornBy: "Queen Victoria · Pablo Picasso · Eric Clapton",
+    heritage: "The Calatrava cross is from the Knights of Calatrava — a 12th-century Christian military order. Patek chose it for its association with excellence under pressure.",
+    dialArt: "radial-gradient(circle at 40% 35%, #fafaf8 0%, #ececea 60%, #deded8 100%)",
+    caseColour: "#c9b037",
+  },
+  {
+    id: "cartier_santos", brand: "Cartier", model: "Santos",
+    country: "France", countryFlag: "🇫🇷",
+    era: ["1980s","1990s","2000s","2010s","1910s","1920s"],
+    movement: ["automatic","quartz"], caseShape: ["square"],
+    dialColour: ["white","silver"], bracelet: ["metal","leather"],
+    features: ["dress","sport"],
+    tagline: "The first wristwatch. Full stop.",
+    description: "In 1904, aviator Alberto Santos-Dumont complained he couldn't check his pocket watch while piloting his airship. Louis Cartier designed one he could wear on his wrist. The rest is history.",
+    collectibility: "High — especially 1980s two-tone stainless/gold models. A classic that never goes out of fashion.",
+    funFact: "Santos-Dumont was so famous in his era that crowds in Paris would stop in the street to watch him fly his airship between buildings.",
+    wornBy: "Alberto Santos-Dumont · Pelé · Zlatan Ibrahimović",
+    heritage: "Created the entire wristwatch category. Everything that came after — including Rolex, Omega, and Seiko — is because of this watch.",
+    dialArt: "radial-gradient(circle at 40% 35%, #f8f6f0 0%, #e8e4da 60%, #d8d2c4 100%)",
+    caseColour: "#c9b037",
+  },
+  {
+    id: "cartier_tank", brand: "Cartier", model: "Tank",
+    country: "France", countryFlag: "🇫🇷",
+    era: ["1920s","1930s","1940s","1950s","1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["manual","quartz","automatic"], caseShape: ["rectangular"],
+    dialColour: ["white","silver"], bracelet: ["leather"],
+    features: ["dress"],
+    tagline: "Inspired by war. Perfected by art.",
+    description: "Designed in 1917, looking down at the Renault FT tanks rolling through the Western Front, Louis Cartier sketched the case shape that would become one of design history's most enduring objects.",
+    collectibility: "Very high. Virtually unchanged in a century — that itself is the statement.",
+    funFact: "Andy Warhol said: 'I don't wear a Tank to tell the time. I wear it as a piece of art.' He owned several.",
+    wornBy: "Princess Diana · Jackie Kennedy · Andy Warhol · Michelle Obama",
+    heritage: "No watch has appeared on more powerful wrists. A global uniform for those who don't need to show off.",
+    dialArt: "radial-gradient(circle at 40% 35%, #fafaf8 0%, #eeecea 60%, #e0deda 100%)",
+    caseColour: "#c9b037",
+  },
+  {
+    id: "hamilton_khaki", brand: "Hamilton", model: "Khaki Field",
+    country: "USA", countryFlag: "🇺🇸",
+    era: ["1990s","2000s","2010s","1940s","1950s"],
+    movement: ["manual","automatic"], caseShape: ["round"],
+    dialColour: ["black","green","khaki","white"], bracelet: ["leather","nato"],
+    features: ["sport","pilot","military"],
+    tagline: "The watch of the US military. On film since forever.",
+    description: "Hamilton supplied the US military with watches from WWII onwards. The Khaki Field distils that heritage into a supremely legible field watch that works in a trench or at a dinner table.",
+    collectibility: "Moderate. Original WWII military-issue Hamiltons command serious attention from militaria collectors.",
+    funFact: "Hamilton watches have appeared in over 500 films — more than any other watch brand. Directors reach for them as default 'authentic' timepieces.",
+    wornBy: "US Army soldiers (WWII) · Interstellar's Matthew McConaughey · Men in Black's Will Smith",
+    heritage: "Hamilton was founded in Lancaster, Pennsylvania in 1892 and supplied the railroad industry before pivoting to military contracts.",
+    dialArt: "radial-gradient(circle at 40% 35%, #1a1a0a 0%, #0d0d05 70%, #000 100%)",
+    caseColour: "#8B7355",
+  },
+  {
+    id: "vostok_amphibia", brand: "Vostok", model: "Amphibia",
+    country: "Russia", countryFlag: "🇷🇺",
+    era: ["1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic"], caseShape: ["round"],
+    dialColour: ["black","blue","green","white"], bracelet: ["metal","rubber"],
+    features: ["diver","date"],
+    tagline: "The Soviet diver that seals itself with water pressure",
+    description: "The Amphibia uses an ingenious Soviet design: the deeper it goes, the tighter the crystal seals against the case. Water pressure becomes a feature, not a threat.",
+    collectibility: "Growing cult following. Thousands of dial variations were produced, making them endlessly collectable at accessible prices.",
+    funFact: "The Amphibia was worn by Soviet Navy divers and cosmonauts. Its pressure-sealing case design was classified information for years.",
+    wornBy: "Soviet Navy divers · Russian cosmonauts · Western vintage cult collectors",
+    heritage: "Made at the Chistopol Watch Factory, originally evacuated from Moscow during WWII. Built to the same standards as military equipment.",
+    dialArt: "radial-gradient(circle at 40% 35%, #0a2a1a 0%, #051510 60%, #020808 100%)",
+    caseColour: "#a8a9ad",
+  },
+  {
+    id: "tissot_prx", brand: "Tissot", model: "PRX",
+    country: "Switzerland", countryFlag: "🇨🇭",
+    era: ["1970s","2010s","2000s"],
+    movement: ["quartz","automatic"], caseShape: ["square"],
+    dialColour: ["blue","black","white","green","grey"], bracelet: ["metal"],
+    features: ["dress","sport","integrated"],
+    tagline: "The 70s are back. And they brought friends.",
+    description: "Originally launched in 1978, the PRX (Precise, Robust, Water-resistant) was revived in 2021 and caused immediate waiting lists — rare for a Swiss watch in this segment.",
+    collectibility: "Growing strongly. The revival has made it one of the most discussed accessible Swiss watches of recent years.",
+    funFact: "The integrated bracelet design — where the bracelet flows seamlessly from the case — was pioneered by luxury watches costing 20× as much.",
+    wornBy: "Watch enthusiasts · Design-forward professionals",
+    heritage: "Tissot is one of Switzerland's oldest manufacturers, founded in Le Locle in 1853. The PRX shows they haven't lost their design nerve.",
+    dialArt: "radial-gradient(circle at 40% 35%, #1a3050 0%, #0e1c30 60%, #060c18 100%)",
+    caseColour: "#a8a9ad",
+  },
+  {
+    id: "junghans_maxbill", brand: "Junghans", model: "Max Bill",
+    country: "Germany", countryFlag: "🇩🇪",
+    era: ["1960s","1970s","1980s","1990s","2000s","2010s"],
+    movement: ["automatic","manual","quartz"], caseShape: ["round"],
+    dialColour: ["white","cream","black"], bracelet: ["leather"],
+    features: ["dress","bauhaus"],
+    tagline: "The Bauhaus principle on your wrist",
+    description: "Designed in the 1960s by Max Bill, who studied at the Bauhaus under Walter Gropius. Every element on the dial exists for one reason: legibility. Everything else was removed.",
+    collectibility: "Growing. Architects, designers, and collectors of 20th-century modernism prize it above almost any other watch.",
+    funFact: "Max Bill believed the watch was the most intimate object of the industrial era — something you interact with thousands of times a day should be perfect.",
+    wornBy: "Architects · Designers · Modernism collectors",
+    heritage: "Junghans is Germany's most awarded watchmaker. The Black Forest factory has been running since 1861.",
+    dialArt: "radial-gradient(circle at 40% 35%, #fafafa 0%, #f0f0f0 60%, #e0e0e0 100%)",
+    caseColour: "#a8a9ad",
+  },
+  {
+    id: "lange_1", brand: "A. Lange & Söhne", model: "Lange 1",
+    country: "Germany", countryFlag: "🇩🇪",
+    era: ["1990s","2000s","2010s"],
+    movement: ["manual"], caseShape: ["round"],
+    dialColour: ["white","silver","champagne"], bracelet: ["leather"],
+    features: ["dress","power_reserve","date"],
+    tagline: "German reunification's greatest watch",
+    description: "Unveiled in 1994 — the first day Lange & Söhne could legally sell watches after the Wall fell. Four references launched simultaneously. The German watch world was reborn.",
+    collectibility: "Exceptional. Every Lange 1 is assembled twice — once to check function, then stripped, cleaned, and rebuilt. The finishing is incomparable.",
+    funFact: "After WWII, the communist East German government nationalised the Glashütte workshops and banned the Lange family from the trade. They waited 45 years to return.",
+    wornBy: "Heads of state · Collectors who know",
+    heritage: "Glashütte, a village of 7,000 people, is the German watchmaking capital. A. Lange & Söhne is its crown jewel.",
+    dialArt: "radial-gradient(circle at 40% 35%, #f5f2ec 0%, #e8e4da 60%, #dcd8d0 100%)",
+    caseColour: "#c9b037",
+  },
+];
+
+// SVG watch face renderer
+function WatchFacePreview({ watch, size = 120 }: { watch: WatchDB; size?: number }) {
+  const r = size / 2;
+  const cx = r; const cy = r;
+  const isSquare = watch.caseShape.includes("square") || watch.caseShape.includes("rectangular");
+  const hourMarkers = Array.from({ length: 12 }, (_, i) => {
+    const angle = (i * 30 - 90) * (Math.PI / 180);
+    const isMajor = i % 3 === 0;
+    const innerR = r * (isMajor ? 0.72 : 0.76);
+    const outerR = r * 0.86;
+    return {
+      x1: cx + innerR * Math.cos(angle), y1: cy + innerR * Math.sin(angle),
+      x2: cx + outerR * Math.cos(angle), y2: cy + outerR * Math.sin(angle),
+      major: isMajor,
     };
-    reader.readAsDataURL(file);
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) processFile(file);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault(); setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) processFile(file);
-  };
-
-  const identify = async () => {
-    if (!image) return;
-    setLoading(true); setError(null); setResult(null);
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          messages: [{
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: { type: "base64", media_type: imageMime, data: image },
-              },
-              {
-                type: "text",
-                text: `You are an expert antiques and collectibles appraiser for Vintage Cash Cow, a UK-based buyer of second-hand items.
-
-Identify the item(s) in this image and provide:
-1. **Item Name** – what it is (be specific, e.g. "Omega Seamaster automatic wristwatch, circa 1970s")
-2. **Category** – e.g. Watches, Jewellery, Silver, Coins, Militaria, Porcelain, etc.
-3. **Key Details** – notable features, maker's marks, materials, condition observations
-4. **Estimated Value Range** – rough UK market value (GBP) based on what's visible
-5. **Collectibility** – brief note on demand / desirability
-6. **Recommended Action** – should VCC buy this? Any caveats?
-
-Be concise but thorough. If the image is unclear or shows multiple items, note that.`,
-              },
-            ],
-          }],
-        }),
-      });
-      if (!res.ok) throw new Error(`API error ${res.status}`);
-      const data = await res.json();
-      const text = data.content?.filter((b: { type: string }) => b.type === "text").map((b: { text: string }) => b.text).join("\n") ?? "No response.";
-      setResult(text);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const reset = () => { setImage(null); setResult(null); setError(null); if (fileInputRef.current) fileInputRef.current.value = ""; if (cameraInputRef.current) cameraInputRef.current.value = ""; };
-
-  // Convert result markdown-ish text to rendered sections
-  const renderResult = (text: string) => {
-    const lines = text.split("\n");
-    return lines.map((line, i) => {
-      if (line.startsWith("**") && line.includes("**")) {
-        // Bold heading line
-        const parts = line.split(/\*\*(.*?)\*\*/g);
-        return (
-          <p key={i} className="mb-2">
-            {parts.map((p, j) => j % 2 === 1 ? <strong key={j} className="text-[#5b4fa8]">{p}</strong> : p)}
-          </p>
-        );
-      }
-      if (line.trim() === "") return <div key={i} className="h-2" />;
-      return <p key={i} className="mb-1 text-sm text-gray-700">{line}</p>;
-    });
-  };
+  });
+  // Hands pointing to ~10:10 for classic presentation
+  const hourAngle  = (10 * 30 + 10 * 0.5 - 90) * (Math.PI / 180);
+  const minAngle   = (10 * 6 - 90) * (Math.PI / 180);
+  const secAngle   = (30 * 6 - 90) * (Math.PI / 180);
 
   return (
-    <section className="p-4 space-y-6 max-w-2xl mx-auto">
-      <div>
-        <h2 className="text-xl font-bold text-gray-900">Item Identifier</h2>
-        <p className="text-sm text-gray-500 mt-1">Upload or take a photo of an item to get an AI-powered identification and valuation.</p>
-      </div>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <defs>
+        <radialGradient id={`dial-${watch.id}`} cx="40%" cy="35%" r="65%">
+          <stop offset="0%" stopColor="rgba(255,255,255,0.15)" />
+          <stop offset="100%" stopColor="rgba(0,0,0,0)" />
+        </radialGradient>
+        <filter id={`glow-${watch.id}`}>
+          <feGaussianBlur stdDeviation="2" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+      </defs>
 
-      {/* Upload zone */}
-      {!image && (
-        <div
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={handleDrop}
-          className={`border-2 border-dashed rounded-2xl p-10 text-center transition-colors cursor-pointer ${dragOver ? "border-[#5b4fa8] bg-purple-50" : "border-gray-200 hover:border-[#5b4fa8] hover:bg-gray-50"}`}
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <Camera className="mx-auto text-gray-300 mb-3" size={48} />
-          <p className="font-semibold text-gray-600">Drop an image here or click to upload</p>
-          <p className="text-xs text-gray-400 mt-1">JPG, PNG, WEBP supported</p>
-          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
-        </div>
-      )}
+      {/* Case / bezel ring */}
+      {isSquare
+        ? <rect x="2" y="2" width={size-4} height={size-4} rx="8" fill={watch.caseColour} />
+        : <circle cx={cx} cy={cy} r={r-2} fill={watch.caseColour} />
+      }
 
-      {/* Camera capture (mobile) */}
-      {!image && (
-        <div className="flex gap-3">
-          <button
-            onClick={() => cameraInputRef.current?.click()}
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border border-[#5b4fa8] text-[#5b4fa8] text-sm font-semibold hover:bg-purple-50 transition"
-          >
-            <Camera size={16} /> Take Photo
-          </button>
-          <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileChange} />
-        </div>
-      )}
+      {/* Dial */}
+      {isSquare
+        ? <rect x="10" y="10" width={size-20} height={size-20} rx="4" fill={watch.dialArt} />
+        : <circle cx={cx} cy={cy} r={r-10} fill={watch.dialArt} />
+      }
 
-      {error && <p className="text-red-500 text-sm bg-red-50 rounded-lg px-4 py-2">{error}</p>}
+      {/* Dial shine */}
+      {isSquare
+        ? <rect x="10" y="10" width={size-20} height={size-20} rx="4" fill={`url(#dial-${watch.id})`} />
+        : <circle cx={cx} cy={cy} r={r-10} fill={`url(#dial-${watch.id})`} />
+      }
 
-      {/* Preview + controls */}
-      {image && !result && (
-        <div className="space-y-4">
-          <div className="rounded-2xl overflow-hidden border border-gray-100 shadow-sm">
-            <img src={`data:${imageMime};base64,${image}`} alt="Preview" className="w-full max-h-72 object-contain bg-gray-50" />
+      {/* Hour markers */}
+      {hourMarkers.map((m, i) => (
+        <line key={i} x1={m.x1} y1={m.y1} x2={m.x2} y2={m.y2}
+          stroke="rgba(255,255,255,0.8)" strokeWidth={m.major ? 2.5 : 1.2}
+          strokeLinecap="round" />
+      ))}
+
+      {/* Brand name */}
+      <text x={cx} y={cy - r * 0.22} textAnchor="middle"
+        fill="rgba(255,255,255,0.9)" fontSize={size * 0.085} fontWeight="600"
+        fontFamily="system-ui, sans-serif" letterSpacing="0.05em">
+        {watch.brand.toUpperCase().slice(0, 8)}
+      </text>
+
+      {/* Hour hand */}
+      <line x1={cx} y1={cy}
+        x2={cx + r * 0.48 * Math.cos(hourAngle)}
+        y2={cy + r * 0.48 * Math.sin(hourAngle)}
+        stroke="rgba(255,255,255,0.95)" strokeWidth={size * 0.038} strokeLinecap="round"
+        filter={`url(#glow-${watch.id})`} />
+
+      {/* Minute hand */}
+      <line x1={cx} y1={cy}
+        x2={cx + r * 0.66 * Math.cos(minAngle)}
+        y2={cy + r * 0.66 * Math.sin(minAngle)}
+        stroke="rgba(255,255,255,0.95)" strokeWidth={size * 0.026} strokeLinecap="round"
+        filter={`url(#glow-${watch.id})`} />
+
+      {/* Second hand */}
+      <line x1={cx - r * 0.18 * Math.cos(secAngle)} y1={cy - r * 0.18 * Math.sin(secAngle)}
+        x2={cx + r * 0.74 * Math.cos(secAngle)}
+        y2={cy + r * 0.74 * Math.sin(secAngle)}
+        stroke="#ef4444" strokeWidth={size * 0.014} strokeLinecap="round" />
+
+      {/* Centre pip */}
+      <circle cx={cx} cy={cy} r={size * 0.03} fill="rgba(255,255,255,0.9)" />
+    </svg>
+  );
+}
+
+const WIZARD_STEPS = [
+  {
+    id: "brand",
+    emoji: "🏷️",
+    title: "Whose name is on the dial?",
+    subtitle: "Look at the centre or top of the watch face",
+    type: "brand-grid" as const,
+    options: [
+      { value: "Rolex",            emoji: "👑", label: "Rolex",            sub: "Geneva, CH" },
+      { value: "Omega",            emoji: "Ω",  label: "Omega",            sub: "Biel, CH" },
+      { value: "Seiko",            emoji: "🇯🇵", label: "Seiko",            sub: "Tokyo, JP" },
+      { value: "Citizen",          emoji: "☀️", label: "Citizen",          sub: "Tokyo, JP" },
+      { value: "Casio",            emoji: "🕹️", label: "Casio",            sub: "Tokyo, JP" },
+      { value: "TAG Heuer",        emoji: "🏎️", label: "TAG Heuer",        sub: "La Chaux, CH" },
+      { value: "IWC",              emoji: "✈️", label: "IWC",              sub: "Schaffhausen, CH" },
+      { value: "Breitling",        emoji: "🛩️", label: "Breitling",        sub: "Grenchen, CH" },
+      { value: "Cartier",          emoji: "💍", label: "Cartier",          sub: "Paris, FR" },
+      { value: "Patek Philippe",   emoji: "💎", label: "Patek Philippe",   sub: "Geneva, CH" },
+      { value: "Tissot",           emoji: "🏔️", label: "Tissot",          sub: "Le Locle, CH" },
+      { value: "Junghans",         emoji: "🔲", label: "Junghans",        sub: "Schramberg, DE" },
+      { value: "Hamilton",         emoji: "🦅", label: "Hamilton",        sub: "Lancaster, US" },
+      { value: "Vostok",           emoji: "⭐", label: "Vostok",          sub: "Chistopol, RU" },
+      { value: "A. Lange & Söhne", emoji: "🏰", label: "A. Lange & Söhne", sub: "Glashütte, DE" },
+    ],
+  },
+  {
+    id: "movement",
+    emoji: "⚙️",
+    title: "How does it run?",
+    subtitle: "Pick the closest match",
+    type: "list" as const,
+    options: [
+      { value: "automatic", emoji: "🌀", label: "Automatic",    hint: "Winds itself from wrist movement — a rotor spins inside" },
+      { value: "manual",    emoji: "🔄", label: "Manual wind",  hint: "You turn the crown regularly to keep it running" },
+      { value: "quartz",    emoji: "🔋", label: "Quartz",       hint: "Battery-powered, ticks once per second" },
+      { value: "solar",     emoji: "☀️", label: "Solar",        hint: "Charged by light — Citizen Eco-Drive, Casio Tough Solar" },
+      { value: "digital",   emoji: "💡", label: "Digital",      hint: "Shows numbers rather than hands" },
+    ],
+  },
+  {
+    id: "caseShape",
+    emoji: "⌚",
+    title: "What shape is the case?",
+    subtitle: "The outline of the main watch body",
+    type: "shape-grid" as const,
+    options: [
+      { value: "round",       emoji: "⭕", label: "Round",        sub: "Most common" },
+      { value: "square",      emoji: "🟦", label: "Square",       sub: "e.g. G-Shock, Monaco" },
+      { value: "rectangular", emoji: "🔲", label: "Rectangular",  sub: "e.g. Tank, Santos" },
+      { value: "cushion",     emoji: "🔳", label: "Cushion",      sub: "Square with rounded corners" },
+    ],
+  },
+  {
+    id: "dialColour",
+    emoji: "🎨",
+    title: "What colour is the dial?",
+    subtitle: "The face of the watch — not the case",
+    type: "colour-grid" as const,
+    options: [
+      { value: "black",     colour: "#111",     label: "Black" },
+      { value: "white",     colour: "#f5f5f0",  label: "White" },
+      { value: "blue",      colour: "#1a3a6e",  label: "Blue" },
+      { value: "silver",    colour: "#b0b0b8",  label: "Silver" },
+      { value: "green",     colour: "#1a4a2a",  label: "Green" },
+      { value: "champagne", colour: "#c8a96e",  label: "Champagne" },
+      { value: "khaki",     colour: "#7a6a4a",  label: "Khaki" },
+      { value: "orange",    colour: "#c04a10",  label: "Orange" },
+    ],
+  },
+  {
+    id: "bracelet",
+    emoji: "⛓️",
+    title: "What's it on?",
+    subtitle: "Strap or bracelet type",
+    type: "list" as const,
+    options: [
+      { value: "metal",   emoji: "🔗", label: "Metal bracelet",    hint: "Stainless steel, gold-tone, or two-tone links" },
+      { value: "leather", emoji: "🟤", label: "Leather strap",     hint: "Brown, black, or coloured leather" },
+      { value: "rubber",  emoji: "⬛", label: "Rubber / silicone", hint: "Sport or dive watch" },
+      { value: "nato",    emoji: "🎽", label: "NATO / fabric",     hint: "Woven textile strap, often striped" },
+    ],
+  },
+];
+
+function scoreWatch(db: WatchDB, answers: Record<string, string>): number {
+  let score = 0;
+  if (answers.brand && db.brand === answers.brand) score += 100;
+  if (answers.movement && db.movement.includes(answers.movement)) score += 20;
+  if (answers.caseShape && db.caseShape.includes(answers.caseShape)) score += 15;
+  if (answers.dialColour && db.dialColour.includes(answers.dialColour)) score += 15;
+  if (answers.bracelet && db.bracelet.includes(answers.bracelet)) score += 10;
+  return score;
+}
+
+function WatchWizardView() {
+  const [step, setStep]               = useState(0);
+  const [answers, setAnswers]         = useState<Record<string, string>>({});
+  const [animating, setAnimating]     = useState(false);
+  const [showResult, setShowResult]   = useState(false);
+  const [revealed, setRevealed]       = useState(false);
+  const [activeMatch, setActiveMatch] = useState(0);
+  const resultRef                     = useRef<HTMLDivElement>(null);
+
+  const total    = WIZARD_STEPS.length;
+  const progress = (step / total) * 100;
+
+  const handleAnswer = (key: string, value: string) => {
+    const newAnswers = { ...answers, [key]: value };
+    setAnswers(newAnswers);
+    setAnimating(true);
+    setTimeout(() => {
+      setAnimating(false);
+      if (step < total - 1) {
+        setStep(step + 1);
+      } else {
+        setShowResult(true);
+        setTimeout(() => {
+          resultRef.current?.scrollIntoView({ behavior: "smooth" });
+          setTimeout(() => setRevealed(true), 400);
+        }, 100);
+      }
+    }, 280);
+  };
+
+  const reset = () => {
+    setStep(0); setAnswers({}); setShowResult(false);
+    setRevealed(false); setActiveMatch(0);
+  };
+
+  const ranked = [...WATCH_DATABASE]
+    .map(w => ({ watch: w, score: scoreWatch(w, answers) }))
+    .sort((a, b) => b.score - a.score);
+  const topMatches = ranked.slice(0, 3).filter(r => r.score > 0);
+  const best = topMatches[0];
+
+  const current = WIZARD_STEPS[step];
+
+  return (
+    <section className="min-h-screen bg-gray-950 text-white">
+
+      {/* ── HEADER ── */}
+      <div className="sticky top-0 z-20 bg-gray-950/95 backdrop-blur border-b border-gray-800/60">
+        <div className="max-w-lg mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">🪄</span>
+            <span className="font-bold text-sm tracking-wide">Watch Wizard</span>
           </div>
-          <div className="flex gap-3">
-            <button
-              onClick={identify}
-              disabled={loading}
-              className="flex-1 py-3 rounded-xl bg-[#5b4fa8] text-white font-semibold text-sm hover:bg-[#4a3d96] transition disabled:opacity-60"
-            >
-              {loading ? "Identifying…" : "Identify Item"}
-            </button>
-            <button onClick={reset} className="px-4 py-3 rounded-xl border border-gray-200 text-gray-500 text-sm hover:bg-gray-50 transition">
-              Clear
-            </button>
-          </div>
-          {loading && (
-            <div className="flex items-center gap-2 text-sm text-gray-400">
-              <RefreshCw size={14} className="animate-spin" /> Analysing image…
+          {!showResult && (
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-gray-400">{step + 1} / {total}</span>
+              <div className="w-24 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-violet-500 to-purple-400 rounded-full transition-all duration-500"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
             </div>
           )}
+          {showResult && (
+            <button onClick={reset} className="text-xs text-gray-400 hover:text-white transition flex items-center gap-1">
+              ↩ Start over
+            </button>
+          )}
         </div>
-      )}
+      </div>
 
-      {/* Result */}
-      {result && (
-        <div className="space-y-4">
-          <div className="rounded-2xl overflow-hidden border border-gray-100 shadow-sm">
-            <img src={`data:${imageMime};base64,${image}`} alt="Preview" className="w-full max-h-48 object-contain bg-gray-50" />
+      <div className="max-w-lg mx-auto px-4 pb-20">
+
+        {/* ── INTRO (step 0 only) ── */}
+        {step === 0 && !showResult && (
+          <div className="pt-8 pb-6 text-center">
+            <div className="text-6xl mb-4">⌚</div>
+            <h1 className="text-3xl font-black tracking-tight mb-2">What's your watch?</h1>
+            <p className="text-gray-400 text-sm leading-relaxed max-w-xs mx-auto">
+              Answer 5 quick questions and we'll identify your watch — with the full story behind it.
+            </p>
           </div>
-          <div className="bg-white rounded-2xl border border-purple-100 p-5 shadow-sm">
-            <h3 className="text-sm font-bold text-[#5b4fa8] uppercase tracking-wide mb-3">Identification Result</h3>
-            <div className="leading-relaxed">{renderResult(result)}</div>
+        )}
+
+        {/* ── QUESTION CARD ── */}
+        {!showResult && (
+          <div className={`transition-all duration-280 ${animating ? "opacity-0 translate-y-2" : "opacity-100 translate-y-0"}`}>
+
+            {/* Answer chips */}
+            {step > 0 && (
+              <div className="flex flex-wrap gap-2 pt-4 pb-5">
+                {WIZARD_STEPS.slice(0, step).map((s) => {
+                  const opt = s.options.find(o => o.value === answers[s.id]);
+                  return opt ? (
+                    <button
+                      key={s.id}
+                      onClick={() => { setShowResult(false); setStep(WIZARD_STEPS.findIndex(ws => ws.id === s.id)); }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-full text-xs text-gray-300 hover:border-violet-500 hover:text-white transition"
+                    >
+                      {"emoji" in opt && <span>{(opt as { emoji: string }).emoji}</span>}
+                      {"colour" in opt && (
+                        <span className="w-3 h-3 rounded-full border border-gray-600 flex-shrink-0" style={{ background: (opt as { colour: string }).colour }} />
+                      )}
+                      <span>{opt.label}</span>
+                      <span className="text-gray-600 ml-0.5">✕</span>
+                    </button>
+                  ) : null;
+                })}
+              </div>
+            )}
+
+            <div className="mb-3">
+              <p className="text-2xl font-black tracking-tight">{current.title}</p>
+              <p className="text-gray-400 text-xs mt-1">{current.subtitle}</p>
+            </div>
+
+            {/* Brand grid */}
+            {current.type === "brand-grid" && (
+              <div className="grid grid-cols-2 gap-2.5">
+                {current.options.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => handleAnswer(current.id, opt.value)}
+                    className="flex items-center gap-3 p-3.5 rounded-2xl bg-gray-900 border border-gray-800 hover:border-violet-500 hover:bg-gray-800 active:scale-95 transition-all text-left group"
+                  >
+                    <span className="text-2xl flex-shrink-0">{"emoji" in opt ? (opt as {emoji:string}).emoji : ""}</span>
+                    <div className="min-w-0">
+                      <p className="font-bold text-sm text-white group-hover:text-violet-300 truncate">{opt.label}</p>
+                      {"sub" in opt && <p className="text-xs text-gray-500">{(opt as {sub:string}).sub}</p>}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Shape grid */}
+            {current.type === "shape-grid" && (
+              <div className="grid grid-cols-2 gap-3">
+                {current.options.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => handleAnswer(current.id, opt.value)}
+                    className="flex flex-col items-center gap-2 p-5 rounded-2xl bg-gray-900 border border-gray-800 hover:border-violet-500 hover:bg-gray-800 active:scale-95 transition-all group"
+                  >
+                    <span className="text-3xl">{"emoji" in opt ? (opt as {emoji:string}).emoji : ""}</span>
+                    <p className="font-bold text-sm text-white group-hover:text-violet-300">{opt.label}</p>
+                    {"sub" in opt && <p className="text-xs text-gray-500">{(opt as {sub:string}).sub}</p>}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Colour grid */}
+            {current.type === "colour-grid" && (
+              <div className="grid grid-cols-4 gap-3">
+                {current.options.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => handleAnswer(current.id, opt.value)}
+                    className="flex flex-col items-center gap-2 active:scale-95 transition-all group"
+                  >
+                    <div
+                      className="w-16 h-16 rounded-2xl border-2 border-gray-700 group-hover:border-violet-400 transition-all shadow-lg"
+                      style={{ background: (opt as {colour:string}).colour }}
+                    />
+                    <p className="text-xs text-gray-400 group-hover:text-white transition">{opt.label}</p>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* List */}
+            {current.type === "list" && (
+              <div className="space-y-2.5">
+                {current.options.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => handleAnswer(current.id, opt.value)}
+                    className="w-full flex items-center gap-4 p-4 rounded-2xl bg-gray-900 border border-gray-800 hover:border-violet-500 hover:bg-gray-800 active:scale-95 transition-all text-left group"
+                  >
+                    <span className="text-2xl flex-shrink-0">{"emoji" in opt ? (opt as {emoji:string}).emoji : ""}</span>
+                    <div className="flex-1">
+                      <p className="font-bold text-sm text-white group-hover:text-violet-300">{opt.label}</p>
+                      {"hint" in opt && <p className="text-xs text-gray-500 mt-0.5">{(opt as {hint:string}).hint}</p>}
+                    </div>
+                    <span className="text-gray-700 group-hover:text-violet-400 text-lg transition">›</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-          <button
-            onClick={reset}
-            className="w-full py-3 rounded-xl border border-gray-200 text-gray-600 text-sm font-semibold hover:bg-gray-50 transition"
-          >
-            Identify Another Item
-          </button>
-        </div>
-      )}
+        )}
+
+        {/* ── RESULTS ── */}
+        {showResult && (
+          <div ref={resultRef} className="pt-6 space-y-5">
+
+            {topMatches.length === 0 ? (
+              <div className="text-center py-16">
+                <div className="text-5xl mb-4">🔮</div>
+                <p className="text-xl font-black">Mystery watch!</p>
+                <p className="text-gray-400 text-sm mt-2">Nothing in our database matched exactly — our team would love to take a look.</p>
+              </div>
+            ) : (
+              <>
+                {/* Reveal moment */}
+                <div className={`transition-all duration-700 ${revealed ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
+
+                  {/* Watch face hero */}
+                  <div className="flex flex-col items-center py-8 relative">
+                    <div className={`transition-all duration-1000 ${revealed ? "scale-100 opacity-100" : "scale-75 opacity-0"}`}>
+                      <div className="relative">
+                        <div className="absolute inset-0 rounded-full bg-violet-500/20 blur-2xl scale-110" />
+                        <WatchFacePreview watch={best.watch} size={180} />
+                      </div>
+                    </div>
+                    <div className={`text-center mt-5 transition-all duration-700 delay-300 ${revealed ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"}`}>
+                      <p className="text-xs text-violet-400 font-semibold uppercase tracking-widest mb-1">Best match</p>
+                      <p className="text-3xl font-black tracking-tight">{best.watch.brand}</p>
+                      <p className="text-xl font-bold text-violet-300">{best.watch.model}</p>
+                      <p className="text-sm text-gray-400 mt-1">{best.watch.countryFlag} {best.watch.country} · {best.watch.era[0]}–</p>
+                      <p className="text-sm text-gray-300 italic mt-2 max-w-xs mx-auto">"{best.watch.tagline}"</p>
+                    </div>
+                  </div>
+
+                  {/* Match tabs (if alternatives) */}
+                  {topMatches.length > 1 && (
+                    <div className="flex gap-2 mb-4">
+                      {topMatches.map((m, i) => (
+                        <button
+                          key={m.watch.id}
+                          onClick={() => setActiveMatch(i)}
+                          className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all ${activeMatch === i
+                            ? "bg-violet-600 text-white"
+                            : "bg-gray-800 text-gray-400 hover:text-white border border-gray-700"
+                          }`}
+                        >
+                          {i === 0 ? "Best match" : i === 1 ? "Also possible" : "Or maybe…"}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Detail cards for active match */}
+                  {topMatches[activeMatch] && (() => {
+                    const w = topMatches[activeMatch].watch;
+                    return (
+                      <div className="space-y-3">
+
+                        {/* Mini watch + description */}
+                        <div className="bg-gray-900 rounded-3xl p-5 border border-gray-800 flex gap-4 items-start">
+                          <div className="flex-shrink-0">
+                            <WatchFacePreview watch={w} size={72} />
+                          </div>
+                          <div>
+                            <p className="font-black text-base">{w.brand} {w.model}</p>
+                            <p className="text-xs text-gray-400 mb-2">{w.countryFlag} {w.country}</p>
+                            <p className="text-sm text-gray-300 leading-relaxed">{w.description}</p>
+                          </div>
+                        </div>
+
+                        {/* Heritage */}
+                        <div className="bg-gray-900 rounded-3xl p-5 border border-gray-800">
+                          <p className="text-xs font-bold text-violet-400 uppercase tracking-widest mb-2">🏛 Heritage</p>
+                          <p className="text-sm text-gray-300 leading-relaxed">{w.heritage}</p>
+                        </div>
+
+                        {/* Worn by */}
+                        <div className="bg-gray-900 rounded-3xl p-5 border border-gray-800">
+                          <p className="text-xs font-bold text-violet-400 uppercase tracking-widest mb-2">👤 Worn by</p>
+                          <p className="text-sm text-gray-200 font-semibold">{w.wornBy}</p>
+                        </div>
+
+                        {/* Collectibility */}
+                        <div className="bg-gray-900 rounded-3xl p-5 border border-gray-800">
+                          <p className="text-xs font-bold text-violet-400 uppercase tracking-widest mb-2">🏆 Collectibility</p>
+                          <p className="text-sm text-gray-300 leading-relaxed">{w.collectibility}</p>
+                        </div>
+
+                        {/* Fun fact */}
+                        <div className="bg-gradient-to-br from-violet-900/40 to-purple-900/20 rounded-3xl p-5 border border-violet-800/40">
+                          <p className="text-xs font-bold text-violet-400 uppercase tracking-widest mb-2">💡 Did you know?</p>
+                          <p className="text-sm text-gray-200 leading-relaxed italic">"{w.funFact}"</p>
+                        </div>
+
+                        {/* Era tags */}
+                        <div className="bg-gray-900 rounded-3xl p-5 border border-gray-800">
+                          <p className="text-xs font-bold text-violet-400 uppercase tracking-widest mb-3">📅 Production Eras</p>
+                          <div className="flex flex-wrap gap-2">
+                            {w.era.sort().map(e => (
+                              <span key={e} className="px-3 py-1 bg-gray-800 border border-gray-700 rounded-full text-xs text-gray-300">{e}</span>
+                            ))}
+                          </div>
+                        </div>
+
+                      </div>
+                    );
+                  })()}
+
+                </div>
+
+                {/* CTA */}
+                <div className="bg-gray-900 border border-gray-800 rounded-3xl p-6 text-center mt-4">
+                  <div className="text-4xl mb-3">💬</div>
+                  <p className="font-black text-lg mb-1">Want to know what it's worth?</p>
+                  <p className="text-sm text-gray-400 mb-4 leading-relaxed">
+                    Our experts can give you a proper assessment — free and with no obligation to sell.
+                  </p>
+                  <a
+                    href="https://vintagecashcow.co.uk/contact"
+                    target="_blank" rel="noreferrer"
+                    className="block w-full py-4 bg-violet-600 hover:bg-violet-500 active:scale-98 text-white font-black rounded-2xl transition-all text-base"
+                  >
+                    Speak to our team →
+                  </a>
+                  <p className="text-xs text-gray-600 mt-4 leading-relaxed">
+                    Guidance only — not a professional valuation. Vintage Cash Cow accepts no liability for decisions made based on this tool.
+                  </p>
+                </div>
+
+                <button
+                  onClick={reset}
+                  className="w-full py-3.5 rounded-2xl border border-gray-800 text-gray-400 text-sm font-bold hover:border-gray-600 hover:text-white transition"
+                >
+                  🔄 Identify another watch
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -4127,7 +4876,7 @@ export default function App() {
   const VCC_GA4_LABEL = "Vintage Cash Cow - GA4";
   const AV_GA4_LABEL  = "Arcavindi - GA4";
   const VCC_GSC_URL   = "https://www.vintagecashcow.co.uk/";
-  const AV_GSC_URL    = "https://www.arcavindi.com/";
+  const AV_GSC_URL    = "https://www.vintage.com/";
 
   const loadProperties = useCallback(async (token: string) => {
     const [a, b] = await Promise.all([
@@ -4157,8 +4906,8 @@ export default function App() {
     // Auto-select Arcavindi GA4 property for snapshot
     const av = props.find((p) => p.label === AV_GA4_LABEL || p.label.toLowerCase().includes("arcavindi"));
     if (av) setAvGA4Id(av.value);
-    // Auto-select Arcavindi GSC property for snapshot
-    const avGsc = gscProps.find((p) => p.value === AV_GSC_URL || p.value === AV_GSC_URL.replace(/\/$/, "") || p.value.toLowerCase().includes("arcavindi"));
+    // Auto-select vintage.com GSC property for snapshot
+    const avGsc = gscProps.find((p) => p.value === AV_GSC_URL || p.value === AV_GSC_URL.replace(/\/$/, "") || p.value.toLowerCase().includes("vintage.com"));
     if (avGsc) setAvGscId(avGsc.value);
   }, []);
 
@@ -6996,7 +7745,7 @@ export default function App() {
     { key: "dailySnapshot", label: "Daily Snapshot", icon: Activity },
     { key: "dailyStandup",  label: "Daily Stand-Up", icon: Activity },
     { key: "crm",           label: "CRM",            icon: Building2 },
-    { key: "itemIdentifier", label: "Item Identifier", icon: Camera },
+    { key: "watchWizard", label: "Watch Wizard", icon: Camera },
   ];
 
   const VIEW_TOOLTIPS: Record<ActiveView, string> = {
@@ -7016,7 +7765,7 @@ export default function App() {
     dailySnapshot: "Daily Snapshot — yesterday's GA4 + GSC (48h lag) non-brand and AIO metrics, ready to paste into Slack.",
     dailyStandup: "Daily Stand-Up — Fitbit-style SEO health check for VCC & Arcavindi, with deliverables section, ready to paste into Slack.",
     crm: "CRM — HubSpot contacts, companies, deals and pipeline overview.",
-    itemIdentifier: "Item Identifier — upload or photograph an item to get an AI-powered identification and valuation.",
+    watchWizard: "Watch Wizard — answer 5 quick questions to identify your watch",
   };
 
   const [isPdfBuilding, setIsPdfBuilding] = useState(false);
@@ -11081,7 +11830,7 @@ ${combinedHtml}
 
             {activeView === "crm" && <CrmView />}
 
-            {activeView === "itemIdentifier" && <ItemIdentifierView />}
+            {activeView === "watchWizard" && <WatchWizardView />}
 
             {activeView === "dailyStandup" && (() => {
               // ── helpers ──────────────────────────────────────────────────
