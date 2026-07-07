@@ -6231,7 +6231,8 @@ export default function App() {
       );
     }
     if (avGA4Id && avGscId) {
-      const label = ga4Properties.find((p) => p.value === avGA4Id)?.label ?? "Vintage.com";
+      // GA4 property is still named "Arcavindi - GA4" in Google, so don't use its live label for display
+      const label = "Vintage.com";
       jobs.push(
         fetchForGA4(avGA4Id, label, avGscId)
           .then((r) => { if (isCurrent()) setSnapAV(r); })
@@ -11848,7 +11849,7 @@ ${combinedHtml}
                 return ` (${sign}${d.toFixed(1)}% WoW)`;
               };
               // Health score: composite of pages indexed + total queries trend + NB clicks % of target
-              const computeHealthScore = (abbr: "VCC" | "AV") => {
+              const computeHealthScore = (abbr: "VCC" | "Vintage.com") => {
                 const piCur  = parseNum(abbr === "VCC" ? standupVccPagesIndexed  : standupAvPagesIndexed);
                 const piPrev = parseNum(abbr === "VCC" ? standupVccPagesIndexedPrev : standupAvPagesIndexedPrev);
                 const qCur   = parseNum(abbr === "VCC" ? standupVccTotalQueries  : standupAvTotalQueries);
@@ -11886,7 +11887,7 @@ ${combinedHtml}
                 lines.push(`📋 *SEO Daily Stand-Up — ${today}*`);
                 lines.push(``);
 
-                const addSite = (abbr: "VCC" | "AV", fullName: string) => {
+                const addSite = (abbr: "VCC" | "Vintage.com", fullName: string) => {
                   const snap = abbr === "VCC" ? snapVCC : snapAV;
                   const piCur  = parseNum(abbr === "VCC" ? standupVccPagesIndexed  : standupAvPagesIndexed);
                   const piPrev = parseNum(abbr === "VCC" ? standupVccPagesIndexedPrev : standupAvPagesIndexedPrev);
@@ -11894,7 +11895,7 @@ ${combinedHtml}
                   const qPrev  = parseNum(abbr === "VCC" ? standupVccTotalQueriesPrev : standupAvTotalQueriesPrev);
                   const hs     = computeHealthScore(abbr);
                   const hl     = healthLabel(hs);
-                  lines.push(`*${fullName} (${abbr}) — SEO Health: ${hl.emoji} ${hs}/100 ${hl.label.toUpperCase()}*`);
+                  lines.push(`*${fullName}${abbr !== fullName ? ` (${abbr})` : ""} — SEO Health: ${hl.emoji} ${hs}/100 ${hl.label.toUpperCase()}*`);
                   lines.push(``);
                   lines.push(`*Site Health Vitals*`);
                   if (piCur !== null) {
@@ -11921,7 +11922,7 @@ ${combinedHtml}
                 };
 
                 addSite("VCC", "Vintage Cash Cow");
-                addSite("AV", "Vintage.com");
+                addSite("Vintage.com", "Vintage.com");
 
                 lines.push(`─────────────────────────`);
                 lines.push(``);
@@ -11983,7 +11984,7 @@ ${combinedHtml}
               };
 
               // ── SiteHealthBlock component ─────────────────────────────────
-              const SiteHealthBlock = ({ abbr, fullName }: { abbr: "VCC" | "AV"; fullName: string }) => {
+              const SiteHealthBlock = ({ abbr, fullName }: { abbr: "VCC" | "Vintage.com"; fullName: string }) => {
                 const snap = abbr === "VCC" ? snapVCC : snapAV;
                 const hs   = computeHealthScore(abbr);
                 const hl   = healthLabel(hs);
@@ -12004,7 +12005,7 @@ ${combinedHtml}
                       <div className="flex items-center gap-3">
                         <HealthRing score={hs} size={76} />
                         <div>
-                          <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{abbr}</div>
+                          {abbr !== fullName && <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{abbr}</div>}
                           <div className="text-base font-black text-gray-900 leading-tight">{fullName}</div>
                           <div className={`text-xs font-bold mt-0.5 ${hl.color}`}>{hl.emoji} SEO Health: {hl.label}</div>
                         </div>
@@ -12137,7 +12138,7 @@ ${combinedHtml}
                     {/* Site blocks */}
                     <div className="space-y-6">
                       <SiteHealthBlock abbr="VCC" fullName="Vintage Cash Cow" />
-                      <SiteHealthBlock abbr="AV"  fullName="Vintage.com" />
+                      <SiteHealthBlock abbr="Vintage.com"  fullName="Vintage.com" />
                     </div>
 
                     {/* Deliverables section */}
@@ -12160,7 +12161,7 @@ ${combinedHtml}
                             rows={5}
                             value={standupToDo}
                             onChange={e => setStandupToDo(e.target.value)}
-                            placeholder={"• Review AV blog content for AIO optimisation\n• Keyword research for new product category\n• Internal link audit on /sell-your-items cluster"}
+                            placeholder={"• Review Vintage.com blog content for AIO optimisation\n• Keyword research for new product category\n• Internal link audit on /sell-your-items cluster"}
                             className="w-full text-xs border border-gray-200 rounded-xl px-3 py-2.5 bg-gray-50 focus:outline-none focus:ring-1 focus:ring-green-400 resize-none leading-relaxed"
                           />
                         </div>
@@ -12204,7 +12205,7 @@ ${combinedHtml}
                   lines.push(``);
                 };
                 addProp(snapVCC, "VCC");
-                addProp(snapAV, "AV");
+                addProp(snapAV, "Vintage.com");
                 return lines.join("\n").trim();
               };
 
@@ -12386,8 +12387,8 @@ ${combinedHtml}
                           <Select value={selectedGSC} onChange={setSelectedGSC} options={gscProperties} placeholder="Select VCC GSC" disabled={gscProperties.length === 0} />
                         </div>
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1.5 font-medium">AV GSC Property</label>
-                          <Select value={avGscId} onChange={setAvGscId} options={gscProperties} placeholder="Select AV GSC" disabled={gscProperties.length === 0} />
+                          <label className="block text-xs text-gray-500 mb-1.5 font-medium">Vintage.com GSC Property</label>
+                          <Select value={avGscId} onChange={setAvGscId} options={gscProperties} placeholder="Select Vintage.com GSC" disabled={gscProperties.length === 0} />
                         </div>
                       </div>
                     </div>
@@ -12414,7 +12415,7 @@ ${combinedHtml}
                             <p>Loading Vintage.com…</p>
                           </div>
                         )}
-                        {snapAV && <PropBlock s={snapAV} abbr="AV" />}
+                        {snapAV && <PropBlock s={snapAV} abbr="Vintage.com" />}
                         {(snapVCC || snapAV) && <SlackPreview buildMessage={buildSlack} />}
                       </div>
                     )}
