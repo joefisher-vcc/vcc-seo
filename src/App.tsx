@@ -27,6 +27,9 @@ import {
   LogOut,
   Building2,
   Camera,
+  Megaphone,
+  Wallet,
+  Percent,
 } from "lucide-react";
 import {
   LineChart,
@@ -214,7 +217,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "crm" | "watchWizard";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "crm" | "watchWizard" | "googleAds";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -2690,6 +2693,392 @@ function ProductCategoriesView({
   );
 }
 
+
+// ─── Google Ads View ────────────────────────────────────────────────────────────
+// Self-contained: reads Paid Search (Google Ads) traffic straight out of the GA4
+// Data API for the selected property. Two rolling 28-day windows (current vs the
+// 28 days before) power the KPI deltas and the rising/falling landing pages.
+// Ad spend / CPC / ROAS cards only appear if the GA4 property has a Google Ads
+// link configured — those metrics fail gracefully (and are simply hidden) if not.
+
+interface GAdsDailyRow    { date: string; sessions: number; conversions: number }
+interface GAdsCampaignRow { campaign: string; sessions: number; users: number; conversions: number }
+interface GAdsLandingRow  { page: string; sessions: number; sessionsCmp: number; pct: number; conversions: number }
+interface GAdsDeviceRow   { device: string; sessions: number }
+interface GAdsTotals      { users: number; sessions: number; conversions: number; engagementRate: number }
+interface GAdsCostTotals  { cost: number; clicks: number; cpc: number; roas: number; impressions: number }
+
+const GADS_PIE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#e9d5ff"];
+
+function gadsRows(data: unknown): GA4ApiRow[] {
+  const rows = (data as { rows?: GA4ApiRow[] } | null)?.rows;
+  return Array.isArray(rows) ? rows : [];
+}
+function gadsNum(v: string | undefined): number { return v ? parseFloat(v) || 0 : 0; }
+
+interface GoogleAdsViewProps {
+  selectedGA4: string;
+  accessToken: string;
+  ga4Properties: { value: string; label: string }[];
+  setSelectedGA4: (v: string) => void;
+}
+
+function GoogleAdsView({ selectedGA4, accessToken, ga4Properties, setSelectedGA4 }: GoogleAdsViewProps) {
+  const [loading, setLoading]           = useState(false);
+  const [totals, setTotals]             = useState<GAdsTotals | null>(null);
+  const [totalsCmp, setTotalsCmp]       = useState<GAdsTotals | null>(null);
+  const [daily, setDaily]               = useState<GAdsDailyRow[]>([]);
+  const [campaigns, setCampaigns]       = useState<GAdsCampaignRow[]>([]);
+  const [devices, setDevices]           = useState<GAdsDeviceRow[]>([]);
+  const [landingCur, setLandingCur]     = useState<{ page: string; sessions: number; conversions: number }[]>([]);
+  const [landingCmp, setLandingCmp]     = useState<{ page: string; sessions: number }[]>([]);
+  const [costTotals, setCostTotals]     = useState<GAdsCostTotals | null>(null);
+  const [costCampaigns, setCostCampaigns] = useState<(GAdsCampaignRow & GAdsCostTotals)[]>([]);
+  const [error, setError]               = useState<string | null>(null);
+
+  const campSort    = useTableSort(campaigns, { key: "sessions", dir: "desc" });
+  const costSort     = useTableSort(costCampaigns, { key: "cost", dir: "desc" });
+
+  useEffect(() => {
+    if (!selectedGA4 || !accessToken) return;
+    let cancelled = false;
+
+    (async () => {
+      setLoading(true);
+      setError(null);
+      const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+      const base    = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
+      const CUR  = { startDate: "27daysAgo", endDate: "today" };
+      const CMP  = { startDate: "55daysAgo", endDate: "28daysAgo" };
+      const paidFilter = { dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS" as const, value: "Paid Search" } } } };
+
+      const post = (body: object) => fetch(base, { method: "POST", headers, body: JSON.stringify(body) }).then((r) => r.json());
+
+      try {
+        const [
+          totalsCurJson, totalsCmpJson, dailyJson, campaignsJson, devicesJson, landingCurJson, landingCmpJson,
+        ] = await Promise.all([
+          post({ dateRanges: [CUR], metrics: [{ name: "activeUsers" }, { name: "sessions" }, { name: "conversions" }, { name: "engagementRate" }], ...paidFilter }),
+          post({ dateRanges: [CMP], metrics: [{ name: "activeUsers" }, { name: "sessions" }, { name: "conversions" }, { name: "engagementRate" }], ...paidFilter }),
+          post({ dateRanges: [CUR], dimensions: [{ name: "date" }], metrics: [{ name: "sessions" }, { name: "conversions" }], orderBys: [{ dimension: { dimensionName: "date" } }], limit: 35, ...paidFilter }),
+          post({ dateRanges: [CUR], dimensions: [{ name: "sessionCampaignName" }], metrics: [{ name: "sessions" }, { name: "activeUsers" }, { name: "conversions" }], orderBys: [{ metric: { metricName: "sessions" }, desc: true }], limit: 25, ...paidFilter }),
+          post({ dateRanges: [CUR], dimensions: [{ name: "deviceCategory" }], metrics: [{ name: "sessions" }], orderBys: [{ metric: { metricName: "sessions" }, desc: true }], limit: 6, ...paidFilter }),
+          post({ dateRanges: [CUR], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "sessions" }, { name: "conversions" }], orderBys: [{ metric: { metricName: "sessions" }, desc: true }], limit: 300, ...paidFilter }),
+          post({ dateRanges: [CMP], dimensions: [{ name: "landingPagePlusQueryString" }], metrics: [{ name: "sessions" }], orderBys: [{ metric: { metricName: "sessions" }, desc: true }], limit: 300, ...paidFilter }),
+        ]);
+
+        if (cancelled) return;
+
+        const toTotals = (j: unknown): GAdsTotals => {
+          const r = gadsRows(j)[0];
+          const m = r?.metricValues ?? [];
+          return { users: gadsNum(m[0]?.value), sessions: gadsNum(m[1]?.value), conversions: gadsNum(m[2]?.value), engagementRate: gadsNum(m[3]?.value) };
+        };
+        setTotals(toTotals(totalsCurJson));
+        setTotalsCmp(toTotals(totalsCmpJson));
+
+        setDaily(gadsRows(dailyJson).map((r) => ({
+          date: formatGa4Date(r.dimensionValues[0].value),
+          sessions: gadsNum(r.metricValues[0]?.value),
+          conversions: gadsNum(r.metricValues[1]?.value),
+        })));
+
+        setCampaigns(gadsRows(campaignsJson).map((r) => ({
+          campaign: r.dimensionValues[0].value || "(not set)",
+          sessions: gadsNum(r.metricValues[0]?.value),
+          users: gadsNum(r.metricValues[1]?.value),
+          conversions: gadsNum(r.metricValues[2]?.value),
+        })));
+
+        setDevices(gadsRows(devicesJson).map((r) => ({
+          device: r.dimensionValues[0].value,
+          sessions: gadsNum(r.metricValues[0]?.value),
+        })));
+
+        setLandingCur(gadsRows(landingCurJson).map((r) => ({
+          page: r.dimensionValues[0].value,
+          sessions: gadsNum(r.metricValues[0]?.value),
+          conversions: gadsNum(r.metricValues[1]?.value),
+        })));
+        setLandingCmp(gadsRows(landingCmpJson).map((r) => ({
+          page: r.dimensionValues[0].value,
+          sessions: gadsNum(r.metricValues[0]?.value),
+        })));
+      } catch {
+        if (!cancelled) setError("Couldn't load Google Ads data from GA4. Please try again.");
+      }
+
+      // Ad spend / CPC / ROAS — only populated when the property has a Google Ads
+      // link. Kept in its own try/catch so a missing link never breaks the rest.
+      try {
+        const [costTotalsJson, costCampaignsJson] = await Promise.all([
+          post({ dateRanges: [CUR], metrics: [{ name: "advertiserAdCost" }, { name: "advertiserAdClicks" }, { name: "advertiserAdCostPerClick" }, { name: "returnOnAdSpend" }, { name: "advertiserAdImpressions" }] }),
+          post({ dateRanges: [CUR], dimensions: [{ name: "sessionCampaignName" }], metrics: [{ name: "sessions" }, { name: "advertiserAdCost" }, { name: "advertiserAdClicks" }, { name: "returnOnAdSpend" }], orderBys: [{ metric: { metricName: "advertiserAdCost" }, desc: true }], limit: 25, ...paidFilter }),
+        ]);
+        if (cancelled) return;
+        const ctRow = gadsRows(costTotalsJson)[0];
+        if (ctRow) {
+          const m = ctRow.metricValues ?? [];
+          const cost = gadsNum(m[0]?.value);
+          const clicks = gadsNum(m[1]?.value);
+          setCostTotals({ cost, clicks, cpc: gadsNum(m[2]?.value), roas: gadsNum(m[3]?.value), impressions: gadsNum(m[4]?.value) });
+        }
+        const cRows = gadsRows(costCampaignsJson);
+        if (cRows.length > 0) {
+          setCostCampaigns(cRows.map((r) => ({
+            campaign: r.dimensionValues[0].value || "(not set)",
+            sessions: gadsNum(r.metricValues[0]?.value),
+            users: 0,
+            conversions: 0,
+            cost: gadsNum(r.metricValues[1]?.value),
+            clicks: gadsNum(r.metricValues[2]?.value),
+            cpc: 0,
+            roas: gadsNum(r.metricValues[3]?.value),
+            impressions: 0,
+          })));
+        }
+      } catch {
+        // Google Ads not linked to this GA4 property — silently skip the spend/ROAS cards.
+      }
+
+      if (!cancelled) setLoading(false);
+    })();
+
+    return () => { cancelled = true; };
+  }, [selectedGA4, accessToken]);
+
+  const { rising, falling } = useMemo(() => {
+    if (landingCmp.length === 0) return { rising: [] as GAdsLandingRow[], falling: [] as GAdsLandingRow[] };
+    const cmpMap = new Map(landingCmp.map((r) => [r.page, r.sessions]));
+    const withChange: GAdsLandingRow[] = landingCur
+      .filter((r) => r.sessions >= 5 || (cmpMap.get(r.page) ?? 0) >= 5)
+      .map((r) => {
+        const cmpSessions = cmpMap.get(r.page) ?? 0;
+        const pct = cmpSessions > 0 ? ((r.sessions - cmpSessions) / cmpSessions) * 100 : (r.sessions > 0 ? 100 : 0);
+        return { page: r.page, sessions: r.sessions, sessionsCmp: cmpSessions, pct, conversions: r.conversions };
+      });
+    const rising  = withChange.filter((r) => r.pct > 0 && r.sessionsCmp > 0).sort((a, b) => b.pct - a.pct).slice(0, 8);
+    const falling = withChange.filter((r) => r.pct < 0).sort((a, b) => a.pct - b.pct).slice(0, 8);
+    return { rising, falling };
+  }, [landingCur, landingCmp]);
+
+  const hasAdsLink = costTotals !== null;
+
+  if (!selectedGA4) return (
+    <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center shadow-sm">
+      <Megaphone size={28} className="text-purple-200 mx-auto mb-3" />
+      <p className="text-sm text-gray-400">Connect a GA4 property to view Google Ads data.</p>
+    </div>
+  );
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="bg-purple-50 border border-purple-100 rounded-xl p-2"><Megaphone size={16} className="text-purple-700" /></div>
+          <div>
+            <h2 className="text-sm font-bold text-gray-900">Google Ads</h2>
+            <p className="text-xs text-gray-400">Paid Search traffic from GA4 · last 28 days vs the 28 days before</p>
+          </div>
+        </div>
+        <div className="max-w-[220px] w-full min-w-[180px]">
+          <Select value={selectedGA4} onChange={setSelectedGA4} options={ga4Properties} placeholder="Select GA4 Property" disabled={ga4Properties.length === 0} />
+        </div>
+      </div>
+
+      {error && <p className="text-sm text-red-500">{error}</p>}
+      {loading && !totals && <Spinner />}
+
+      {totals && (
+        <div className={`space-y-4 ${loading ? "opacity-60" : ""}`}>
+          {/* KPI row */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <HoverTooltip tip="Sessions from Google Ads (Paid Search channel) in the last 28 days, vs the 28 days before.">
+              <KpiCard label="Paid Sessions" value={totals.sessions.toLocaleString()} icon={MousePointerClick} cmpValue={totalsCmp?.sessions} cmpLabel="prev 28 days" />
+            </HoverTooltip>
+            <HoverTooltip tip="Active users who arrived via a Google Ads click in the last 28 days.">
+              <KpiCard label="Paid Users" value={totals.users.toLocaleString()} icon={Users} cmpValue={totalsCmp?.users} cmpLabel="prev 28 days" />
+            </HoverTooltip>
+            <HoverTooltip tip="GA4 key events (conversions) recorded from Google Ads sessions.">
+              <KpiCard label="Conversions" value={totals.conversions.toLocaleString()} icon={TrendingUp} cmpValue={totalsCmp?.conversions} cmpLabel="prev 28 days" />
+            </HoverTooltip>
+            <HoverTooltip tip="Share of Google Ads sessions that were engaged (lasted 10s+, had a conversion, or 2+ pageviews).">
+              <KpiCard label="Engagement Rate" value={`${(totals.engagementRate * 100).toFixed(1)}%`} icon={Activity} cmpValue={totalsCmp ? totalsCmp.engagementRate * 100 : undefined} cmpLabel="prev 28 days" />
+            </HoverTooltip>
+          </div>
+
+          {hasAdsLink && costTotals && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <HoverTooltip tip="Total Google Ads spend attributed to this property in the last 28 days (requires a linked Google Ads account).">
+                <KpiCard label="Ad Spend" value={`£${costTotals.cost.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} icon={Wallet} />
+              </HoverTooltip>
+              <HoverTooltip tip="Total ad clicks reported by Google Ads.">
+                <KpiCard label="Ad Clicks" value={costTotals.clicks.toLocaleString()} icon={MousePointerClick} />
+              </HoverTooltip>
+              <HoverTooltip tip="Average cost per click across all Google Ads campaigns.">
+                <KpiCard label="Avg CPC" value={`£${costTotals.cpc.toFixed(2)}`} icon={Wallet} />
+              </HoverTooltip>
+              <HoverTooltip tip="Return on ad spend — revenue attributed to Google Ads divided by spend.">
+                <KpiCard label="ROAS" value={`${costTotals.roas.toFixed(2)}x`} icon={Percent} />
+              </HoverTooltip>
+            </div>
+          )}
+          {!hasAdsLink && !loading && (
+            <p className="text-[11px] text-gray-400 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
+              Spend, CPC and ROAS aren't shown because this GA4 property doesn't have a Google Ads account linked (or the link has no recent cost data). Traffic, conversions and page-level data above use GA4's own channel grouping and work either way.
+            </p>
+          )}
+
+          {/* Trend chart */}
+          <ChartCard title="Google Ads Traffic Trend" tip="Daily sessions and conversions from the Paid Search channel over the last 28 days.">
+            <ResponsiveContainer width="100%" height={240}>
+              <AreaChart data={daily} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                <defs>
+                  <linearGradient id="gadsSessions" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#7e22ce" stopOpacity={0.25} />
+                    <stop offset="95%" stopColor="#7e22ce" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3e8ff" />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={40} />
+                <Tooltip {...chartTooltipStyle} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Area type="monotone" dataKey="sessions" name="Sessions" stroke="#7e22ce" strokeWidth={2} fill="url(#gadsSessions)" />
+                <Line type="monotone" dataKey="conversions" name="Conversions" stroke="#f59e0b" strokeWidth={2} dot={false} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </ChartCard>
+
+          {/* Rising & Falling landing pages */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <ChartCard title="Rising Pages (Google Ads)" tip="Landing pages whose Paid Search sessions grew the most vs the previous 28-day period.">
+              {rising.length === 0 ? (
+                <p className="text-gray-400 text-sm py-4 text-center">No rising pages found</p>
+              ) : (
+                <div className="space-y-2">
+                  {rising.map((r, i) => (
+                    <div key={i} className="flex items-center gap-3 py-1.5 border-b border-gray-50 last:border-0">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-gray-800 truncate"><UrlLink url={r.page} /></p>
+                        <p className="text-[10px] text-gray-400">{r.sessions.toLocaleString()} sessions · {r.sessionsCmp.toLocaleString()} prev</p>
+                      </div>
+                      <div className="flex items-center gap-1 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5 shrink-0">
+                        <TrendingUp size={10} className="text-emerald-600" />
+                        <span className="text-[10px] font-bold text-emerald-700">+{r.pct.toFixed(0)}%</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </ChartCard>
+            <ChartCard title="Falling Pages (Google Ads)" tip="Landing pages whose Paid Search sessions dropped the most vs the previous 28-day period.">
+              {falling.length === 0 ? (
+                <p className="text-gray-400 text-sm py-4 text-center">No falling pages found</p>
+              ) : (
+                <div className="space-y-2">
+                  {falling.map((r, i) => (
+                    <div key={i} className="flex items-center gap-3 py-1.5 border-b border-gray-50 last:border-0">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-gray-800 truncate"><UrlLink url={r.page} /></p>
+                        <p className="text-[10px] text-gray-400">{r.sessions.toLocaleString()} sessions · {r.sessionsCmp.toLocaleString()} prev</p>
+                      </div>
+                      <div className="flex items-center gap-1 bg-red-50 border border-red-200 rounded-full px-2 py-0.5 shrink-0">
+                        <TrendingDown size={10} className="text-red-500" />
+                        <span className="text-[10px] font-bold text-red-600">{r.pct.toFixed(0)}%</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </ChartCard>
+          </div>
+
+          {/* Campaigns + Devices */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <ChartCard title="Top Campaigns" tip="Google Ads campaigns ranked by sessions in the last 28 days, from GA4's sessionCampaignName dimension.">
+              {campaigns.length === 0 ? (
+                <p className="text-gray-400 text-sm py-4 text-center">No campaign data found</p>
+              ) : (
+                <ScrollTable maxH="260px">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 z-10 bg-white shadow-sm">
+                      <tr className="border-b border-gray-100">
+                        <SortableTh label="Campaign" sortKey="campaign" sort={campSort.sort} onToggle={campSort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
+                        <SortableTh label="Sessions" sortKey="sessions" sort={campSort.sort} onToggle={campSort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
+                        <SortableTh label="Users" sortKey="users" sort={campSort.sort} onToggle={campSort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
+                        <SortableTh label="Conv." sortKey="conversions" sort={campSort.sort} onToggle={campSort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {campSort.sorted.map((c, i) => (
+                        <tr key={i} className="border-b border-gray-50">
+                          <td className="py-1.5 font-medium text-gray-700 max-w-[180px] truncate" title={c.campaign}>{c.campaign}</td>
+                          <td className="py-1.5 font-semibold">{c.sessions.toLocaleString()}</td>
+                          <td className="py-1.5 text-gray-500">{c.users.toLocaleString()}</td>
+                          <td className="py-1.5 text-gray-500">{c.conversions.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </ScrollTable>
+              )}
+            </ChartCard>
+            <ChartCard title="Device Split" tip="Google Ads sessions split by device category over the last 28 days.">
+              {devices.length === 0 ? (
+                <p className="text-gray-400 text-sm py-4 text-center">No device data found</p>
+              ) : (
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie data={devices.map((d) => ({ name: d.device, value: d.sessions }))} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} innerRadius={38} paddingAngle={2}>
+                      {devices.map((_, i) => <Cell key={i} fill={GADS_PIE_COLORS[i % GADS_PIE_COLORS.length]} />)}
+                    </Pie>
+                    <Tooltip {...chartTooltipStyle} />
+                    <Legend wrapperStyle={{ fontSize: 10 }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </ChartCard>
+          </div>
+
+          {/* Cost / ROAS by campaign — only when Google Ads is linked */}
+          {hasAdsLink && costCampaigns.length > 0 && (
+            <ChartCard title="Campaign Spend &amp; ROAS" tip="Spend, clicks and return on ad spend per campaign, sourced from GA4's linked Google Ads cost data.">
+              <ScrollTable maxH="260px">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 z-10 bg-white shadow-sm">
+                    <tr className="border-b border-gray-100">
+                      <SortableTh label="Campaign" sortKey="campaign" sort={costSort.sort} onToggle={costSort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
+                      <SortableTh label="Spend" sortKey="cost" sort={costSort.sort} onToggle={costSort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
+                      <SortableTh label="Clicks" sortKey="clicks" sort={costSort.sort} onToggle={costSort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
+                      <SortableTh label="Sessions" sortKey="sessions" sort={costSort.sort} onToggle={costSort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
+                      <SortableTh label="ROAS" sortKey="roas" sort={costSort.sort} onToggle={costSort.toggle} className="text-left py-2 text-gray-400 font-semibold text-[10px]" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {costSort.sorted.map((c, i) => (
+                      <tr key={i} className="border-b border-gray-50">
+                        <td className="py-1.5 font-medium text-gray-700 max-w-[180px] truncate" title={c.campaign}>{c.campaign}</td>
+                        <td className="py-1.5 font-semibold">£{c.cost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                        <td className="py-1.5 text-gray-500">{c.clicks.toLocaleString()}</td>
+                        <td className="py-1.5 text-gray-500">{c.sessions.toLocaleString()}</td>
+                        <td className="py-1.5 text-gray-500">{c.roas.toFixed(2)}x</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </ScrollTable>
+            </ChartCard>
+          )}
+        </div>
+      )}
+
+      {!loading && !totals && !error && (
+        <p className="text-sm text-gray-400 py-4">No Google Ads (Paid Search) traffic found for this property in the last 28 days.</p>
+      )}
+    </section>
+  );
+}
 
 // ─── Brand vs Non-Brand View ───────────────────────────────────────────────────
 
@@ -7733,6 +8122,7 @@ export default function App() {
   const VIEWS: { key: ActiveView; label: string; icon: React.ElementType }[] = [
     { key: "ga4",   label: "GA4",      icon: Users },
     { key: "gsc",   label: "GSC",      icon: Search },
+    { key: "googleAds", label: "Google Ads", icon: Megaphone },
     { key: "blend", label: "Blend",    icon: Layers },
     { key: "intl",  label: "International", icon: Globe },
     { key: "opportunities", label: "SEO Opportunities", icon: Lightbulb },
@@ -7753,6 +8143,7 @@ export default function App() {
   const VIEW_TOOLTIPS: Record<ActiveView, string> = {
     ga4: "Google Analytics 4 — view traffic, sessions, pageviews, and bounce rate for your property.",
     gsc: "Google Search Console — track your search impressions, clicks, CTR, and average ranking position.",
+    googleAds: "Google Ads — Paid Search traffic, rising & falling landing pages, top campaigns, and spend/ROAS (if linked) straight from GA4.",
     blend: "Blend — overlay GA4 and GSC data side-by-side on a single timeline to spot correlations.",
     intl: "International — see how your site performs across different countries in both GA4 and GSC.",
     opportunities: "SEO Opportunities — queries with high impressions but low CTR that are ripe for optimisation.",
@@ -9188,6 +9579,19 @@ ${combinedHtml}
                     <p className="text-sm text-gray-400 py-4">No event data for this name in the selected range.</p>
                   )}
                 </section>
+              </>
+            )}
+
+            {/* ── Google Ads ── */}
+            {activeView === "googleAds" && (
+              <>
+                <SectionDivider label="GOOGLE ADS" />
+                <GoogleAdsView
+                  selectedGA4={selectedGA4}
+                  accessToken={accessToken}
+                  ga4Properties={ga4Properties}
+                  setSelectedGA4={setSelectedGA4}
+                />
               </>
             )}
 
