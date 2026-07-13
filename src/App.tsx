@@ -30,6 +30,10 @@ import {
   Megaphone,
   Wallet,
   Percent,
+  ListChecks,
+  Link2,
+  FilePlus2,
+  Trash2,
 } from "lucide-react";
 import {
   LineChart,
@@ -217,7 +221,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "crm" | "watchWizard" | "googleAds";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "crm" | "watchWizard" | "googleAds" | "seoActions";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -4181,6 +4185,408 @@ function scoreWatch(db: WatchDB, answers: Record<string, string>): number {
   return score;
 }
 
+// ─── SEO Action Generator ───────────────────────────────────────────────────
+// Self-contained: turns raw GSC page-level data into a prioritised, self-refreshing
+// content-strategy action list. No manual curation — the rules below re-run every
+// time the tab loads, always against a rolling window anchored to "today", so the
+// list is automatically current on whatever cadence the team checks it (weekly is
+// the intended cadence, but it's really just "as fresh as the last page load").
+//
+// Deliberately CONTENT-strategy only (per Google's own guidance on quality &
+// site structure), not technical SEO — four levers, each mapped to one rule:
+//   1. Refresh content            — clicks decaying over the last ~8 weeks
+//   2. Add internal links/content — "striking distance" rankings (pos. 4–15,
+//                                    solid impressions) that need an authority push
+//   3. Create new page            — a category earning strong clicks-per-page
+//                                    from very few indexed pages (unmet demand)
+//   4. Remove & redirect          — pages with negligible clicks/impressions across
+//                                    GSC's full 16-month lookback (thin/duplicate
+//                                    content Google recommends consolidating, not
+//                                    silently deleting — hence "redirect", not just
+//                                    "remove")
+
+type SeoActionKind = "refresh" | "internalLinks" | "newPage" | "removeRedirect";
+type SeoActionLevel = "high" | "medium" | "low";
+
+interface SeoActionRow {
+  id: string;
+  kind: SeoActionKind;
+  priority: SeoActionLevel;
+  action: string;
+  url: string;       // page path, or the category name itself for "Create new page" rows
+  isCategoryRow: boolean;
+  category: string;
+  reason: string;
+  confidence: "High" | "Medium" | "Low";
+  impact: "High" | "Medium" | "Low";
+}
+
+const SEO_ACTION_KIND_META: Record<SeoActionKind, { label: string; icon: React.ElementType }> = {
+  refresh:        { label: "Refresh content",             icon: RefreshCw },
+  internalLinks:  { label: "Add internal links + content", icon: Link2 },
+  newPage:        { label: "Create new page",              icon: FilePlus2 },
+  removeRedirect: { label: "Remove & redirect",            icon: Trash2 },
+};
+
+const SEO_ACTION_PRIORITY_META: Record<SeoActionLevel, { label: string; emoji: string; badge: string }> = {
+  high:   { label: "High",   emoji: "🔴", badge: "bg-red-50 text-red-700 border-red-200" },
+  medium: { label: "Medium", emoji: "🟠", badge: "bg-amber-50 text-amber-700 border-amber-200" },
+  low:    { label: "Low",    emoji: "🟢", badge: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+};
+
+const SEO_ACTION_CONF_BADGE: Record<"High" | "Medium" | "Low", string> = {
+  High:   "bg-emerald-50 text-emerald-700",
+  Medium: "bg-amber-50 text-amber-700",
+  Low:    "bg-gray-100 text-gray-500",
+};
+
+/** Pull the /items-we-buy/{slug}/ category segment out of a GSC page path, if present. */
+function deriveCategorySlugFromPath(path: string): string | null {
+  const m = path.match(/^\/items-we-buy\/([^/?#]+)\/?/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/** Best-effort human label for a slug: match against known VCC categories, else title-case it. */
+function slugToCategoryLabel(slug: string, vccCategories: { name: string; parent: string; children: string[] }[]): string {
+  const found = vccCategories.find((c) => c.parent.replace(/\/$/, "").toLowerCase().endsWith("/" + slug));
+  if (found) return found.name;
+  return slug.split("-").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
+}
+
+interface SeoActionGeneratorViewProps {
+  selectedGSC: string;
+  accessToken: string;
+  vccCategories: { name: string; parent: string; children: string[] }[];
+}
+
+function SeoActionGeneratorView({ selectedGSC, accessToken, vccCategories }: SeoActionGeneratorViewProps) {
+  const [loading, setLoading]           = useState(false);
+  const [error, setError]               = useState<string | null>(null);
+  const [rows, setRows]                 = useState<SeoActionRow[]>([]);
+  const [generatedAt, setGeneratedAt]   = useState<Date | null>(null);
+  const [priorityFilter, setPriorityFilter] = useState("");
+  const [kindFilter, setKindFilter]         = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [search, setSearch]                 = useState("");
+
+  const generate = useCallback(async () => {
+    if (!selectedGSC || !accessToken) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const base    = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
+      const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+
+      const iso     = (d: Date) => d.toISOString().split("T")[0];
+      const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return iso(d); };
+
+      const CUR_START  = daysAgo(27);   // rolling last-28-day window
+      const CUR_END    = daysAgo(2);    // GSC data typically lags ~2 days
+      const PREV_START = daysAgo(55);   // the 28 days before that — an 8-week trend
+      const PREV_END   = daysAgo(28);
+      const LONG_START = daysAgo(16 * 30); // ~16 months — GSC's full retention window
+      const LONG_END   = CUR_END;
+
+      const post = (sd: string, ed: string) =>
+        fetch(base, { method: "POST", headers, body: JSON.stringify({ startDate: sd, endDate: ed, dimensions: ["page"], rowLimit: 5000 }) })
+          .then((r) => r.json()) as Promise<{ rows?: GSCApiRow[] }>;
+
+      const [curJson, prevJson, longJson] = await Promise.all([
+        post(CUR_START, CUR_END),
+        post(PREV_START, PREV_END),
+        post(LONG_START, LONG_END),
+      ]);
+
+      type PageStats = { clicks: number; impressions: number; ctr: number; position: number };
+      const toMap = (json: { rows?: GSCApiRow[] }) => {
+        const m = new Map<string, PageStats>();
+        (json.rows ?? []).forEach((r) => {
+          m.set(r.keys[0], { clicks: Math.round(r.clicks), impressions: Math.round(r.impressions), ctr: r.ctr, position: r.position });
+        });
+        return m;
+      };
+      const curMap  = toMap(curJson);
+      const prevMap = toMap(prevJson);
+      const longMap = toMap(longJson);
+
+      const generated: SeoActionRow[] = [];
+      const seenUrls  = new Set<string>();
+
+      // ── Rules 1 & 2: per-page, from the current window ──
+      curMap.forEach((cur, page) => {
+        const prevClicks = prevMap.get(page)?.clicks ?? 0;
+        const slug = deriveCategorySlugFromPath(page);
+        const category = slug ? slugToCategoryLabel(slug, vccCategories) : "Uncategorised";
+        let handled = false;
+
+        // Rule 1 — clicks decaying over the last 8 weeks → refresh content
+        if (prevClicks >= 10) {
+          const pct = ((cur.clicks - prevClicks) / prevClicks) * 100;
+          if (pct <= -20) {
+            const priority: SeoActionLevel = pct <= -40 ? "high" : "medium";
+            const confidence: "High" | "Medium" = prevClicks >= 20 ? "High" : "Medium";
+            const impact: "High" | "Medium" | "Low" = prevClicks >= 50 ? "High" : prevClicks >= 20 ? "Medium" : "Low";
+            generated.push({
+              id: `refresh-${page}`, kind: "refresh", priority, action: SEO_ACTION_KIND_META.refresh.label,
+              url: page, isCategoryRow: false, category,
+              reason: `Clicks down ${Math.abs(Math.round(pct))}% over the last 8 weeks (${prevClicks} → ${cur.clicks}). Refresh copy, update dates/pricing context and re-optimise for current search intent.`,
+              confidence, impact,
+            });
+            handled = true;
+            seenUrls.add(page);
+          }
+        }
+
+        // Rule 2 — "striking distance" rankings → add internal links + content
+        if (!handled && cur.impressions >= 300 && cur.position >= 4 && cur.position <= 15) {
+          const priority: SeoActionLevel = (cur.position <= 10 && cur.impressions >= 1000) ? "high" : "medium";
+          const confidence: "High" | "Medium" = cur.impressions >= 1000 ? "High" : "Medium";
+          const impact: "High" | "Medium" = cur.impressions >= 1000 ? "High" : "Medium";
+          generated.push({
+            id: `links-${page}`, kind: "internalLinks", priority, action: SEO_ACTION_KIND_META.internalLinks.label,
+            url: page, isCategoryRow: false, category,
+            reason: `Ranking ${cur.position.toFixed(1)} with ${cur.impressions.toLocaleString()} impressions but only ${cur.clicks} clicks — internal links from related pages plus expanded on-page content can push it toward page 1.`,
+            confidence, impact,
+          });
+          seenUrls.add(page);
+        }
+      });
+
+      // ── Rule 4 — negligible activity across the full 16-month window → remove & redirect ──
+      // Deliberately conservative: only flags pages that are silent long-term AND currently
+      // earning zero clicks, and always recommends a 301 redirect over outright deletion,
+      // in line with Google's guidance on consolidating rather than removing thin content.
+      longMap.forEach((long, page) => {
+        if (seenUrls.has(page)) return;
+        const curClicks = curMap.get(page)?.clicks ?? 0;
+        if (curClicks > 0) return;
+        if (long.clicks > 2 || long.impressions > 20) return;
+        const slug = deriveCategorySlugFromPath(page);
+        const category = slug ? slugToCategoryLabel(slug, vccCategories) : "Uncategorised";
+        generated.push({
+          id: `redirect-${page}`, kind: "removeRedirect", priority: "low", action: SEO_ACTION_KIND_META.removeRedirect.label,
+          url: page, isCategoryRow: false, category,
+          reason: `Negligible clicks or impressions across the last 16 months — likely thin or duplicate content. Consolidate into a stronger category page with a 301 redirect rather than deleting outright.`,
+          confidence: "Medium", impact: "Low",
+        });
+      });
+
+      // ── Rule 3 — category punching above its weight on very few pages → create new page ──
+      type CatAgg = { label: string; clicks: number; impressions: number; pages: Set<string> };
+      const catAgg = new Map<string, CatAgg>();
+      curMap.forEach((cur, page) => {
+        const slug = deriveCategorySlugFromPath(page);
+        if (!slug) return;
+        const label = slugToCategoryLabel(slug, vccCategories);
+        const agg = catAgg.get(slug) ?? { label, clicks: 0, impressions: 0, pages: new Set<string>() };
+        agg.clicks += cur.clicks;
+        agg.impressions += cur.impressions;
+        agg.pages.add(page);
+        catAgg.set(slug, agg);
+      });
+      const catList = Array.from(catAgg.values()).map((c) => ({
+        ...c, pageCount: c.pages.size, clicksPerPage: c.clicks / Math.max(c.pages.size, 1),
+      }));
+      const sortedCpp = catList.map((c) => c.clicksPerPage).filter((n) => n > 0).sort((a, b) => a - b);
+      const median = sortedCpp.length ? sortedCpp[Math.floor(sortedCpp.length / 2)] : 0;
+      catList.forEach((c) => {
+        if (median > 0 && c.pageCount <= 3 && c.clicks >= 15 && c.clicksPerPage >= median) {
+          const priority: SeoActionLevel = c.clicksPerPage >= median * 2 ? "high" : "medium";
+          generated.push({
+            id: `newpage-${c.label}`, kind: "newPage", priority, action: SEO_ACTION_KIND_META.newPage.label,
+            url: c.label, isCategoryRow: true, category: c.label,
+            reason: `${c.clicks} clicks across just ${c.pageCount} page${c.pageCount === 1 ? "" : "s"} — averaging ${c.clicksPerPage.toFixed(1)} clicks/page vs a site median of ${median.toFixed(1)}. Strong demand relative to content depth suggests room for another dedicated page.`,
+            confidence: c.clicks >= 30 ? "High" : "Medium",
+            impact: c.clicksPerPage >= median * 2 ? "High" : "Medium",
+          });
+        }
+      });
+
+      const priorityRank: Record<SeoActionLevel, number> = { high: 0, medium: 1, low: 2 };
+      const impactRank: Record<"High" | "Medium" | "Low", number> = { High: 0, Medium: 1, Low: 2 };
+      generated.sort((a, b) =>
+        priorityRank[a.priority] - priorityRank[b.priority] || impactRank[a.impact] - impactRank[b.impact]
+      );
+
+      setRows(generated.slice(0, 60));
+      setGeneratedAt(new Date());
+    } catch (e) {
+      console.error("SeoActionGeneratorView", e);
+      setError("Couldn't generate actions from Search Console data. Please try again.");
+    }
+    setLoading(false);
+    // NOTE: vccCategories is a fresh array literal every render (defined inline in the parent),
+    // so it's deliberately left out of the dependency list — matching the existing pattern used
+    // by fetchProductCategories elsewhere in this file — to avoid refetching on every render.
+  }, [selectedGSC, accessToken]);
+
+  useEffect(() => { if (selectedGSC && accessToken) void generate(); }, [selectedGSC, accessToken, generate]);
+
+  const categoryOptions = useMemo(() => {
+    const set = new Set(rows.map((r) => r.category));
+    return Array.from(set).sort().map((c) => ({ value: c, label: c }));
+  }, [rows]);
+
+  const filteredRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return rows.filter((r) => {
+      if (priorityFilter && r.priority !== priorityFilter) return false;
+      if (kindFilter && r.kind !== kindFilter) return false;
+      if (categoryFilter && r.category !== categoryFilter) return false;
+      if (q && !(r.url.toLowerCase().includes(q) || r.category.toLowerCase().includes(q) || r.reason.toLowerCase().includes(q))) return false;
+      return true;
+    });
+  }, [rows, priorityFilter, kindFilter, categoryFilter, search]);
+
+  const counts = useMemo(() => {
+    const c = { high: 0, medium: 0, low: 0 };
+    rows.forEach((r) => { c[r.priority]++; });
+    return c;
+  }, [rows]);
+
+  const exportCsv = useCallback(() => {
+    const header = ["Priority", "Action", "URL", "Category", "Reason", "Confidence", "Impact"];
+    const escape = (s: string) => `"${s.replace(/"/g, '""')}"`;
+    const lines = [header.join(",")].concat(
+      filteredRows.map((r) => [SEO_ACTION_PRIORITY_META[r.priority].label, r.action, r.url, r.category, r.reason, r.confidence, r.impact].map(escape).join(","))
+    );
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `seo-action-list-${new Date().toISOString().split("T")[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [filteredRows]);
+
+  if (!selectedGSC) return (
+    <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center shadow-sm">
+      <ListChecks size={28} className="text-purple-200 mx-auto mb-3" />
+      <p className="text-sm text-gray-400">Connect a Search Console property to generate SEO actions.</p>
+    </div>
+  );
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="bg-purple-50 border border-purple-100 rounded-xl p-2"><ListChecks size={16} className="text-purple-700" /></div>
+          <div>
+            <h2 className="text-sm font-bold text-gray-900">SEO Action Generator</h2>
+            <p className="text-xs text-gray-400">
+              {generatedAt ? `Generated ${generatedAt.toLocaleDateString()} at ${generatedAt.toLocaleTimeString()}` : "Generating…"} · rebuilds automatically from rolling GSC windows every time this loads
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={exportCsv} disabled={filteredRows.length === 0}
+            className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-purple-700 disabled:opacity-40 px-2.5 py-1.5 rounded-lg border border-gray-200 hover:border-purple-300 bg-white transition-colors">
+            Export CSV
+          </button>
+          <HoverTooltip tip="Re-run the rules against the latest Search Console data.">
+            <button type="button" onClick={() => void generate()} disabled={loading}
+              className="p-2 rounded-xl bg-gray-50 border border-gray-200 text-gray-400 hover:text-purple-700 hover:border-purple-300 disabled:opacity-40 transition-all">
+              <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+            </button>
+          </HoverTooltip>
+        </div>
+      </div>
+
+      {/* Methodology note */}
+      <div className="bg-purple-50/50 border border-purple-100 rounded-2xl p-4 text-xs text-gray-500 leading-relaxed">
+        <span className="font-semibold text-purple-700">Content strategy only</span> — this focuses on the four levers below, not technical SEO. Rules follow established practice (striking-distance keyword pushes, content-decay refreshes, and Google's guidance to consolidate rather than silently delete thin content):
+        <span className="inline-flex items-center gap-1 ml-1 mr-2"><RefreshCw size={11} className="inline" /> refresh decaying pages</span>
+        <span className="inline-flex items-center gap-1 mr-2"><Link2 size={11} className="inline" /> link/expand striking-distance pages</span>
+        <span className="inline-flex items-center gap-1 mr-2"><FilePlus2 size={11} className="inline" /> add pages to under-served, high-demand categories</span>
+        <span className="inline-flex items-center gap-1"><Trash2 size={11} className="inline" /> consolidate dead pages with a redirect</span>
+      </div>
+
+      {error && <p className="text-sm text-red-500">{error}</p>}
+
+      {/* KPI summary */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <KpiCard label="Total Actions" value={rows.length.toLocaleString()} icon={ListChecks}
+          onClick={() => { setPriorityFilter(""); }} active={priorityFilter === ""} />
+        <KpiCard label="High Priority" value={counts.high.toLocaleString()} icon={AlertTriangle}
+          onClick={() => setPriorityFilter(priorityFilter === "high" ? "" : "high")} active={priorityFilter === "high"} />
+        <KpiCard label="Medium Priority" value={counts.medium.toLocaleString()} icon={TrendingUp}
+          onClick={() => setPriorityFilter(priorityFilter === "medium" ? "" : "medium")} active={priorityFilter === "medium"} />
+        <KpiCard label="Low Priority" value={counts.low.toLocaleString()} icon={Layers}
+          onClick={() => setPriorityFilter(priorityFilter === "low" ? "" : "low")} active={priorityFilter === "low"} />
+      </div>
+
+      {/* Filters */}
+      <div className="flex items-center gap-2 flex-wrap bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
+        <Select value={priorityFilter} onChange={setPriorityFilter} placeholder="All priorities" className="w-40"
+          options={[{ value: "high", label: "🔴 High" }, { value: "medium", label: "🟠 Medium" }, { value: "low", label: "🟢 Low" }]} />
+        <Select value={kindFilter} onChange={setKindFilter} placeholder="All action types" className="w-56"
+          options={(Object.keys(SEO_ACTION_KIND_META) as SeoActionKind[]).map((k) => ({ value: k, label: SEO_ACTION_KIND_META[k].label }))} />
+        <Select value={categoryFilter} onChange={setCategoryFilter} placeholder="All categories" className="w-56" options={categoryOptions} />
+        <TextInput value={search} onChange={setSearch} placeholder="Search URL, category or reason…" className="flex-1 min-w-[200px]" />
+        {(priorityFilter || kindFilter || categoryFilter || search) && (
+          <button type="button" onClick={() => { setPriorityFilter(""); setKindFilter(""); setCategoryFilter(""); setSearch(""); }}
+            className="text-xs font-semibold text-gray-400 hover:text-purple-700 transition-colors">Clear</button>
+        )}
+      </div>
+
+      {loading && rows.length === 0 && <Spinner />}
+
+      {!loading && rows.length === 0 && !error && (
+        <p className="text-sm text-gray-400 py-6 text-center">No actions surfaced from the current data — either everything's healthy, or there isn't enough GSC history yet.</p>
+      )}
+
+      {rows.length > 0 && (
+        <div className={`bg-white border border-gray-100 rounded-2xl shadow-sm overflow-x-auto ${loading ? "opacity-60" : ""}`}>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100 text-left text-[11px] uppercase tracking-wide text-gray-400">
+                <th className="px-4 py-3 font-semibold">Priority</th>
+                <th className="px-4 py-3 font-semibold">Action</th>
+                <th className="px-4 py-3 font-semibold">URL</th>
+                <th className="px-4 py-3 font-semibold">Category</th>
+                <th className="px-4 py-3 font-semibold">Reason</th>
+                <th className="px-4 py-3 font-semibold">Confidence</th>
+                <th className="px-4 py-3 font-semibold">Impact</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows.map((r) => {
+                const KindIcon = SEO_ACTION_KIND_META[r.kind].icon;
+                const pMeta = SEO_ACTION_PRIORITY_META[r.priority];
+                return (
+                  <tr key={r.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50 transition-colors align-top">
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-xs font-semibold ${pMeta.badge}`}>
+                        {pMeta.emoji} {pMeta.label}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1.5 text-gray-700 font-medium">
+                        <KindIcon size={13} className="text-purple-500 shrink-0" /> {r.action}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 max-w-[220px]">
+                      {r.isCategoryRow ? <span className="text-gray-700">{r.url}</span> : <UrlLink url={r.url} className="text-gray-700" />}
+                    </td>
+                    <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{r.category}</td>
+                    <td className="px-4 py-3 text-gray-500 min-w-[280px]">{r.reason}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${SEO_ACTION_CONF_BADGE[r.confidence]}`}>{r.confidence}</span>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${SEO_ACTION_CONF_BADGE[r.impact]}`}>{r.impact}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function WatchWizardView() {
   const [step, setStep]               = useState(0);
   const [answers, setAnswers]         = useState<Record<string, string>>({});
@@ -8134,6 +8540,7 @@ export default function App() {
     { key: "conversions", label: "Conversions", icon: ShoppingCart },
     { key: "seoIssues", label: "SEO Issues", icon: AlertTriangle },
     { key: "performance", label: "Performance", icon: BarChart2 },
+    { key: "seoActions", label: "SEO Action Generator", icon: ListChecks },
     { key: "dailySnapshot", label: "Daily Snapshot", icon: Activity },
     { key: "dailyStandup",  label: "Daily Stand-Up", icon: Activity },
     { key: "crm",           label: "CRM",            icon: Building2 },
@@ -8155,6 +8562,7 @@ export default function App() {
     conversions: "Conversions — monitor key conversion events and goal completions tracked in GA4.",
     seoIssues: "SEO Issues — surface technical and on-page problems that may be hurting your rankings.",
     performance: "Performance — analyse Core Web Vitals and page speed signals from your Search Console data.",
+    seoActions: "SEO Action Generator — a weekly, self-refreshing content-strategy to-do list (refresh, internal links, new pages, redirects) built straight from GSC clicks and trends.",
     dailySnapshot: "Daily Snapshot — yesterday's GA4 + GSC (48h lag) non-brand and AIO metrics, ready to paste into Slack.",
     dailyStandup: "Daily Stand-Up — Fitbit-style SEO health check for VCC & Vintage.com, with deliverables section, ready to paste into Slack.",
     crm: "CRM — HubSpot contacts, companies, deals and pipeline overview.",
@@ -8166,7 +8574,7 @@ export default function App() {
   // the top nav stays scannable instead of a single row of 18 buttons.
   const NAV_CATEGORIES: { key: string; label: string; icon: React.ElementType; views: ActiveView[] }[] = [
     { key: "analytics", label: "Analytics", icon: BarChart3, views: ["ga4", "gsc", "googleAds", "blend", "intl"] },
-    { key: "seoInsights", label: "SEO Insights", icon: Lightbulb, views: ["opportunities", "gscOpportunities", "productCategories", "brandVsNonBrand", "nbSeo", "seoIssues", "performance"] },
+    { key: "seoInsights", label: "SEO Insights", icon: Lightbulb, views: ["opportunities", "gscOpportunities", "productCategories", "brandVsNonBrand", "nbSeo", "seoIssues", "performance", "seoActions"] },
     { key: "conversions", label: "Conversions", icon: ShoppingCart, views: ["conversions", "nbSignUps"] },
     { key: "reporting", label: "Reporting", icon: Activity, views: ["dailySnapshot", "dailyStandup"] },
     { key: "tools", label: "Tools", icon: Building2, views: ["crm", "watchWizard"] },
@@ -12283,6 +12691,18 @@ ${combinedHtml}
                   )}
                   </div>{/* end data-perf-section */}
                 </section>
+              </>
+            )}
+
+            {/* ── SEO Action Generator ── */}
+            {activeView === "seoActions" && (
+              <>
+                <SectionDivider label="SEO ACTION GENERATOR" />
+                <SeoActionGeneratorView
+                  selectedGSC={selectedGSC}
+                  accessToken={accessToken}
+                  vccCategories={VCC_CATEGORIES}
+                />
               </>
             )}
 
