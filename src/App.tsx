@@ -4294,6 +4294,17 @@ function siteHostFromGsc(selectedGSC: string): string {
   try { return new URL(selectedGSC).host.toLowerCase(); } catch { return selectedGSC.toLowerCase(); }
 }
 
+/** Resolve a possibly-relative URL against a base (mirrors UrlLink's own resolution logic),
+ *  used here instead of UrlLink because this table wraps full text rather than truncating it. */
+function resolveHrefWithBase(url: string, base: string): string {
+  if (!url) return "";
+  if (/^https?:\/\//i.test(url)) return url;
+  let resolvedBase = base;
+  if (resolvedBase && resolvedBase.startsWith("sc-domain:")) resolvedBase = "https://" + resolvedBase.slice("sc-domain:".length);
+  const fallbackBase = resolvedBase || (typeof window !== "undefined" ? window.location.origin : "");
+  try { return new URL(url, fallbackBase).toString(); } catch { return url; }
+}
+
 interface SeoActionGeneratorViewProps {
   selectedGA4: string;
   selectedGSC: string;
@@ -4302,6 +4313,7 @@ interface SeoActionGeneratorViewProps {
 }
 
 function SeoActionGeneratorView({ selectedGA4, selectedGSC, accessToken, vccCategories }: SeoActionGeneratorViewProps) {
+  const linkBase = useContext(UrlBaseContext);
   const [loading, setLoading]           = useState(false);
   const [error, setError]               = useState<string | null>(null);
   const [rows, setRows]                 = useState<SeoActionRow[]>([]);
@@ -4803,16 +4815,27 @@ function SeoActionGeneratorView({ selectedGA4, selectedGSC, accessToken, vccCate
                             {pMeta.emoji} {pMeta.label}
                           </span>
                         </td>
-                        <td className="px-3 py-3 overflow-hidden">
-                          <span className="flex items-center gap-1.5 text-gray-700 font-medium min-w-0">
-                            <KindIcon size={13} className="text-purple-500 shrink-0" />
-                            <span className="truncate min-w-0">{r.action}</span>
+                        <td className="px-3 py-3">
+                          <span className="flex items-start gap-1.5 text-gray-700 font-medium">
+                            <KindIcon size={13} className="text-purple-500 shrink-0 mt-0.5" />
+                            <span className="break-words">{r.action}</span>
                           </span>
                         </td>
-                        <td className="px-3 py-3 overflow-hidden">
-                          {r.isCategoryRow ? <span className="text-gray-700 truncate block">{r.url}</span> : <UrlLink url={r.url} className="text-gray-700 truncate" />}
+                        <td className="px-3 py-3">
+                          {r.isCategoryRow ? (
+                            <span className="text-gray-700 break-words">{r.url}</span>
+                          ) : (
+                            <span className="inline-flex items-start gap-1 text-gray-700">
+                              <span className="break-words" title={r.url}>{slugifyUrl(r.url)}</span>
+                              <a href={resolveHrefWithBase(r.url, linkBase)} target="_blank" rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()} title={`Open ${r.url} in new tab`}
+                                className="shrink-0 text-gray-400 hover:text-[#5b4fa8] transition-colors mt-0.5" aria-label="Open in new tab">
+                                <ArrowUpRight size={11} />
+                              </a>
+                            </span>
+                          )}
                         </td>
-                        <td className="px-3 py-3 text-gray-500 truncate">{r.category}</td>
+                        <td className="px-3 py-3 text-gray-500 break-words">{r.category}</td>
                         <td className="px-3 py-3 text-gray-500 break-words">{r.reason}</td>
                         <td className="px-3 py-3 text-gray-700 font-medium break-words">{r.upliftLabel}</td>
                         <td className="px-3 py-3 overflow-hidden">
