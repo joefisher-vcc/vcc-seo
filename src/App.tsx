@@ -8161,6 +8161,37 @@ export default function App() {
     watchWizard: "Watch Wizard — answer 5 quick questions to identify your watch",
   };
 
+  // ─── Mega Nav grouping ──────────────────────────────────────────────────────
+  // Groups the (growing) list of dashboard views into categorised dropdowns so
+  // the top nav stays scannable instead of a single row of 18 buttons.
+  const NAV_CATEGORIES: { key: string; label: string; icon: React.ElementType; views: ActiveView[] }[] = [
+    { key: "analytics", label: "Analytics", icon: BarChart3, views: ["ga4", "gsc", "googleAds", "blend", "intl"] },
+    { key: "seoInsights", label: "SEO Insights", icon: Lightbulb, views: ["opportunities", "gscOpportunities", "productCategories", "brandVsNonBrand", "nbSeo", "seoIssues", "performance"] },
+    { key: "conversions", label: "Conversions", icon: ShoppingCart, views: ["conversions", "nbSignUps"] },
+    { key: "reporting", label: "Reporting", icon: Activity, views: ["dailySnapshot", "dailyStandup"] },
+    { key: "tools", label: "Tools", icon: Building2, views: ["crm", "watchWizard"] },
+  ];
+
+  const [openNavCategory, setOpenNavCategory] = useState<string | null>(null);
+  const navRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (navRef.current && !navRef.current.contains(e.target as Node)) {
+        setOpenNavCategory(null);
+      }
+    }
+    function handleEscape(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpenNavCategory(null);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
+
   const [isPdfBuilding, setIsPdfBuilding] = useState(false);
 
   const downloadAllAsPdf = useCallback(async () => {
@@ -8327,34 +8358,68 @@ ${combinedHtml}
 
         {isLoggedIn && (
           <>
-            {/* ── View Switcher ── */}
-            <div className="flex items-center gap-1.5 bg-white border border-gray-100 rounded-2xl p-1.5 shadow-sm w-fit flex-wrap max-w-full">
-              {VIEWS.map(({ key, label, icon: Icon }) => {
-                const isActive = activeView === key;
-                const isNbSignUps = key === "nbSignUps";
-                const isDailySnapshot = key === "dailySnapshot";
-                let btnClass: string;
-                if (isNbSignUps) {
-                  btnClass = isActive
-                    ? "bg-emerald-700 text-white shadow-sm"
-                    : "bg-emerald-600 text-white hover:bg-emerald-700";
-                } else if (isDailySnapshot) {
-                  btnClass = isActive
-                    ? "bg-yellow-500 text-white shadow-sm"
-                    : "bg-yellow-400 text-yellow-900 hover:bg-yellow-500 hover:text-white";
-                } else {
-                  btnClass = isActive
-                    ? "bg-purple-700 text-white shadow-sm"
-                    : "text-gray-500 hover:text-gray-900 hover:bg-gray-50";
-                }
+            {/* ── Mega Nav ── */}
+            <div ref={navRef} className="relative z-30 flex items-center gap-1 bg-white border border-gray-100 rounded-2xl p-1.5 shadow-sm w-fit flex-wrap max-w-full">
+              {NAV_CATEGORIES.map((cat) => {
+                const CatIcon = cat.icon;
+                const isCatActive = cat.views.includes(activeView);
+                const isOpen = openNavCategory === cat.key;
                 return (
-                  <HoverTooltip key={key} tip={VIEW_TOOLTIPS[key as ActiveView]} className="">
-                    <button onClick={() => setActiveView(key)}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${btnClass}`}>
-                      <Icon size={14} />
-                      {label}
+                  <div key={cat.key} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setOpenNavCategory(isOpen ? null : cat.key)}
+                      aria-expanded={isOpen}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                        isCatActive
+                          ? "bg-purple-700 text-white shadow-sm"
+                          : isOpen
+                          ? "bg-gray-50 text-gray-900"
+                          : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                      }`}
+                    >
+                      <CatIcon size={14} />
+                      {cat.label}
+                      <ChevronDown size={13} className={`transition-transform ${isOpen ? "rotate-180" : ""}`} />
                     </button>
-                  </HoverTooltip>
+
+                    {isOpen && (
+                      <div className="absolute left-0 top-[calc(100%+8px)] w-80 bg-white border border-gray-100 rounded-2xl shadow-lg p-2 space-y-0.5 max-h-[70vh] overflow-y-auto">
+                        {cat.views.map((viewKey) => {
+                          const view = VIEWS.find((v) => v.key === viewKey);
+                          if (!view) return null;
+                          const Icon = view.icon;
+                          const isActive = activeView === viewKey;
+                          const isNbSignUps = viewKey === "nbSignUps";
+                          const isDailySnapshot = viewKey === "dailySnapshot";
+                          let itemClass: string;
+                          if (isNbSignUps) {
+                            itemClass = isActive ? "bg-emerald-700 text-white" : "hover:bg-emerald-50 text-gray-700";
+                          } else if (isDailySnapshot) {
+                            itemClass = isActive ? "bg-yellow-500 text-white" : "hover:bg-yellow-50 text-gray-700";
+                          } else {
+                            itemClass = isActive ? "bg-purple-700 text-white" : "hover:bg-gray-50 text-gray-700";
+                          }
+                          return (
+                            <button
+                              key={viewKey}
+                              type="button"
+                              onClick={() => { setActiveView(viewKey); setOpenNavCategory(null); }}
+                              className={`w-full flex items-start gap-2.5 px-3 py-2 rounded-xl text-left transition-colors ${itemClass}`}
+                            >
+                              <Icon size={15} className="mt-0.5 shrink-0" />
+                              <span className="flex flex-col min-w-0">
+                                <span className="text-sm font-semibold leading-tight">{view.label}</span>
+                                <span className={`text-xs leading-snug mt-0.5 line-clamp-2 ${isActive ? "text-white/80" : "text-gray-400"}`}>
+                                  {VIEW_TOOLTIPS[viewKey]}
+                                </span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
