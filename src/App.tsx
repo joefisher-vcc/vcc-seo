@@ -4771,14 +4771,14 @@ function SeoActionGeneratorView({ selectedGA4, selectedGSC, accessToken, vccCate
             <div className={`bg-white border border-gray-100 rounded-2xl shadow-sm overflow-x-auto ${loading ? "opacity-60" : ""}`}>
               <table className="w-full text-sm table-fixed">
                 <colgroup>
-                  <col className="w-[8%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[16%]" />
                   <col className="w-[13%]" />
-                  <col className="w-[15%]" />
-                  <col className="w-[9%]" />
-                  <col className="w-[28%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[27%]" />
                   <col className="w-[10%]" />
-                  <col className="w-[8.5%]" />
-                  <col className="w-[8.5%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[8%]" />
                 </colgroup>
                 <thead>
                   <tr className="border-b border-gray-100 text-left text-[11px] uppercase tracking-wide text-gray-400">
@@ -4798,15 +4798,15 @@ function SeoActionGeneratorView({ selectedGA4, selectedGSC, accessToken, vccCate
                     const pMeta = SEO_ACTION_PRIORITY_META[r.priority];
                     return (
                       <tr key={r.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50 transition-colors align-top">
-                        <td className="px-3 py-3">
+                        <td className="px-3 py-3 overflow-hidden">
                           <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-xs font-semibold whitespace-nowrap ${pMeta.badge}`}>
                             {pMeta.emoji} {pMeta.label}
                           </span>
                         </td>
-                        <td className="px-3 py-3">
-                          <span className="inline-flex items-center gap-1.5 text-gray-700 font-medium">
+                        <td className="px-3 py-3 overflow-hidden">
+                          <span className="flex items-center gap-1.5 text-gray-700 font-medium min-w-0">
                             <KindIcon size={13} className="text-purple-500 shrink-0" />
-                            <span className="truncate">{r.action}</span>
+                            <span className="truncate min-w-0">{r.action}</span>
                           </span>
                         </td>
                         <td className="px-3 py-3 overflow-hidden">
@@ -4815,10 +4815,10 @@ function SeoActionGeneratorView({ selectedGA4, selectedGSC, accessToken, vccCate
                         <td className="px-3 py-3 text-gray-500 truncate">{r.category}</td>
                         <td className="px-3 py-3 text-gray-500 break-words">{r.reason}</td>
                         <td className="px-3 py-3 text-gray-700 font-medium break-words">{r.upliftLabel}</td>
-                        <td className="px-3 py-3">
+                        <td className="px-3 py-3 overflow-hidden">
                           <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${SEO_ACTION_CONF_BADGE[r.confidence]}`}>{r.confidence}</span>
                         </td>
-                        <td className="px-3 py-3">
+                        <td className="px-3 py-3 overflow-hidden">
                           <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${SEO_ACTION_CONF_BADGE[r.impact]}`}>{r.impact}</span>
                         </td>
                       </tr>
