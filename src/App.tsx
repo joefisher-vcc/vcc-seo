@@ -4288,6 +4288,74 @@ function slugToCategoryLabel(slug: string, vccCategories: { name: string; parent
   return slug.split("-").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
 }
 
+const CATEGORY_KEYWORD_STOPWORDS = new Set([
+  "items", "buy", "and", "the", "for", "with", "your", "you", "our", "old", "how", "much", "are", "guide", "guides",
+  "worth", "value", "sell", "sale", "vintage", "antique", "blog", "reviews", "review", "what", "when", "where",
+]);
+
+/** Crude singular/plural normaliser (e.g. "cameras" → "camera") so a blog post using either
+ *  form still matches — good enough for keyword overlap, not meant to be a real stemmer. */
+function singularize(word: string): string {
+  if (word.length > 4 && word.endsWith("s") && !word.endsWith("ss")) return word.slice(0, -1);
+  return word;
+}
+
+/** Turns a path/slug into a lowercase, stopword-filtered, singularised word set for matching. */
+function pathToKeywordSet(path: string): Set<string> {
+  return new Set(
+    path.toLowerCase().replace(/^\/|\/$/g, "").split(/[/\-_.\s]+/)
+      .filter((w) => w.length >= 4 && !CATEGORY_KEYWORD_STOPWORDS.has(w))
+      .map(singularize)
+  );
+}
+
+/** Builds a { category label → distinctive keyword set } map straight from VCC_CATEGORIES —
+ *  no hand-typed dictionary, so it stays correct if categories are ever added/renamed. Keywords
+ *  come from the category's own URL slug, display name, AND its children's slugs (e.g. "Writing
+ *  Instruments" has no "pen" in its own slug, but its "fountain-pens" child does — without
+ *  pulling children in, a blog post about fountain pens would never match). */
+function buildCategoryKeywordMap(vccCategories: { name: string; parent: string; children: string[] }[]): { label: string; keywords: Set<string> }[] {
+  const byLabel = new Map<string, Set<string>>();
+  vccCategories.forEach((c) => {
+    const kws = byLabel.get(c.name) ?? new Set<string>();
+    pathToKeywordSet(c.parent).forEach((w) => kws.add(w));
+    pathToKeywordSet(c.name.replace(/&/g, " ")).forEach((w) => kws.add(w));
+    c.children.forEach((child) => pathToKeywordSet(child).forEach((w) => kws.add(w)));
+    byLabel.set(c.name, kws);
+  });
+  return Array.from(byLabel.entries()).map(([label, keywords]) => ({ label, keywords }));
+}
+
+
+/** Classifies a page (blog post, review, guide — anything outside /items-we-buy/) into a
+ *  category by keyword overlap with its URL, so content that clearly discusses e.g. "gold"
+ *  doesn't get thrown into "Uncategorised" just because it isn't a category hub page itself. */
+function classifyByKeywords(path: string, catKeywordMap: { label: string; keywords: Set<string> }[]): string | null {
+  const pathWords = pathToKeywordSet(path);
+  if (pathWords.size === 0) return null;
+  const scored = catKeywordMap
+    .map((c) => {
+      let score = 0;
+      c.keywords.forEach((k) => { if (pathWords.has(k)) score++; });
+      return { label: c.label, score };
+    })
+    .filter((c) => c.score > 0)
+    .sort((a, b) => b.score - a.score);
+  return scored.length > 0 ? scored[0].label : null;
+}
+
+/** Category label for a page: direct /items-we-buy/{slug}/ match first (authoritative), then a
+ *  keyword-based guess for everything else, falling back to "Uncategorised" only if neither hits. */
+function resolvePageCategory(
+  path: string,
+  vccCategories: { name: string; parent: string; children: string[] }[],
+  catKeywordMap: { label: string; keywords: Set<string> }[],
+): string {
+  const slug = deriveCategorySlugFromPath(path);
+  if (slug) return slugToCategoryLabel(slug, vccCategories);
+  return classifyByKeywords(path, catKeywordMap) ?? "Uncategorised";
+}
+
 /** Site host (no protocol/prefix) derived from a GSC property, for matching internal referrers. */
 function siteHostFromGsc(selectedGSC: string): string {
   if (selectedGSC.startsWith("sc-domain:")) return selectedGSC.slice("sc-domain:".length).toLowerCase();
@@ -4454,13 +4522,13 @@ function SeoActionGeneratorView({ selectedGA4, selectedGSC, accessToken, vccCate
       setGa4Available(ga4Ok);
 
       const generated: SeoActionRow[] = [];
+      const catKeywordMap = buildCategoryKeywordMap(vccCategories);
       const seenUrls  = new Set<string>();
 
       // ── Rules 1 & 2: per-page, from the current window ──
       curMap.forEach((cur, page) => {
         const prevClicks = prevMap.get(page)?.clicks ?? 0;
-        const slug = deriveCategorySlugFromPath(page);
-        const category = slug ? slugToCategoryLabel(slug, vccCategories) : "Uncategorised";
+        const category = resolvePageCategory(page, vccCategories, catKeywordMap);
 
         // Rule 1 — clicks decaying over a day-matched 8-week comparison → refresh content
         let handledDecline = false;
@@ -4524,8 +4592,7 @@ function SeoActionGeneratorView({ selectedGA4, selectedGSC, accessToken, vccCate
         const curClicks = curMap.get(page)?.clicks ?? 0;
         if (curClicks > 0) return;
         if (long.clicks > 2 || long.impressions > 20) return;
-        const slug = deriveCategorySlugFromPath(page);
-        const category = slug ? slugToCategoryLabel(slug, vccCategories) : "Uncategorised";
+        const category = resolvePageCategory(page, vccCategories, catKeywordMap);
         generated.push({
           id: `redirect-${page}`, kind: "removeRedirect", priority: "low", action: SEO_ACTION_KIND_META.removeRedirect.label,
           url: page, isCategoryRow: false, category,
