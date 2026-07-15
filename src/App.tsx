@@ -7379,6 +7379,28 @@ export default function App() {
       const aioSessionsCmp = (ga4AioSessCmp.rows   ?? []).reduce((s, r) => s + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
       const aioSignUpsCmp  = (ga4AioLeadsCmp.rows  ?? []).reduce((s, r) => s + parseInt(r.metricValues[0]?.value ?? "0", 10), 0);
 
+      // Round nb + total first, then derive branded as the remainder — guarantees
+      // nbLeads + brandLeads === fspLeads exactly, with no independent-rounding drift.
+      const fspLeadsR     = Math.round(totFsp);
+      const nbLeadsR      = Math.round(totNbLeads);
+      const brandLeadsR   = fspLeadsR - nbLeadsR;
+      const fspLeadsCmpR  = Math.round(totFspCmp);
+      const nbLeadsCmpR   = Math.round(totNbLeadsCmp);
+      const brandLeadsCmpR = fspLeadsCmpR - nbLeadsCmpR;
+
+      // Sanity checks — clicks and sign-ups must each split cleanly into brand + non-brand.
+      // (brandLeadsR is derived as a remainder for exactness; totBrandLeads is the raw
+      // reverse-ratio sum, so comparing the two also catches any logic drift.)
+      if (brandClicks + nbClicks !== totalClicks) {
+        console.warn(`[Daily Snapshot] ${propLabel}: brandClicks + nbClicks (${brandClicks + nbClicks}) !== totalClicks (${totalClicks})`);
+      }
+      if (Math.abs(Math.round(totBrandLeads) - brandLeadsR) > 1) {
+        console.warn(`[Daily Snapshot] ${propLabel}: branded sign-up remainder (${brandLeadsR}) drifted from raw reverse-ratio calc (${Math.round(totBrandLeads)})`);
+      }
+      if (Math.abs(Math.round(totBrandLeadsCmp) - brandLeadsCmpR) > 1) {
+        console.warn(`[Daily Snapshot] ${propLabel}: branded sign-up (cmp) remainder (${brandLeadsCmpR}) drifted from raw reverse-ratio calc (${Math.round(totBrandLeadsCmp)})`);
+      }
+
       return {
         propLabel, propId: ga4Id,
         period: { start: startDate, end: endDate },
@@ -7387,14 +7409,15 @@ export default function App() {
         totalClicks, totalClicksCmp,
         brandClicks, brandClicksCmp,
         nbClicks, nbClicksCmp,
-        nbLeads: Math.round(totNbLeads), nbLeadsCmp: Math.round(totNbLeadsCmp),
-        brandLeads: Math.round(totBrandLeads), brandLeadsCmp: Math.round(totBrandLeadsCmp),
-        fspLeads: Math.round(totFsp), fspLeadsCmp: Math.round(totFspCmp),
+        nbLeads: nbLeadsR, nbLeadsCmp: nbLeadsCmpR,
+        brandLeads: brandLeadsR, brandLeadsCmp: brandLeadsCmpR,
+        fspLeads: fspLeadsR, fspLeadsCmp: fspLeadsCmpR,
         nbTop3, nbTop3Cmp,
         siteWideNbRatio,
         aioSessions, aioSessionsCmp, aioSignUps, aioSignUpsCmp,
       };
     };
+
 
     // Fire both property fetches in parallel — each uses its own GA4 + GSC property.
     // Guard every setState with isCurrent() so a stale in-flight fetch can't overwrite
@@ -13473,7 +13496,9 @@ ${combinedHtml}
                   lines.push(`NB Keywords Top 3: ${s.nbTop3.toLocaleString()} — ${tgtPct(s.nbTop3, T.nbTop3)} (target ${T.nbTop3.toLocaleString()})${hc ? chg(s.nbTop3, s.nbTop3Cmp) : ""}`);
                   lines.push(`Organic Sessions: ${s.orgSessions.toLocaleString()}${hc ? chg(s.orgSessions, s.orgSessionsCmp) : ""}`);
                   lines.push(``);
-                  lines.push(`*${abbr} — Branded*`);
+                  lines.push(`*${abbr} — GSC Clicks*`);
+                  lines.push(`Total Clicks: ${s.totalClicks.toLocaleString()}${hc ? chg(s.totalClicks, s.totalClicksCmp) : ""}`);
+                  lines.push(`Total Sign Ups: ${s.fspLeads.toLocaleString()}${hc ? chg(s.fspLeads, s.fspLeadsCmp) : ""}`);
                   lines.push(`Branded Clicks: ${s.brandClicks.toLocaleString()}${hc ? chg(s.brandClicks, s.brandClicksCmp) : ""}`);
                   lines.push(`Branded Sign Ups: ${s.brandLeads.toLocaleString()}${hc ? chg(s.brandLeads, s.brandLeadsCmp) : ""}`);
                   lines.push(``);
@@ -13570,7 +13595,7 @@ ${combinedHtml}
                       <TargetCard label="NB Keywords Top 3" value={s.nbTop3} target={T.nbTop3} cmpValue={s.nbTop3Cmp} />
                     </div>
                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{abbr} — GSC Clicks</div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                       <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
                         <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Total Clicks</div>
                         <div className="flex items-end justify-between gap-2">
@@ -13581,7 +13606,19 @@ ${combinedHtml}
                             </span>
                           )}
                         </div>
-                        <div className="text-[10px] text-gray-400 mt-1">{hc ? `${s.totalClicksCmp.toLocaleString()} previously` : "all GSC clicks"}</div>
+                        <div className="text-[10px] text-gray-400 mt-1">{hc ? `${s.totalClicksCmp.toLocaleString()} previously` : "brand + non-brand"}</div>
+                      </div>
+                      <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                        <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Total Sign Ups</div>
+                        <div className="flex items-end justify-between gap-2">
+                          <span className="text-2xl font-bold text-gray-900 tabular-nums">{s.fspLeads.toLocaleString()}</span>
+                          {hc && (
+                            <span className={`text-[11px] font-bold flex items-center gap-0.5 ${s.fspLeads >= s.fspLeadsCmp ? "text-emerald-600" : "text-red-500"}`}>
+                              {s.fspLeads >= s.fspLeadsCmp ? "+" : ""}{s.fspLeadsCmp > 0 ? (((s.fspLeads - s.fspLeadsCmp) / s.fspLeadsCmp) * 100).toFixed(1) : "—"}% <span className="text-[9px] font-semibold text-gray-400">vs prev</span>
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-gray-400 mt-1">{hc ? `${s.fspLeadsCmp.toLocaleString()} previously` : "brand + non-brand"}</div>
                       </div>
                       <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
                         <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Branded Clicks</div>
@@ -13608,6 +13645,7 @@ ${combinedHtml}
                         <div className="text-[10px] text-gray-400 mt-1">{hc ? `${s.brandLeadsCmp.toLocaleString()} previously` : "brand-classified sign-ups"}</div>
                       </div>
                     </div>
+                    <div className="text-[9px] text-gray-300 -mt-1">Branded + Non-Brand Clicks = Total Clicks · Branded + Non-Brand Sign Ups = Total Sign Ups</div>
                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{abbr} — AIO (AI-Influenced Organic) · Q4 target ×10</div>
                     <div className="grid grid-cols-2 gap-3">
                       <AioCard label="AIO Sessions" value={s.aioSessions} target={T.aioSessions} cmpValue={s.aioSessionsCmp} sublabel={`${dayLabel} · 1,000/mth`} />
