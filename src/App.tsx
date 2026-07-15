@@ -5966,6 +5966,7 @@ export default function App() {
     brandClicks: number; brandClicksCmp: number;
     nbClicks: number; nbClicksCmp: number;
     nbLeads: number; nbLeadsCmp: number;
+    brandLeads: number; brandLeadsCmp: number;
     fspLeads: number; fspLeadsCmp: number;
     nbTop3: number; nbTop3Cmp: number;
     siteWideNbRatio: number;
@@ -7353,16 +7354,22 @@ export default function App() {
       const fspCur  = leadsMap(ga4FspCur);  const fspCmp  = leadsMap(ga4FspCmp);
       const sessCur = sessMap(ga4SessCur);   const sessCmp = sessMap(ga4SessCmp);
 
-      let totFsp = 0, totNbLeads = 0, totFspCmp = 0, totNbLeadsCmp = 0;
+      let totFsp = 0, totNbLeads = 0, totBrandLeads = 0, totFspCmp = 0, totNbLeadsCmp = 0, totBrandLeadsCmp = 0;
       new Set([...perPageCur.keys(), ...fspCur.keys()]).forEach((path) => {
         const fsp = fspCur.get(path) ?? 0; if (!fsp) return;
         const cur = perPageCur.get(path); const tc = (cur?.b ?? 0) + (cur?.nb ?? 0);
-        totFsp += fsp; totNbLeads += fsp * (tc > 0 ? cur!.nb / tc : siteWideNbRatio);
+        const nbRatio = tc > 0 ? cur!.nb / tc : siteWideNbRatio;
+        // Branded logic is the reverse of NB logic — brand ratio is (1 - nb ratio) per page,
+        // falling back to the site-wide brand ratio (1 - siteWideNbRatio) when a page has no clicks.
+        const brandRatio = 1 - nbRatio;
+        totFsp += fsp; totNbLeads += fsp * nbRatio; totBrandLeads += fsp * brandRatio;
       });
       new Set([...perPageCmp.keys(), ...fspCmp.keys()]).forEach((path) => {
         const fsp = fspCmp.get(path) ?? 0; if (!fsp) return;
         const cur = perPageCmp.get(path); const tc = (cur?.b ?? 0) + (cur?.nb ?? 0);
-        totFspCmp += fsp; totNbLeadsCmp += fsp * (tc > 0 ? cur!.nb / tc : siteWideNbRatioCmp);
+        const nbRatioCmp = tc > 0 ? cur!.nb / tc : siteWideNbRatioCmp;
+        const brandRatioCmp = 1 - nbRatioCmp;
+        totFspCmp += fsp; totNbLeadsCmp += fsp * nbRatioCmp; totBrandLeadsCmp += fsp * brandRatioCmp;
       });
 
       const orgSessions    = Array.from(sessCur.values()).reduce((a, b) => a + b, 0);
@@ -7381,6 +7388,7 @@ export default function App() {
         brandClicks, brandClicksCmp,
         nbClicks, nbClicksCmp,
         nbLeads: Math.round(totNbLeads), nbLeadsCmp: Math.round(totNbLeadsCmp),
+        brandLeads: Math.round(totBrandLeads), brandLeadsCmp: Math.round(totBrandLeadsCmp),
         fspLeads: Math.round(totFsp), fspLeadsCmp: Math.round(totFspCmp),
         nbTop3, nbTop3Cmp,
         siteWideNbRatio,
@@ -13465,6 +13473,10 @@ ${combinedHtml}
                   lines.push(`NB Keywords Top 3: ${s.nbTop3.toLocaleString()} — ${tgtPct(s.nbTop3, T.nbTop3)} (target ${T.nbTop3.toLocaleString()})${hc ? chg(s.nbTop3, s.nbTop3Cmp) : ""}`);
                   lines.push(`Organic Sessions: ${s.orgSessions.toLocaleString()}${hc ? chg(s.orgSessions, s.orgSessionsCmp) : ""}`);
                   lines.push(``);
+                  lines.push(`*${abbr} — Branded*`);
+                  lines.push(`Branded Clicks: ${s.brandClicks.toLocaleString()}${hc ? chg(s.brandClicks, s.brandClicksCmp) : ""}`);
+                  lines.push(`Branded Sign Ups: ${s.brandLeads.toLocaleString()}${hc ? chg(s.brandLeads, s.brandLeadsCmp) : ""}`);
+                  lines.push(``);
                   lines.push(`*${abbr} — AIO Data* (Q4 target ×10)`);
                   lines.push(`AIO Sessions: ${s.aioSessions.toLocaleString()} — ${tgtPct(s.aioSessions, T.aioSessions)} (target ${T.aioSessions}${dayLabel} · 1,000/mth)`);
                   lines.push(`AIO Sign Ups: ${s.aioSignUps.toLocaleString()} — ${tgtPct(s.aioSignUps, T.aioSignUps)} (target ${T.aioSignUps}${dayLabel} · 100/mth)`);
@@ -13558,7 +13570,7 @@ ${combinedHtml}
                       <TargetCard label="NB Keywords Top 3" value={s.nbTop3} target={T.nbTop3} cmpValue={s.nbTop3Cmp} />
                     </div>
                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{abbr} — GSC Clicks</div>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                       <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
                         <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Total Clicks</div>
                         <div className="flex items-end justify-between gap-2">
@@ -13582,6 +13594,18 @@ ${combinedHtml}
                           )}
                         </div>
                         <div className="text-[10px] text-gray-400 mt-1">{hc ? `${s.brandClicksCmp.toLocaleString()} previously` : "brand-classified clicks"}</div>
+                      </div>
+                      <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                        <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Branded Sign Ups</div>
+                        <div className="flex items-end justify-between gap-2">
+                          <span className="text-2xl font-bold text-[#5b4fa8] tabular-nums">{s.brandLeads.toLocaleString()}</span>
+                          {hc && (
+                            <span className={`text-[11px] font-bold flex items-center gap-0.5 ${s.brandLeads >= s.brandLeadsCmp ? "text-emerald-600" : "text-red-500"}`}>
+                              {s.brandLeads >= s.brandLeadsCmp ? "+" : ""}{s.brandLeadsCmp > 0 ? (((s.brandLeads - s.brandLeadsCmp) / s.brandLeadsCmp) * 100).toFixed(1) : "—"}% <span className="text-[9px] font-semibold text-gray-400">vs prev</span>
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-gray-400 mt-1">{hc ? `${s.brandLeadsCmp.toLocaleString()} previously` : "brand-classified sign-ups"}</div>
                       </div>
                     </div>
                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{abbr} — AIO (AI-Influenced Organic) · Q4 target ×10</div>
