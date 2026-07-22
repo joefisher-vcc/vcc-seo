@@ -36,6 +36,11 @@ import {
   Trash2,
   Target,
   CalendarClock,
+  Trello,
+  StickyNote,
+  Clock,
+  ExternalLink,
+  KeyRound,
 } from "lucide-react";
 import {
   LineChart,
@@ -170,6 +175,14 @@ const LS_SELECTED_GSC = "vcc_selected_gsc";
 const LS_ACTIVE_VIEW = "vcc_active_view";
 const LS_BRAND_TERMS = "vcc_brand_terms_v5";
 const LS_BRAND_TERMS_HISTORY = "vcc_brand_terms_history_v5";
+const LS_TRELLO_KEY      = "vcc_trello_api_key";
+const LS_TRELLO_TOKEN    = "vcc_trello_token";
+const LS_TRELLO_BOARD_ID = "vcc_trello_board_id";
+const LS_NOTION_TOKEN    = "vcc_notion_token";
+const LS_NOTION_DB_ID    = "vcc_notion_database_id";
+// generate_lead event tracking on both properties only goes back to early Oct 2025,
+// so a true year-over-year sign-up comparison isn't possible until Oct 2026.
+const LEAD_EVENT_TRACKING_START = "2025-10-01";
 
 function persistGoogleToken(r: { access_token?: string; expires_in?: number }) {
   if (!r.access_token) return;
@@ -223,7 +236,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "crm" | "watchWizard" | "googleAds" | "seoActions";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "dailyObservation" | "crm" | "watchWizard" | "googleAds" | "seoActions";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -5981,6 +5994,50 @@ export default function App() {
   // Monotonic run-ID — lets in-flight fetches detect they've been superseded.
   const snapRunIdRef = useRef(0);
 
+  // ── Daily Observation state ─────────────────────────────────────────────────
+  // WoW / YoY organic performance (both matched to the same day-of-week), plus
+  // "what changed yesterday" pulled live from Trello + Notion.
+  interface ObsPerfPeriod {
+    orgSessions: number; orgSessionsPrev: number;
+    signUps: number; signUpsPrev: number;
+    top3: number; top3Prev: number;
+    prevDate: string;
+    signUpsAvailable: boolean; // false when prevDate predates generate_lead tracking
+  }
+  interface ObsPerf {
+    propLabel: string;
+    anchorDate: string;
+    wow: ObsPerfPeriod;
+    yoy: ObsPerfPeriod;
+  }
+  const [obsVCC, setObsVCC] = useState<ObsPerf | null>(null);
+  const [obsAV, setObsAV] = useState<ObsPerf | null>(null);
+  const [obsPerfLoading, setObsPerfLoading] = useState(false);
+  const [obsPerfError, setObsPerfError] = useState("");
+  const obsRunIdRef = useRef(0);
+
+  // Trello — key + token (Power-Up style) so requests can run straight from the browser.
+  const [trelloKey, setTrelloKey]           = useState(() => localStorage.getItem(LS_TRELLO_KEY) ?? "");
+  const [trelloToken, setTrelloToken]       = useState(() => localStorage.getItem(LS_TRELLO_TOKEN) ?? "");
+  const [trelloBoardId, setTrelloBoardId]   = useState(() => localStorage.getItem(LS_TRELLO_BOARD_ID) ?? "");
+  const [trelloKeyInput, setTrelloKeyInput]     = useState(() => localStorage.getItem(LS_TRELLO_KEY) ?? "");
+  const [trelloTokenInput, setTrelloTokenInput] = useState(() => localStorage.getItem(LS_TRELLO_TOKEN) ?? "");
+  const [trelloBoardIdInput, setTrelloBoardIdInput] = useState(() => localStorage.getItem(LS_TRELLO_BOARD_ID) ?? "");
+  interface TrelloChange { id: string; cardName: string; date: string; summary: string; url: string }
+  const [trelloChanges, setTrelloChanges] = useState<TrelloChange[] | null>(null);
+  const [trelloLoading, setTrelloLoading] = useState(false);
+  const [trelloError, setTrelloError]     = useState("");
+
+  // Notion — internal integration token + database ID.
+  const [notionToken, setNotionToken]   = useState(() => localStorage.getItem(LS_NOTION_TOKEN) ?? "");
+  const [notionDbId, setNotionDbId]     = useState(() => localStorage.getItem(LS_NOTION_DB_ID) ?? "");
+  const [notionTokenInput, setNotionTokenInput] = useState(() => localStorage.getItem(LS_NOTION_TOKEN) ?? "");
+  const [notionDbIdInput, setNotionDbIdInput]   = useState(() => localStorage.getItem(LS_NOTION_DB_ID) ?? "");
+  interface NotionChange { id: string; title: string; date: string; url: string }
+  const [notionChanges, setNotionChanges] = useState<NotionChange[] | null>(null);
+  const [notionLoading, setNotionLoading] = useState(false);
+  const [notionError, setNotionError]     = useState("");
+
   // ── Daily Stand-Up state ──────────────────────────────────────────────────
   const [standupVccPagesIndexed,    setStandupVccPagesIndexed]    = useState("");
   const [standupAvPagesIndexed,     setStandupAvPagesIndexed]     = useState("");
@@ -6089,6 +6146,11 @@ export default function App() {
   // ── Persist selected properties across refreshes ─────────────────────────
   useEffect(() => { if (selectedGA4) localStorage.setItem(LS_SELECTED_GA4, selectedGA4); else localStorage.removeItem(LS_SELECTED_GA4); }, [selectedGA4]);
   useEffect(() => { if (selectedGSC) localStorage.setItem(LS_SELECTED_GSC, selectedGSC); else localStorage.removeItem(LS_SELECTED_GSC); }, [selectedGSC]);
+  useEffect(() => { if (trelloKey) localStorage.setItem(LS_TRELLO_KEY, trelloKey); else localStorage.removeItem(LS_TRELLO_KEY); }, [trelloKey]);
+  useEffect(() => { if (trelloToken) localStorage.setItem(LS_TRELLO_TOKEN, trelloToken); else localStorage.removeItem(LS_TRELLO_TOKEN); }, [trelloToken]);
+  useEffect(() => { if (trelloBoardId) localStorage.setItem(LS_TRELLO_BOARD_ID, trelloBoardId); else localStorage.removeItem(LS_TRELLO_BOARD_ID); }, [trelloBoardId]);
+  useEffect(() => { if (notionToken) localStorage.setItem(LS_NOTION_TOKEN, notionToken); else localStorage.removeItem(LS_NOTION_TOKEN); }, [notionToken]);
+  useEffect(() => { if (notionDbId) localStorage.setItem(LS_NOTION_DB_ID, notionDbId); else localStorage.removeItem(LS_NOTION_DB_ID); }, [notionDbId]);
   useEffect(() => { localStorage.setItem(LS_ACTIVE_VIEW, activeView); }, [activeView]);
   useEffect(() => { try { localStorage.setItem(LS_BRAND_TERMS, JSON.stringify(nbsBrandTerms)); } catch { /* ignore quota */ } }, [nbsBrandTerms]);
   useEffect(() => { try { localStorage.setItem(LS_BRAND_TERMS_HISTORY, JSON.stringify(nbsTermsHistory)); } catch { /* ignore quota */ } }, [nbsTermsHistory]);
@@ -7445,6 +7507,174 @@ export default function App() {
     await Promise.all(jobs);
   }, [selectedGSC, avGscId, selectedGA4, avGA4Id, accessToken, nbsBrandTerms, nbsuFetchFilters, ga4Properties]);
 
+  // ── Daily Observation: WoW + YoY performance (GA4 + GSC) ──────────────────
+  // Both comparisons are single-day, matched to the same day of week as the anchor
+  // date — WoW = anchor − 7 days, YoY = anchor − 364 days (52 whole weeks, so the
+  // weekday always lines up exactly, unlike a straight −365).
+  const fetchObsPerformance = useCallback(async () => {
+    if (!accessToken) return;
+    const runId = ++obsRunIdRef.current;
+    const isCurrent = () => obsRunIdRef.current === runId;
+    setObsPerfLoading(true);
+    setObsPerfError("");
+
+    const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+    const today = toISODate(new Date());
+    // GSC data has a ~3-4 day lag in practice — anchor on the most recent day it has reliably finalised.
+    const anchor  = addDaysISO(today, -4);
+    const wowPrev = addDaysISO(anchor, -7);
+    const yoyPrev = addDaysISO(anchor, -364);
+
+    type GscRow = { keys: string[]; clicks: number; impressions: number; position: number };
+    type Ga4Resp = { rows?: { metricValues: { value: string }[] }[] };
+
+    const orgFilter  = { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS", value: "Organic Search" } } };
+    const leadFilter = { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } };
+
+    const fetchOneDay = async (ga4Id: string, gscUrl: string, date: string) => {
+      const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${ga4Id}:runReport`;
+      const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(gscUrl)}/searchAnalytics/query`;
+      const ga4Fetch = (body: object): Promise<Ga4Resp> =>
+        fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(body) }).then((r) => r.json() as Promise<Ga4Resp>);
+      const [sessResp, leadResp, gscRows] = await Promise.all([
+        ga4Fetch({ dateRanges: [{ startDate: date, endDate: date }], metrics: [{ name: "sessions" }], dimensionFilter: orgFilter }),
+        ga4Fetch({ dateRanges: [{ startDate: date, endDate: date }], metrics: [{ name: "keyEvents" }], dimensionFilter: { andGroup: { expressions: [leadFilter, orgFilter] } } }),
+        fetch(gscBase, { method: "POST", headers, body: JSON.stringify({ startDate: date, endDate: date, dimensions: ["query"], rowLimit: 25000 }) })
+          .then((r) => r.json()).then((d) => (d?.rows ?? []) as GscRow[]),
+      ]);
+      const orgSessions = parseInt(sessResp.rows?.[0]?.metricValues?.[0]?.value ?? "0", 10);
+      const signUps     = parseInt(leadResp.rows?.[0]?.metricValues?.[0]?.value ?? "0", 10);
+      const top3        = gscRows.filter((r) => r.position <= 3).length;
+      return { orgSessions, signUps, top3 };
+    };
+
+    const buildPeriod = (cur: { orgSessions: number; signUps: number; top3: number }, prev: { orgSessions: number; signUps: number; top3: number }, prevDate: string): ObsPerfPeriod => ({
+      orgSessions: cur.orgSessions, orgSessionsPrev: prev.orgSessions,
+      signUps: cur.signUps, signUpsPrev: prev.signUps,
+      top3: cur.top3, top3Prev: prev.top3,
+      prevDate,
+      signUpsAvailable: prevDate >= LEAD_EVENT_TRACKING_START,
+    });
+
+    const buildObs = async (ga4Id: string, gscUrl: string, label: string): Promise<ObsPerf> => {
+      const [cur, wPrev, yPrev] = await Promise.all([
+        fetchOneDay(ga4Id, gscUrl, anchor),
+        fetchOneDay(ga4Id, gscUrl, wowPrev),
+        fetchOneDay(ga4Id, gscUrl, yoyPrev),
+      ]);
+      return {
+        propLabel: label,
+        anchorDate: anchor,
+        wow: buildPeriod(cur, wPrev, wowPrev),
+        yoy: buildPeriod(cur, yPrev, yoyPrev),
+      };
+    };
+
+    const jobs: Promise<void>[] = [];
+    if (selectedGA4 && selectedGSC) {
+      const label = ga4Properties.find((p) => p.value === selectedGA4)?.label ?? "Vintage Cash Cow";
+      jobs.push(
+        buildObs(selectedGA4, selectedGSC, label)
+          .then((r) => { if (isCurrent()) setObsVCC(r); })
+          .catch((e) => { if (isCurrent()) setObsPerfError(e instanceof Error ? e.message : "Failed to load performance stats"); })
+      );
+    }
+    if (avGA4Id && avGscId) {
+      jobs.push(
+        buildObs(avGA4Id, avGscId, "Vintage.com")
+          .then((r) => { if (isCurrent()) setObsAV(r); })
+          .catch((e) => { if (isCurrent()) setObsPerfError(e instanceof Error ? e.message : "Failed to load performance stats"); })
+      );
+    }
+    await Promise.all(jobs);
+    if (isCurrent()) setObsPerfLoading(false);
+  }, [accessToken, selectedGA4, selectedGSC, avGA4Id, avGscId, ga4Properties]);
+
+  // ── Daily Observation: Trello activity (last 24h) ─────────────────────────
+  // Trello's REST API allows key+token auth straight from the browser (CORS-friendly),
+  // so no proxy is needed here.
+  const fetchTrelloActivity = useCallback(async () => {
+    if (!trelloKey || !trelloToken || !trelloBoardId) return;
+    setTrelloLoading(true);
+    setTrelloError("");
+    try {
+      const since = `${addDaysISO(toISODate(new Date()), -1)}T00:00:00.000Z`;
+      const url = `https://api.trello.com/1/boards/${encodeURIComponent(trelloBoardId)}/actions` +
+        `?filter=createCard,updateCard,commentCard,moveCardToBoard` +
+        `&since=${encodeURIComponent(since)}&limit=50` +
+        `&key=${encodeURIComponent(trelloKey)}&token=${encodeURIComponent(trelloToken)}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Trello API error (${res.status}) — check the board ID, key and token`);
+      const data = await res.json();
+      type TrelloAction = {
+        id: string; type: string; date: string;
+        data?: { card?: { name?: string; shortLink?: string; id?: string }; listBefore?: { name: string }; listAfter?: { name: string }; text?: string };
+      };
+      const changes: TrelloChange[] = ((data ?? []) as TrelloAction[]).map((a) => {
+        const cardName = a.data?.card?.name ?? "Untitled card";
+        const shortLink = a.data?.card?.shortLink ?? "";
+        let summary = "updated";
+        if (a.type === "createCard") summary = "card created";
+        else if (a.type === "commentCard") summary = `comment: “${(a.data?.text ?? "").slice(0, 80)}”`;
+        else if (a.type === "moveCardToBoard") summary = "moved onto this board";
+        else if (a.data?.listBefore && a.data?.listAfter) summary = `moved ${a.data.listBefore.name} → ${a.data.listAfter.name}`;
+        return { id: a.id, cardName, date: a.date, summary, url: shortLink ? `https://trello.com/c/${shortLink}` : "" };
+      });
+      setTrelloChanges(changes);
+    } catch (e) {
+      setTrelloError(e instanceof Error ? e.message : "Failed to load Trello activity");
+      setTrelloChanges(null);
+    } finally {
+      setTrelloLoading(false);
+    }
+  }, [trelloKey, trelloToken, trelloBoardId]);
+
+  // ── Daily Observation: Notion activity (last 24h) ─────────────────────────
+  // Note: Notion's API does not send CORS headers for browser requests, so a direct
+  // fetch from here will typically be blocked. It's wired up so it works as soon as
+  // requests are routed through a small server-side proxy (e.g. a Supabase Edge Function).
+  const fetchNotionActivity = useCallback(async () => {
+    if (!notionToken || !notionDbId) return;
+    setNotionLoading(true);
+    setNotionError("");
+    try {
+      const since = addDaysISO(toISODate(new Date()), -1);
+      const res = await fetch(`https://api.notion.com/v1/databases/${encodeURIComponent(notionDbId)}/query`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${notionToken}`,
+          "Notion-Version": "2022-06-28",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          filter: { timestamp: "last_edited_time", last_edited_time: { on_or_after: `${since}T00:00:00.000Z` } },
+          sorts: [{ timestamp: "last_edited_time", direction: "descending" }],
+          page_size: 50,
+        }),
+      });
+      if (!res.ok) throw new Error(`Notion API error (${res.status}) — check the integration token, database ID, and that the integration has been shared with the database`);
+      const data = await res.json();
+      type NotionProp = { type: string; title?: { plain_text: string }[] };
+      type NotionPage = { id: string; url: string; last_edited_time: string; properties?: Record<string, NotionProp> };
+      const changes: NotionChange[] = ((data?.results ?? []) as NotionPage[]).map((p) => {
+        const titleProp = Object.values(p.properties ?? {}).find((v) => v.type === "title");
+        const title = titleProp?.title?.[0]?.plain_text ?? "Untitled";
+        return { id: p.id, title, date: p.last_edited_time, url: p.url };
+      });
+      setNotionChanges(changes);
+    } catch (e) {
+      const isCorsLikely = e instanceof TypeError;
+      setNotionError(
+        isCorsLikely
+          ? "Couldn't reach Notion directly from the browser — Notion's API blocks cross-origin requests, so this needs a small server-side proxy (e.g. a Supabase Edge Function) to relay the request."
+          : e instanceof Error ? e.message : "Failed to load Notion activity"
+      );
+      setNotionChanges(null);
+    } finally {
+      setNotionLoading(false);
+    }
+  }, [notionToken, notionDbId]);
+
   // Per-landing-page non-brand calculation for /items-we-buy/ pages:
   //   1. Fixed 7-day window vs previous 7 days.
   //   2. GSC [page, query] data: for each landing page, calculate an IMPRESSION-WEIGHTED
@@ -8244,6 +8474,16 @@ export default function App() {
     if (activeView === "dailySnapshot" && selectedGSC && selectedGA4 && accessToken) void fetchDailySnapshot();
   }, [activeView, selectedGSC, selectedGA4, avGA4Id, accessToken, fetchDailySnapshot]);
 
+  useEffect(() => {
+    if (activeView === "dailyObservation" && selectedGSC && selectedGA4 && accessToken) void fetchObsPerformance();
+  }, [activeView, selectedGSC, selectedGA4, avGA4Id, avGscId, accessToken, fetchObsPerformance]);
+  useEffect(() => {
+    if (activeView === "dailyObservation" && trelloKey && trelloToken && trelloBoardId) void fetchTrelloActivity();
+  }, [activeView, trelloKey, trelloToken, trelloBoardId, fetchTrelloActivity]);
+  useEffect(() => {
+    if (activeView === "dailyObservation" && notionToken && notionDbId) void fetchNotionActivity();
+  }, [activeView, notionToken, notionDbId, fetchNotionActivity]);
+
   // ── Auto-check mentions: for every page in gscPages, fetch copy and check query presence ──
   useEffect(() => {
     if (!gscPages.length || !gscQueries.length) return;
@@ -8950,6 +9190,7 @@ export default function App() {
     { key: "seoActions", label: "SEO Action Generator", icon: ListChecks },
     { key: "dailySnapshot", label: "Daily Snapshot", icon: Activity },
     { key: "dailyStandup",  label: "Daily Stand-Up", icon: Activity },
+    { key: "dailyObservation", label: "Daily Observation", icon: Clock },
     { key: "crm",           label: "CRM",            icon: Building2 },
     { key: "watchWizard", label: "Watch Wizard", icon: Camera },
   ];
@@ -8972,6 +9213,7 @@ export default function App() {
     seoActions: "SEO Action Generator — a weekly, self-refreshing content-strategy to-do list (refresh, internal links, new pages, redirects) built straight from GSC clicks and trends.",
     dailySnapshot: "Daily Snapshot — yesterday's GA4 + GSC (48h lag) non-brand and AIO metrics, ready to paste into Slack.",
     dailyStandup: "Daily Stand-Up — Fitbit-style SEO health check for VCC & Vintage.com, with deliverables section, ready to paste into Slack.",
+    dailyObservation: "Daily Observation — WoW & YoY organic performance (GA4 + GSC, matched to day of week) for both properties, plus what changed yesterday in Trello and Notion.",
     crm: "CRM — HubSpot contacts, companies, deals and pipeline overview.",
     watchWizard: "Watch Wizard — answer 5 quick questions to identify your watch",
   };
@@ -8983,7 +9225,7 @@ export default function App() {
     { key: "analytics", label: "Analytics", icon: BarChart3, views: ["ga4", "gsc", "googleAds", "blend", "intl"] },
     { key: "seoInsights", label: "SEO Insights", icon: Lightbulb, views: ["opportunities", "gscOpportunities", "productCategories", "brandVsNonBrand", "nbSeo", "seoIssues", "performance", "seoActions"] },
     { key: "conversions", label: "Conversions", icon: ShoppingCart, views: ["conversions", "nbSignUps"] },
-    { key: "reporting", label: "Reporting", icon: Activity, views: ["dailySnapshot", "dailyStandup"] },
+    { key: "reporting", label: "Reporting", icon: Activity, views: ["dailySnapshot", "dailyStandup", "dailyObservation"] },
     { key: "tools", label: "Tools", icon: Building2, views: ["crm", "watchWizard"] },
   ];
 
@@ -13747,6 +13989,254 @@ ${combinedHtml}
                         {(snapVCC || snapAV) && <SlackPreview buildMessage={buildSlack} />}
                       </div>
                     )}
+                  </section>
+                </>
+              );
+            })()}
+
+            {activeView === "dailyObservation" && (() => {
+              const trelloConfigured = !!(trelloKey && trelloToken && trelloBoardId);
+              const notionConfigured = !!(notionToken && notionDbId);
+              const propertiesConfigured = !!(selectedGA4 && selectedGSC && avGA4Id && avGscId);
+
+              const saveTrelloConfig = () => {
+                setTrelloKey(trelloKeyInput.trim());
+                setTrelloToken(trelloTokenInput.trim());
+                setTrelloBoardId(trelloBoardIdInput.trim());
+              };
+              const saveNotionConfig = () => {
+                setNotionToken(notionTokenInput.trim());
+                setNotionDbId(notionDbIdInput.trim());
+              };
+              const fmtTime = (iso: string) => {
+                try { return new Date(iso).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); }
+                catch { return iso; }
+              };
+
+              // ── StatCard: percentage mode for sessions/sign-ups, raw-diff mode for keyword counts ──
+              const StatCard = ({ label, value, prev, mode = "pct", available = true, unavailableNote }: {
+                label: string; value: number; prev: number; mode?: "pct" | "diff"; available?: boolean; unavailableNote?: string;
+              }) => {
+                const diff = value - prev;
+                const pct = prev > 0 ? (diff / prev) * 100 : (value > 0 ? 100 : 0);
+                const up = mode === "pct" ? pct >= 0 : diff >= 0;
+                const deltaText = mode === "pct" ? `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%` : `${diff >= 0 ? "+" : ""}${diff.toLocaleString()}`;
+                return (
+                  <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                    <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">{label}</div>
+                    <div className="flex items-end justify-between gap-2">
+                      <span className="text-2xl font-bold text-gray-900 tabular-nums">{value.toLocaleString()}</span>
+                      {available ? (
+                        <span className={`text-[11px] font-bold flex items-center gap-0.5 ${up ? "text-emerald-600" : "text-red-500"}`}>
+                          {up ? <ArrowUpRight size={12} /> : <TrendingDown size={12} />} {deltaText}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-semibold text-gray-400">n/a</span>
+                      )}
+                    </div>
+                    <div className="text-[10px] text-gray-400 mt-1">
+                      {available ? `${prev.toLocaleString()} previously` : (unavailableNote ?? "Not enough history yet")}
+                    </div>
+                  </div>
+                );
+              };
+
+              const PerfBlock = ({ obs, abbr }: { obs: ObsPerf; abbr: string }) => (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-gray-700 bg-yellow-100 border border-yellow-200 rounded-lg px-2.5 py-1">{obs.propLabel}</span>
+                    <span className="text-[11px] text-gray-400">{formatDisplayDate(obs.anchorDate)}</span>
+                  </div>
+                  <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{abbr} — Week-over-Week (vs {formatDisplayDate(obs.wow.prevDate)})</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <StatCard label="Organic Sessions" value={obs.wow.orgSessions} prev={obs.wow.orgSessionsPrev} />
+                    <StatCard label="Org Sign-Ups" value={obs.wow.signUps} prev={obs.wow.signUpsPrev} available={obs.wow.signUpsAvailable} />
+                    <StatCard label="Top 3 Keywords" value={obs.wow.top3} prev={obs.wow.top3Prev} mode="diff" />
+                  </div>
+                  <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{abbr} — Year-over-Year (vs {formatDisplayDate(obs.yoy.prevDate)})</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <StatCard label="Organic Sessions" value={obs.yoy.orgSessions} prev={obs.yoy.orgSessionsPrev} />
+                    <StatCard label="Org Sign-Ups" value={obs.yoy.signUps} prev={obs.yoy.signUpsPrev} available={obs.yoy.signUpsAvailable} unavailableNote="YoY sign-ups available from Oct 2026" />
+                    <StatCard label="Top 3 Keywords" value={obs.yoy.top3} prev={obs.yoy.top3Prev} mode="diff" />
+                  </div>
+                </div>
+              );
+
+              const buildSlack = () => {
+                const lines: string[] = [`🔎 *Daily Observation — ${obsVCC?.anchorDate ?? obsAV?.anchorDate ?? ""}*`, ``];
+                const addProp = (obs: ObsPerf | null, abbr: string) => {
+                  if (!obs) return;
+                  lines.push(`*${abbr} — Performance Stats*`);
+                  const pctStr = (v: number, p: number) => { const d = p > 0 ? ((v - p) / p) * 100 : (v > 0 ? 100 : 0); return `${d >= 0 ? "+" : ""}${d.toFixed(1)}%`; };
+                  const diffStr = (v: number, p: number) => { const d = v - p; return `${d >= 0 ? "+" : ""}${d}`; };
+                  lines.push(`WoW — organic sessions ${pctStr(obs.wow.orgSessions, obs.wow.orgSessionsPrev)} / org sign ups ${obs.wow.signUpsAvailable ? pctStr(obs.wow.signUps, obs.wow.signUpsPrev) : "n/a"} / top 3 keywords ${diffStr(obs.wow.top3, obs.wow.top3Prev)}`);
+                  lines.push(`YoY — organic sessions ${pctStr(obs.yoy.orgSessions, obs.yoy.orgSessionsPrev)} / org sign ups ${obs.yoy.signUpsAvailable ? pctStr(obs.yoy.signUps, obs.yoy.signUpsPrev) : "available from Oct 2026"} / top 3 keywords ${diffStr(obs.yoy.top3, obs.yoy.top3Prev)}`);
+                  lines.push(``);
+                };
+                addProp(obsVCC, "VCC");
+                addProp(obsAV, "Vintage.com");
+                if (trelloChanges && trelloChanges.length) {
+                  lines.push(`*Trello — changes yesterday*`);
+                  trelloChanges.slice(0, 10).forEach((c) => lines.push(`• ${c.cardName} — ${c.summary}`));
+                  lines.push(``);
+                }
+                if (notionChanges && notionChanges.length) {
+                  lines.push(`*Notion — changes yesterday*`);
+                  notionChanges.slice(0, 10).forEach((c) => lines.push(`• ${c.title}`));
+                  lines.push(``);
+                }
+                return lines.join("\n").trim();
+              };
+
+              return (
+                <>
+                  <SectionDivider label="DAILY OBSERVATION" />
+                  <section className="space-y-8">
+                    <div className="flex items-center justify-between flex-wrap gap-3">
+                      <div>
+                        <h2 className="text-lg font-semibold text-gray-900">Daily Observation</h2>
+                        <p className="text-sm text-gray-500">WoW & YoY organic performance (matched to day of week), plus what changed yesterday in Trello and Notion.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { void fetchObsPerformance(); void fetchTrelloActivity(); void fetchNotionActivity(); }}
+                        className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl bg-gray-900 text-white hover:bg-gray-700 transition-colors"
+                      >
+                        <RefreshCw size={13} className={obsPerfLoading || trelloLoading || notionLoading ? "animate-spin" : ""} /> Refresh
+                      </button>
+                    </div>
+
+                    {/* ── Performance Stats ─────────────────────────────────── */}
+                    <div className="space-y-4">
+                      <h3 className="text-sm font-bold text-gray-800 flex items-center gap-1.5"><TrendingUp size={15} /> Performance Stats — WoW + YoY</h3>
+                      {!propertiesConfigured ? (
+                        <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center text-sm text-gray-400">
+                          Select GA4 + GSC properties for both VCC and Vintage.com (Daily Snapshot's property pickers, above) to load this.
+                        </div>
+                      ) : obsPerfError ? (
+                        <div className="bg-red-50 border border-red-100 rounded-2xl p-4 text-sm text-red-600">{obsPerfError}</div>
+                      ) : (
+                        <div className="space-y-8">
+                          {obsPerfLoading && !obsVCC && !obsAV && (
+                            <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center text-sm text-gray-400">
+                              <div className="inline-block w-5 h-5 border-2 border-gray-200 border-t-yellow-400 rounded-full animate-spin mb-2" />
+                              <p>Loading performance…</p>
+                            </div>
+                          )}
+                          {obsVCC && <PerfBlock obs={obsVCC} abbr="VCC" />}
+                          {(obsVCC || obsAV) && <div className="border-t border-gray-100" />}
+                          {obsAV && <PerfBlock obs={obsAV} abbr="Vintage.com" />}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* ── Trello ─────────────────────────────────────────────── */}
+                    <div className="space-y-3">
+                      <h3 className="text-sm font-bold text-gray-800 flex items-center gap-1.5"><Trello size={15} /> Trello — Changes Yesterday</h3>
+                      {!trelloConfigured ? (
+                        <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-3">
+                          <p className="text-xs text-gray-500">
+                            Connect a Trello board using a <a href="https://trello.com/power-ups/admin" target="_blank" rel="noreferrer" className="text-blue-600 underline">Power-Up API key</a> and a{" "}
+                            <a href="https://trello.com/app-key" target="_blank" rel="noreferrer" className="text-blue-600 underline">generated token</a>, plus the board's ID or short link (from its URL, e.g. the <code className="bg-gray-100 px-1 rounded">5Lzv2YcB</code> in trello.com/b/<code className="bg-gray-100 px-1 rounded">5Lzv2YcB</code>/board-name).
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            <input type="text" value={trelloKeyInput} onChange={(e) => setTrelloKeyInput(e.target.value)} placeholder="API key"
+                              className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400/40" />
+                            <input type="password" value={trelloTokenInput} onChange={(e) => setTrelloTokenInput(e.target.value)} placeholder="Token"
+                              className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400/40" />
+                            <input type="text" value={trelloBoardIdInput} onChange={(e) => setTrelloBoardIdInput(e.target.value)} placeholder="Board ID / short link"
+                              className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400/40" />
+                          </div>
+                          <button type="button" onClick={saveTrelloConfig}
+                            disabled={!trelloKeyInput.trim() || !trelloTokenInput.trim() || !trelloBoardIdInput.trim()}
+                            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 transition-colors">
+                            <KeyRound size={13} /> Save & Connect
+                          </button>
+                        </div>
+                      ) : trelloError ? (
+                        <div className="bg-red-50 border border-red-100 rounded-2xl p-4 text-sm text-red-600 flex items-start justify-between gap-3">
+                          <span>{trelloError}</span>
+                          <button type="button" onClick={() => { setTrelloKey(""); setTrelloToken(""); setTrelloBoardId(""); }} className="text-xs underline shrink-0">Reset</button>
+                        </div>
+                      ) : trelloLoading && !trelloChanges ? (
+                        <div className="bg-white border border-gray-100 rounded-2xl p-6 text-center text-sm text-gray-400">
+                          <div className="inline-block w-5 h-5 border-2 border-gray-200 border-t-blue-400 rounded-full animate-spin mb-2" />
+                          <p>Loading Trello activity…</p>
+                        </div>
+                      ) : trelloChanges && trelloChanges.length > 0 ? (
+                        <div className="bg-white border border-gray-100 rounded-2xl divide-y divide-gray-50 shadow-sm">
+                          {trelloChanges.map((c) => (
+                            <div key={c.id} className="flex items-start justify-between gap-3 px-4 py-3">
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-gray-800 truncate">{c.cardName}</p>
+                                <p className="text-xs text-gray-400">{c.summary} · {fmtTime(c.date)}</p>
+                              </div>
+                              {c.url && (
+                                <a href={c.url} target="_blank" rel="noreferrer" className="shrink-0 text-gray-300 hover:text-blue-600">
+                                  <ExternalLink size={14} />
+                                </a>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="bg-white border border-gray-100 rounded-2xl p-6 text-center text-sm text-gray-400">No card activity in the last 24 hours.</div>
+                      )}
+                    </div>
+
+                    {/* ── Notion ─────────────────────────────────────────────── */}
+                    <div className="space-y-3">
+                      <h3 className="text-sm font-bold text-gray-800 flex items-center gap-1.5"><StickyNote size={15} /> Notion — Changes Yesterday</h3>
+                      {!notionConfigured ? (
+                        <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-3">
+                          <p className="text-xs text-gray-500">
+                            Create an <a href="https://www.notion.so/my-integrations" target="_blank" rel="noreferrer" className="text-blue-600 underline">internal integration</a>, share the relevant database with it, then paste the integration token and database ID (the 32-character ID in the database's URL) below.
+                          </p>
+                          <p className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+                            Heads up — Notion's API blocks direct requests from a browser. This will need a small server-side proxy (e.g. a Supabase Edge Function, since the app already uses Supabase) before it can actually pull data in production.
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <input type="password" value={notionTokenInput} onChange={(e) => setNotionTokenInput(e.target.value)} placeholder="Integration token (secret_… / ntn_…)"
+                              className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400/40" />
+                            <input type="text" value={notionDbIdInput} onChange={(e) => setNotionDbIdInput(e.target.value)} placeholder="Database ID"
+                              className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400/40" />
+                          </div>
+                          <button type="button" onClick={saveNotionConfig}
+                            disabled={!notionTokenInput.trim() || !notionDbIdInput.trim()}
+                            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 transition-colors">
+                            <KeyRound size={13} /> Save & Connect
+                          </button>
+                        </div>
+                      ) : notionError ? (
+                        <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 text-sm text-amber-700 flex items-start justify-between gap-3">
+                          <span>{notionError}</span>
+                          <button type="button" onClick={() => { setNotionToken(""); setNotionDbId(""); }} className="text-xs underline shrink-0">Reset</button>
+                        </div>
+                      ) : notionLoading && !notionChanges ? (
+                        <div className="bg-white border border-gray-100 rounded-2xl p-6 text-center text-sm text-gray-400">
+                          <div className="inline-block w-5 h-5 border-2 border-gray-200 border-t-blue-400 rounded-full animate-spin mb-2" />
+                          <p>Loading Notion activity…</p>
+                        </div>
+                      ) : notionChanges && notionChanges.length > 0 ? (
+                        <div className="bg-white border border-gray-100 rounded-2xl divide-y divide-gray-50 shadow-sm">
+                          {notionChanges.map((c) => (
+                            <div key={c.id} className="flex items-start justify-between gap-3 px-4 py-3">
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-gray-800 truncate">{c.title}</p>
+                                <p className="text-xs text-gray-400"><Clock size={10} className="inline -mt-0.5 mr-1" />{fmtTime(c.date)}</p>
+                              </div>
+                              <a href={c.url} target="_blank" rel="noreferrer" className="shrink-0 text-gray-300 hover:text-blue-600">
+                                <ExternalLink size={14} />
+                              </a>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="bg-white border border-gray-100 rounded-2xl p-6 text-center text-sm text-gray-400">No page activity in the last 24 hours.</div>
+                      )}
+                    </div>
+
+                    {(obsVCC || obsAV) && <SlackPreview buildMessage={buildSlack} />}
                   </section>
                 </>
               );
