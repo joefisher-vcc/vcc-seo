@@ -37,10 +37,8 @@ import {
   Target,
   CalendarClock,
   Trello,
-  StickyNote,
   Clock,
   ExternalLink,
-  KeyRound,
 } from "lucide-react";
 import {
   LineChart,
@@ -175,14 +173,16 @@ const LS_SELECTED_GSC = "vcc_selected_gsc";
 const LS_ACTIVE_VIEW = "vcc_active_view";
 const LS_BRAND_TERMS = "vcc_brand_terms_v5";
 const LS_BRAND_TERMS_HISTORY = "vcc_brand_terms_history_v5";
-const LS_TRELLO_KEY      = "vcc_trello_api_key";
-const LS_TRELLO_TOKEN    = "vcc_trello_token";
-const LS_TRELLO_BOARD_ID = "vcc_trello_board_id";
-const LS_NOTION_TOKEN    = "vcc_notion_token";
-const LS_NOTION_DB_ID    = "vcc_notion_database_id";
 // generate_lead event tracking on both properties only goes back to early Oct 2025,
 // so a true year-over-year sign-up comparison isn't possible until Oct 2026.
 const LEAD_EVENT_TRACKING_START = "2025-10-01";
+const LS_TRELLO_KEY      = "vcc_trello_api_key";
+const LS_TRELLO_TOKEN    = "vcc_trello_token";
+const LS_TRELLO_BOARD_ID = "vcc_trello_board_id";
+const LS_OBS_NOTES       = "vcc_daily_observation_notes";
+// Defaults so the Trello connect card is pre-filled — just needs "Save & Connect".
+const TRELLO_KEY_DEFAULT      = "74264699e0b16595ffef5c2eb24f3100";
+const TRELLO_BOARD_ID_DEFAULT = "5Lzv2YcB";
 
 function persistGoogleToken(r: { access_token?: string; expires_in?: number }) {
   if (!r.access_token) return;
@@ -6016,27 +6016,24 @@ export default function App() {
   const [obsPerfError, setObsPerfError] = useState("");
   const obsRunIdRef = useRef(0);
 
-  // Trello — key + token (Power-Up style) so requests can run straight from the browser.
-  const [trelloKey, setTrelloKey]           = useState(() => localStorage.getItem(LS_TRELLO_KEY) ?? "");
-  const [trelloToken, setTrelloToken]       = useState(() => localStorage.getItem(LS_TRELLO_TOKEN) ?? "");
-  const [trelloBoardId, setTrelloBoardId]   = useState(() => localStorage.getItem(LS_TRELLO_BOARD_ID) ?? "");
-  const [trelloKeyInput, setTrelloKeyInput]     = useState(() => localStorage.getItem(LS_TRELLO_KEY) ?? "");
-  const [trelloTokenInput, setTrelloTokenInput] = useState(() => localStorage.getItem(LS_TRELLO_TOKEN) ?? "");
-  const [trelloBoardIdInput, setTrelloBoardIdInput] = useState(() => localStorage.getItem(LS_TRELLO_BOARD_ID) ?? "");
+  // Trello — key + token (Power-Up style), requests run straight from the browser.
+  // Key + board ID are pre-filled defaults (not secrets); the token stays blank
+  // until the person pastes their own and hits Save & Connect.
+  const [trelloKey, setTrelloKey]         = useState(() => localStorage.getItem(LS_TRELLO_KEY) ?? TRELLO_KEY_DEFAULT);
+  const [trelloToken, setTrelloToken]     = useState(() => localStorage.getItem(LS_TRELLO_TOKEN) ?? "");
+  const [trelloBoardId, setTrelloBoardId] = useState(() => localStorage.getItem(LS_TRELLO_BOARD_ID) ?? TRELLO_BOARD_ID_DEFAULT);
+  const [trelloKeyInput, setTrelloKeyInput]         = useState(() => localStorage.getItem(LS_TRELLO_KEY) ?? TRELLO_KEY_DEFAULT);
+  const [trelloTokenInput, setTrelloTokenInput]     = useState(() => localStorage.getItem(LS_TRELLO_TOKEN) ?? "");
+  const [trelloBoardIdInput, setTrelloBoardIdInput] = useState(() => localStorage.getItem(LS_TRELLO_BOARD_ID) ?? TRELLO_BOARD_ID_DEFAULT);
   interface TrelloChange { id: string; cardName: string; date: string; summary: string; url: string }
   const [trelloChanges, setTrelloChanges] = useState<TrelloChange[] | null>(null);
   const [trelloLoading, setTrelloLoading] = useState(false);
   const [trelloError, setTrelloError]     = useState("");
 
-  // Notion — internal integration token + database ID.
-  const [notionToken, setNotionToken]   = useState(() => localStorage.getItem(LS_NOTION_TOKEN) ?? "");
-  const [notionDbId, setNotionDbId]     = useState(() => localStorage.getItem(LS_NOTION_DB_ID) ?? "");
-  const [notionTokenInput, setNotionTokenInput] = useState(() => localStorage.getItem(LS_NOTION_TOKEN) ?? "");
-  const [notionDbIdInput, setNotionDbIdInput]   = useState(() => localStorage.getItem(LS_NOTION_DB_ID) ?? "");
-  interface NotionChange { id: string; title: string; date: string; url: string }
-  const [notionChanges, setNotionChanges] = useState<NotionChange[] | null>(null);
-  const [notionLoading, setNotionLoading] = useState(false);
-  const [notionError, setNotionError]     = useState("");
+  // Free-text paste box for the write-up (Performance Observation, Progress
+  // Towards the Vision, Key Learnings & Opportunities, Summary of Previous Day).
+  // Section 5 (WoW/YoY stats) is generated live below it, not part of this text.
+  const [obsNotes, setObsNotes] = useState(() => localStorage.getItem(LS_OBS_NOTES) ?? "");
 
   // ── Daily Stand-Up state ──────────────────────────────────────────────────
   const [standupVccPagesIndexed,    setStandupVccPagesIndexed]    = useState("");
@@ -6149,8 +6146,7 @@ export default function App() {
   useEffect(() => { if (trelloKey) localStorage.setItem(LS_TRELLO_KEY, trelloKey); else localStorage.removeItem(LS_TRELLO_KEY); }, [trelloKey]);
   useEffect(() => { if (trelloToken) localStorage.setItem(LS_TRELLO_TOKEN, trelloToken); else localStorage.removeItem(LS_TRELLO_TOKEN); }, [trelloToken]);
   useEffect(() => { if (trelloBoardId) localStorage.setItem(LS_TRELLO_BOARD_ID, trelloBoardId); else localStorage.removeItem(LS_TRELLO_BOARD_ID); }, [trelloBoardId]);
-  useEffect(() => { if (notionToken) localStorage.setItem(LS_NOTION_TOKEN, notionToken); else localStorage.removeItem(LS_NOTION_TOKEN); }, [notionToken]);
-  useEffect(() => { if (notionDbId) localStorage.setItem(LS_NOTION_DB_ID, notionDbId); else localStorage.removeItem(LS_NOTION_DB_ID); }, [notionDbId]);
+  useEffect(() => { try { localStorage.setItem(LS_OBS_NOTES, obsNotes); } catch { /* ignore quota */ } }, [obsNotes]);
   useEffect(() => { localStorage.setItem(LS_ACTIVE_VIEW, activeView); }, [activeView]);
   useEffect(() => { try { localStorage.setItem(LS_BRAND_TERMS, JSON.stringify(nbsBrandTerms)); } catch { /* ignore quota */ } }, [nbsBrandTerms]);
   useEffect(() => { try { localStorage.setItem(LS_BRAND_TERMS_HISTORY, JSON.stringify(nbsTermsHistory)); } catch { /* ignore quota */ } }, [nbsTermsHistory]);
@@ -7591,8 +7587,7 @@ export default function App() {
   }, [accessToken, selectedGA4, selectedGSC, avGA4Id, avGscId, ga4Properties]);
 
   // ── Daily Observation: Trello activity (last 24h) ─────────────────────────
-  // Trello's REST API allows key+token auth straight from the browser (CORS-friendly),
-  // so no proxy is needed here.
+  // Trello's REST API allows key+token auth straight from the browser (CORS-friendly).
   const fetchTrelloActivity = useCallback(async () => {
     if (!trelloKey || !trelloToken || !trelloBoardId) return;
     setTrelloLoading(true);
@@ -7615,7 +7610,7 @@ export default function App() {
         const shortLink = a.data?.card?.shortLink ?? "";
         let summary = "updated";
         if (a.type === "createCard") summary = "card created";
-        else if (a.type === "commentCard") summary = `comment: “${(a.data?.text ?? "").slice(0, 80)}”`;
+        else if (a.type === "commentCard") summary = `comment: "${(a.data?.text ?? "").slice(0, 80)}"`;
         else if (a.type === "moveCardToBoard") summary = "moved onto this board";
         else if (a.data?.listBefore && a.data?.listAfter) summary = `moved ${a.data.listBefore.name} → ${a.data.listAfter.name}`;
         return { id: a.id, cardName, date: a.date, summary, url: shortLink ? `https://trello.com/c/${shortLink}` : "" };
@@ -7628,52 +7623,6 @@ export default function App() {
       setTrelloLoading(false);
     }
   }, [trelloKey, trelloToken, trelloBoardId]);
-
-  // ── Daily Observation: Notion activity (last 24h) ─────────────────────────
-  // Note: Notion's API does not send CORS headers for browser requests, so a direct
-  // fetch from here will typically be blocked. It's wired up so it works as soon as
-  // requests are routed through a small server-side proxy (e.g. a Supabase Edge Function).
-  const fetchNotionActivity = useCallback(async () => {
-    if (!notionToken || !notionDbId) return;
-    setNotionLoading(true);
-    setNotionError("");
-    try {
-      const since = addDaysISO(toISODate(new Date()), -1);
-      const res = await fetch(`https://api.notion.com/v1/databases/${encodeURIComponent(notionDbId)}/query`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${notionToken}`,
-          "Notion-Version": "2022-06-28",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          filter: { timestamp: "last_edited_time", last_edited_time: { on_or_after: `${since}T00:00:00.000Z` } },
-          sorts: [{ timestamp: "last_edited_time", direction: "descending" }],
-          page_size: 50,
-        }),
-      });
-      if (!res.ok) throw new Error(`Notion API error (${res.status}) — check the integration token, database ID, and that the integration has been shared with the database`);
-      const data = await res.json();
-      type NotionProp = { type: string; title?: { plain_text: string }[] };
-      type NotionPage = { id: string; url: string; last_edited_time: string; properties?: Record<string, NotionProp> };
-      const changes: NotionChange[] = ((data?.results ?? []) as NotionPage[]).map((p) => {
-        const titleProp = Object.values(p.properties ?? {}).find((v) => v.type === "title");
-        const title = titleProp?.title?.[0]?.plain_text ?? "Untitled";
-        return { id: p.id, title, date: p.last_edited_time, url: p.url };
-      });
-      setNotionChanges(changes);
-    } catch (e) {
-      const isCorsLikely = e instanceof TypeError;
-      setNotionError(
-        isCorsLikely
-          ? "Couldn't reach Notion directly from the browser — Notion's API blocks cross-origin requests, so this needs a small server-side proxy (e.g. a Supabase Edge Function) to relay the request."
-          : e instanceof Error ? e.message : "Failed to load Notion activity"
-      );
-      setNotionChanges(null);
-    } finally {
-      setNotionLoading(false);
-    }
-  }, [notionToken, notionDbId]);
 
   // Per-landing-page non-brand calculation for /items-we-buy/ pages:
   //   1. Fixed 7-day window vs previous 7 days.
@@ -8480,9 +8429,6 @@ export default function App() {
   useEffect(() => {
     if (activeView === "dailyObservation" && trelloKey && trelloToken && trelloBoardId) void fetchTrelloActivity();
   }, [activeView, trelloKey, trelloToken, trelloBoardId, fetchTrelloActivity]);
-  useEffect(() => {
-    if (activeView === "dailyObservation" && notionToken && notionDbId) void fetchNotionActivity();
-  }, [activeView, notionToken, notionDbId, fetchNotionActivity]);
 
   // ── Auto-check mentions: for every page in gscPages, fetch copy and check query presence ──
   useEffect(() => {
@@ -13995,19 +13941,15 @@ ${combinedHtml}
             })()}
 
             {activeView === "dailyObservation" && (() => {
-              const trelloConfigured = !!(trelloKey && trelloToken && trelloBoardId);
-              const notionConfigured = !!(notionToken && notionDbId);
               const propertiesConfigured = !!(selectedGA4 && selectedGSC && avGA4Id && avGscId);
+              const trelloConfigured = !!(trelloKey && trelloToken && trelloBoardId);
 
               const saveTrelloConfig = () => {
                 setTrelloKey(trelloKeyInput.trim());
                 setTrelloToken(trelloTokenInput.trim());
                 setTrelloBoardId(trelloBoardIdInput.trim());
               };
-              const saveNotionConfig = () => {
-                setNotionToken(notionTokenInput.trim());
-                setNotionDbId(notionDbIdInput.trim());
-              };
+
               const fmtTime = (iso: string) => {
                 try { return new Date(iso).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); }
                 catch { return iso; }
@@ -14063,27 +14005,35 @@ ${combinedHtml}
               );
 
               const buildSlack = () => {
-                const lines: string[] = [`🔎 *Daily Observation — ${obsVCC?.anchorDate ?? obsAV?.anchorDate ?? ""}*`, ``];
-                const addProp = (obs: ObsPerf | null, abbr: string) => {
-                  if (!obs) return;
-                  lines.push(`*${abbr} — Performance Stats*`);
-                  const pctStr = (v: number, p: number) => { const d = p > 0 ? ((v - p) / p) * 100 : (v > 0 ? 100 : 0); return `${d >= 0 ? "+" : ""}${d.toFixed(1)}%`; };
-                  const diffStr = (v: number, p: number) => { const d = v - p; return `${d >= 0 ? "+" : ""}${d}`; };
-                  lines.push(`WoW — organic sessions ${pctStr(obs.wow.orgSessions, obs.wow.orgSessionsPrev)} / org sign ups ${obs.wow.signUpsAvailable ? pctStr(obs.wow.signUps, obs.wow.signUpsPrev) : "n/a"} / top 3 keywords ${diffStr(obs.wow.top3, obs.wow.top3Prev)}`);
-                  lines.push(`YoY — organic sessions ${pctStr(obs.yoy.orgSessions, obs.yoy.orgSessionsPrev)} / org sign ups ${obs.yoy.signUpsAvailable ? pctStr(obs.yoy.signUps, obs.yoy.signUpsPrev) : "available from Oct 2026"} / top 3 keywords ${diffStr(obs.yoy.top3, obs.yoy.top3Prev)}`);
-                  lines.push(``);
-                };
-                addProp(obsVCC, "VCC");
-                addProp(obsAV, "Vintage.com");
-                if (trelloChanges && trelloChanges.length) {
-                  lines.push(`*Trello — changes yesterday*`);
-                  trelloChanges.slice(0, 10).forEach((c) => lines.push(`• ${c.cardName} — ${c.summary}`));
+                const lines: string[] = [];
+                if (obsNotes.trim()) {
+                  lines.push(obsNotes.trim());
                   lines.push(``);
                 }
-                if (notionChanges && notionChanges.length) {
-                  lines.push(`*Notion — changes yesterday*`);
-                  notionChanges.slice(0, 10).forEach((c) => lines.push(`• ${c.title}`));
+                const addProp = (obs: ObsPerf | null, abbr: string) => {
+                  if (!obs) return;
+                  const pctStr = (v: number, p: number) => { const d = p > 0 ? ((v - p) / p) * 100 : (v > 0 ? 100 : 0); return `${d >= 0 ? "+" : ""}${d.toFixed(1)}%`; };
+                  const diffStr = (v: number, p: number) => { const d = v - p; return `${d >= 0 ? "+" : ""}${d}`; };
+                  lines.push(`WOW ${abbr} - organic sessions ${pctStr(obs.wow.orgSessions, obs.wow.orgSessionsPrev)} / org sign ups ${obs.wow.signUpsAvailable ? pctStr(obs.wow.signUps, obs.wow.signUpsPrev) : "n/a"} / top 3 keywords ${diffStr(obs.wow.top3, obs.wow.top3Prev)}`);
+                };
+                const addYoy = (obs: ObsPerf | null, abbr: string) => {
+                  if (!obs) return;
+                  const pctStr = (v: number, p: number) => { const d = p > 0 ? ((v - p) / p) * 100 : (v > 0 ? 100 : 0); return `${d >= 0 ? "+" : ""}${d.toFixed(1)}%`; };
+                  const diffStr = (v: number, p: number) => { const d = v - p; return `${d >= 0 ? "+" : ""}${d}`; };
+                  lines.push(`YOY ${abbr} - org sessions ${pctStr(obs.yoy.orgSessions, obs.yoy.orgSessionsPrev)} / sign ups yoy ${obs.yoy.signUpsAvailable ? pctStr(obs.yoy.signUps, obs.yoy.signUpsPrev) : "available oct 2026"} / top 3 keywords ${diffStr(obs.yoy.top3, obs.yoy.top3Prev)}`);
+                };
+                if (obsVCC || obsAV) {
+                  lines.push(`5. Performance stats WOW + YOY (matching day of week)`);
                   lines.push(``);
+                  addProp(obsVCC, "VCC");
+                  addProp(obsAV, "Vintage.com");
+                  addYoy(obsVCC, "VCC");
+                  addYoy(obsAV, "Vintage.com");
+                  lines.push(``);
+                }
+                if (trelloChanges && trelloChanges.length) {
+                  lines.push(`Trello — changes yesterday`);
+                  trelloChanges.slice(0, 10).forEach((c) => lines.push(`• ${c.cardName} — ${c.summary}`));
                 }
                 return lines.join("\n").trim();
               };
@@ -14095,20 +14045,32 @@ ${combinedHtml}
                     <div className="flex items-center justify-between flex-wrap gap-3">
                       <div>
                         <h2 className="text-lg font-semibold text-gray-900">Daily Observation</h2>
-                        <p className="text-sm text-gray-500">WoW & YoY organic performance (matched to day of week), plus what changed yesterday in Trello and Notion.</p>
+                        <p className="text-sm text-gray-500">Paste in the write-up, review the live WoW/YoY stats and Trello activity below, then copy the combined Slack message.</p>
                       </div>
                       <button
                         type="button"
-                        onClick={() => { void fetchObsPerformance(); void fetchTrelloActivity(); void fetchNotionActivity(); }}
+                        onClick={() => { void fetchObsPerformance(); void fetchTrelloActivity(); }}
                         className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl bg-gray-900 text-white hover:bg-gray-700 transition-colors"
                       >
-                        <RefreshCw size={13} className={obsPerfLoading || trelloLoading || notionLoading ? "animate-spin" : ""} /> Refresh
+                        <RefreshCw size={13} className={obsPerfLoading || trelloLoading ? "animate-spin" : ""} /> Refresh
                       </button>
                     </div>
 
-                    {/* ── Performance Stats ─────────────────────────────────── */}
+                    {/* ── Notes paste box (sections 1-4) ─────────────────────── */}
+                    <div className="space-y-2">
+                      <h3 className="text-sm font-bold text-gray-800">Daily SEO Observation</h3>
+                      <textarea
+                        value={obsNotes}
+                        onChange={(e) => setObsNotes(e.target.value)}
+                        placeholder={`Paste your write-up here, e.g.\n\nDaily SEO Observation Tues 21/07/26 - let me know if you'd change anything\nPerformance Observation\n...\n2. Progress Towards the Vision\n...\n3. Key Learnings & Opportunities\n...\n4. Summary of Previous Day\n...`}
+                        rows={12}
+                        className="w-full border border-gray-200 rounded-2xl px-4 py-3 text-sm font-mono leading-relaxed focus:outline-none focus:ring-2 focus:ring-yellow-400/40 resize-y"
+                      />
+                    </div>
+
+                    {/* ── Performance Stats (section 5, generated live) ──────── */}
                     <div className="space-y-4">
-                      <h3 className="text-sm font-bold text-gray-800 flex items-center gap-1.5"><TrendingUp size={15} /> Performance Stats — WoW + YoY</h3>
+                      <h3 className="text-sm font-bold text-gray-800 flex items-center gap-1.5"><TrendingUp size={15} /> 5. Performance Stats — WoW + YoY (matching day of week)</h3>
                       {!propertiesConfigured ? (
                         <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center text-sm text-gray-400">
                           Select GA4 + GSC properties for both VCC and Vintage.com (Daily Snapshot's property pickers, above) to load this.
@@ -14135,10 +14097,6 @@ ${combinedHtml}
                       <h3 className="text-sm font-bold text-gray-800 flex items-center gap-1.5"><Trello size={15} /> Trello — Changes Yesterday</h3>
                       {!trelloConfigured ? (
                         <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-3">
-                          <p className="text-xs text-gray-500">
-                            Connect a Trello board using a <a href="https://trello.com/power-ups/admin" target="_blank" rel="noreferrer" className="text-blue-600 underline">Power-Up API key</a> and a{" "}
-                            <a href="https://trello.com/app-key" target="_blank" rel="noreferrer" className="text-blue-600 underline">generated token</a>, plus the board's ID or short link (from its URL, e.g. the <code className="bg-gray-100 px-1 rounded">5Lzv2YcB</code> in trello.com/b/<code className="bg-gray-100 px-1 rounded">5Lzv2YcB</code>/board-name).
-                          </p>
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             <input type="text" value={trelloKeyInput} onChange={(e) => setTrelloKeyInput(e.target.value)} placeholder="API key"
                               className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400/40" />
@@ -14150,7 +14108,7 @@ ${combinedHtml}
                           <button type="button" onClick={saveTrelloConfig}
                             disabled={!trelloKeyInput.trim() || !trelloTokenInput.trim() || !trelloBoardIdInput.trim()}
                             className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 transition-colors">
-                            <KeyRound size={13} /> Save & Connect
+                            Save & Connect
                           </button>
                         </div>
                       ) : trelloError ? (
@@ -14184,59 +14142,7 @@ ${combinedHtml}
                       )}
                     </div>
 
-                    {/* ── Notion ─────────────────────────────────────────────── */}
-                    <div className="space-y-3">
-                      <h3 className="text-sm font-bold text-gray-800 flex items-center gap-1.5"><StickyNote size={15} /> Notion — Changes Yesterday</h3>
-                      {!notionConfigured ? (
-                        <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-3">
-                          <p className="text-xs text-gray-500">
-                            Create an <a href="https://www.notion.so/my-integrations" target="_blank" rel="noreferrer" className="text-blue-600 underline">internal integration</a>, share the relevant database with it, then paste the integration token and database ID (the 32-character ID in the database's URL) below.
-                          </p>
-                          <p className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
-                            Heads up — Notion's API blocks direct requests from a browser. This will need a small server-side proxy (e.g. a Supabase Edge Function, since the app already uses Supabase) before it can actually pull data in production.
-                          </p>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            <input type="password" value={notionTokenInput} onChange={(e) => setNotionTokenInput(e.target.value)} placeholder="Integration token (secret_… / ntn_…)"
-                              className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400/40" />
-                            <input type="text" value={notionDbIdInput} onChange={(e) => setNotionDbIdInput(e.target.value)} placeholder="Database ID"
-                              className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400/40" />
-                          </div>
-                          <button type="button" onClick={saveNotionConfig}
-                            disabled={!notionTokenInput.trim() || !notionDbIdInput.trim()}
-                            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 transition-colors">
-                            <KeyRound size={13} /> Save & Connect
-                          </button>
-                        </div>
-                      ) : notionError ? (
-                        <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 text-sm text-amber-700 flex items-start justify-between gap-3">
-                          <span>{notionError}</span>
-                          <button type="button" onClick={() => { setNotionToken(""); setNotionDbId(""); }} className="text-xs underline shrink-0">Reset</button>
-                        </div>
-                      ) : notionLoading && !notionChanges ? (
-                        <div className="bg-white border border-gray-100 rounded-2xl p-6 text-center text-sm text-gray-400">
-                          <div className="inline-block w-5 h-5 border-2 border-gray-200 border-t-blue-400 rounded-full animate-spin mb-2" />
-                          <p>Loading Notion activity…</p>
-                        </div>
-                      ) : notionChanges && notionChanges.length > 0 ? (
-                        <div className="bg-white border border-gray-100 rounded-2xl divide-y divide-gray-50 shadow-sm">
-                          {notionChanges.map((c) => (
-                            <div key={c.id} className="flex items-start justify-between gap-3 px-4 py-3">
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium text-gray-800 truncate">{c.title}</p>
-                                <p className="text-xs text-gray-400"><Clock size={10} className="inline -mt-0.5 mr-1" />{fmtTime(c.date)}</p>
-                              </div>
-                              <a href={c.url} target="_blank" rel="noreferrer" className="shrink-0 text-gray-300 hover:text-blue-600">
-                                <ExternalLink size={14} />
-                              </a>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="bg-white border border-gray-100 rounded-2xl p-6 text-center text-sm text-gray-400">No page activity in the last 24 hours.</div>
-                      )}
-                    </div>
-
-                    {(obsVCC || obsAV) && <SlackPreview buildMessage={buildSlack} />}
+                    <SlackPreview buildMessage={buildSlack} />
                   </section>
                 </>
               );
