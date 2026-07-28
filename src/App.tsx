@@ -236,7 +236,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "dailyObservation" | "crm" | "watchWizard" | "googleAds" | "seoActions";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "dailyObservation" | "crm" | "watchWizard" | "googleAds" | "seoActions" | "newPageSeo";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -4976,6 +4976,228 @@ function SeoActionGeneratorView({ selectedGA4, selectedGSC, accessToken, vccCate
 }
 
 
+// ─── New Page SEO Data ──────────────────────────────────────────────────────
+// Tracks GSC + GA4 performance for a hand-maintained list of recently-published
+// pages. The look-back window is computed fresh on every fetch (today − ~16
+// months, GSC's full retention span) rather than a fixed "last 3 months", so
+// coverage keeps growing automatically as the pages age — no need to edit a
+// date range by hand. Add new URLs to NEW_PAGE_URLS as they're published.
+const NEW_PAGE_URLS: string[] = [
+  "https://www.vintagecashcow.co.uk/blog/when-was-gold-discovered",
+  "https://www.vintagecashcow.co.uk/blog/what-is-gold-bullion",
+  "https://www.vintagecashcow.co.uk/blog/what-is-yellow-gold",
+  "https://www.vintagecashcow.co.uk/blog/what-is-the-melting-point-of-gold",
+  "https://www.vintagecashcow.co.uk/blog/is-gold-a-metal",
+  "https://www.vintagecashcow.co.uk/blog/how-is-gold-weighed",
+  "https://www.vintagecashcow.co.uk/blog/is-platinum-better-than-gold",
+  "https://www.vintagecashcow.co.uk/blog/what-is-white-gold",
+  "https://www.vintagecashcow.co.uk/blog/gold-filled-vs-fold-plated-vs-vermeil-whats-the-difference",
+  "https://www.vintagecashcow.co.uk/items-we-buy/apple-products/iphone",
+  "https://www.vintagecashcow.co.uk/blog/item-age-calculator",
+  "https://www.vintagecashcow.co.uk/items-we-buy/apple-products/ipads",
+];
+const NEW_PAGES: { url: string; path: string }[] = NEW_PAGE_URLS.map((url) => ({ url, path: toPagePath(url) }));
+
+interface NewPageRow {
+  url: string;
+  path: string;
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  position: number;
+  sessions: number;
+  leads: number;
+}
+interface NewPageDaily { date: string; clicks: number; impressions: number; sessions: number; leads: number }
+interface NewPageSeoData {
+  rows: NewPageRow[];
+  daily: NewPageDaily[];
+  windowStart: string;
+  windowEnd: string;
+}
+
+interface NewPageSeoViewProps {
+  data: NewPageSeoData | null;
+  loading: boolean;
+  error: string | null;
+  selectedGSC: string;
+  selectedGA4: string;
+  onRefresh: () => void;
+}
+
+function NewPageSeoView({ data, loading, error, selectedGSC, selectedGA4, onRefresh }: NewPageSeoViewProps) {
+  const [sub, setSub] = useState<"gsc" | "ga4">("gsc");
+  const gscSort = useTableSort<NewPageRow>(data?.rows ?? [], { key: "clicks", dir: "desc" });
+  const ga4Sort = useTableSort<NewPageRow>(data?.rows ?? [], { key: "sessions", dir: "desc" });
+
+  if (!selectedGSC) return (
+    <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center shadow-sm">
+      <FilePlus2 size={28} className="text-purple-200 mx-auto mb-3" />
+      <p className="text-sm text-gray-400">Connect a Search Console property to view new page SEO data.</p>
+    </div>
+  );
+
+  const totals = (data?.rows ?? []).reduce(
+    (acc, r) => ({
+      clicks: acc.clicks + r.clicks,
+      impressions: acc.impressions + r.impressions,
+      sessions: acc.sessions + r.sessions,
+      leads: acc.leads + r.leads,
+    }),
+    { clicks: 0, impressions: 0, sessions: 0, leads: 0 },
+  );
+  const overallCtr = totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : 0;
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        <div className="bg-purple-100 rounded-xl p-2"><FilePlus2 size={16} className="text-[#5b4fa8]" /></div>
+        <div className="flex-1 min-w-0">
+          <h2 className="text-sm font-bold text-gray-900">New Page SEO Data</h2>
+          <p className="text-xs text-gray-400">
+            {NEW_PAGES.length} recently published pages · GSC + GA4
+            {data && <> · {formatDisplayDate(data.windowStart)} – {formatDisplayDate(data.windowEnd)} (grows automatically)</>}
+          </p>
+        </div>
+        <button
+          onClick={onRefresh}
+          disabled={loading}
+          className="flex items-center gap-1.5 text-xs font-semibold text-[#5b4fa8] bg-purple-50 hover:bg-purple-100 border border-purple-100 rounded-xl px-3 py-2 transition-colors disabled:opacity-50"
+        >
+          <RefreshCw size={12} className={loading ? "animate-spin" : ""} /> Refresh
+        </button>
+      </div>
+
+      {error && (
+        <div className="bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl px-4 py-2.5">{error}</div>
+      )}
+
+      {loading && (
+        <div className="flex items-center justify-center py-16 gap-2">
+          <div className="w-5 h-5 border-2 border-purple-200 border-t-[#5b4fa8] rounded-full animate-spin" />
+          <span className="text-sm text-gray-400">Fetching new page data across {NEW_PAGES.length} URLs…</span>
+        </div>
+      )}
+
+      {!loading && !data && !error && (
+        <div className="py-12 text-center text-sm text-gray-400">No data loaded yet.</div>
+      )}
+
+      {!loading && data && (
+        <div className="space-y-5">
+          {/* KPI cards — totals across all new pages, since GSC/GA4 tracking began for them */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <KpiCard label="GSC Clicks" value={totals.clicks.toLocaleString()} icon={MousePointerClick} sub="All new pages" />
+            <KpiCard label="GSC Impressions" value={totals.impressions.toLocaleString()} icon={Eye} sub={`${overallCtr.toFixed(1)}% CTR`} />
+            <KpiCard label="GA4 Sessions" value={totals.sessions.toLocaleString()} icon={Users} sub={selectedGA4 ? "Organic Search" : "Connect GA4"} />
+            <KpiCard label="Generate Lead Events" value={totals.leads.toLocaleString()} icon={Target} sub={selectedGA4 ? "Organic Search" : "Connect GA4"} />
+          </div>
+
+          {/* Combined daily trend */}
+          {data.daily.length > 0 && (
+            <ChartCard title="Daily Trend — All New Pages Combined" tip="Clicks & impressions from GSC, sessions & generate_lead events from GA4 (Organic Search), summed across every URL in this section.">
+              <ResponsiveContainer width="100%" height={260}>
+                <LineChart data={data.daily} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f0fa" />
+                  <XAxis dataKey="date" tickFormatter={(d) => formatDisplayDate(d)} tick={{ fontSize: 10, fill: "#9ca3af" }} minTickGap={30} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 10, fill: "#9ca3af" }} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "#9ca3af" }} />
+                  <Tooltip {...chartTooltipStyle} labelFormatter={(d) => formatDisplayDate(String(d))} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Line yAxisId="left" type="monotone" dataKey="clicks" name="GSC Clicks" stroke="#5b4fa8" strokeWidth={2} dot={false} />
+                  <Line yAxisId="left" type="monotone" dataKey="impressions" name="GSC Impressions" stroke="#a855f7" strokeWidth={1.5} dot={false} strokeDasharray="4 3" />
+                  <Line yAxisId="right" type="monotone" dataKey="sessions" name="GA4 Sessions" stroke="#059669" strokeWidth={2} dot={false} />
+                  <Line yAxisId="right" type="monotone" dataKey="leads" name="Generate Lead Events" stroke="#d97706" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </ChartCard>
+          )}
+
+          {/* Sub-tabs */}
+          <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1 w-fit">
+            <button onClick={() => setSub("gsc")}
+              className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${sub === "gsc" ? "bg-white text-[#5b4fa8] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+              Search Console
+            </button>
+            <button onClick={() => setSub("ga4")}
+              className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${sub === "ga4" ? "bg-white text-[#5b4fa8] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+              GA4
+            </button>
+          </div>
+
+          {sub === "gsc" && (
+            <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
+              <div className="px-5 pt-4 pb-3 border-b border-gray-50">
+                <h3 className="text-sm font-semibold text-gray-800">Search Console — Per Page</h3>
+                <p className="text-xs text-gray-400 mt-1">Clicks, impressions, CTR and average position for each new page since data became available.</p>
+              </div>
+              <ScrollTable maxH="24rem">
+                <table className="w-full text-xs">
+                  <thead><tr className="border-b border-gray-50 bg-gray-50/60 sticky top-0">
+                    <SortableTh label="Page" sortKey="path" sort={gscSort.sort} onToggle={gscSort.toggle} className="py-3 px-5 text-left font-semibold text-gray-400" />
+                    <SortableTh label="Clicks" sortKey="clicks" sort={gscSort.sort} onToggle={gscSort.toggle} className="py-3 px-3 text-left font-semibold text-gray-400" />
+                    <SortableTh label="Impressions" sortKey="impressions" sort={gscSort.sort} onToggle={gscSort.toggle} className="py-3 px-3 text-left font-semibold text-gray-400" />
+                    <SortableTh label="CTR" sortKey="ctr" sort={gscSort.sort} onToggle={gscSort.toggle} className="py-3 px-3 text-left font-semibold text-gray-400" />
+                    <SortableTh label="Avg Position" sortKey="position" sort={gscSort.sort} onToggle={gscSort.toggle} className="py-3 px-3 text-left font-semibold text-gray-400" />
+                  </tr></thead>
+                  <tbody>
+                    {gscSort.sorted.map((r, i) => (
+                      <tr key={i} className="border-b border-gray-50 last:border-0 hover:bg-purple-50/20">
+                        <td className="py-2.5 px-5 font-medium text-[#5b4fa8] max-w-[380px] truncate" title={r.url}>
+                          <UrlLink url={r.url} slug={r.path} />
+                        </td>
+                        <td className="py-2.5 px-3 font-semibold text-gray-800">{r.clicks.toLocaleString()}</td>
+                        <td className="py-2.5 px-3 text-gray-500">{r.impressions.toLocaleString()}</td>
+                        <td className="py-2.5 px-3 text-gray-500">{(r.ctr * 100).toFixed(1)}%</td>
+                        <td className="py-2.5 px-3">{r.impressions > 0 ? <PosBadge pos={r.position} /> : <span className="text-gray-300">—</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </ScrollTable>
+            </div>
+          )}
+
+          {sub === "ga4" && (
+            <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
+              <div className="px-5 pt-4 pb-3 border-b border-gray-50">
+                <h3 className="text-sm font-semibold text-gray-800">GA4 — Per Page</h3>
+                <p className="text-xs text-gray-400 mt-1">
+                  Organic Search sessions landing on each page, and <code className="bg-gray-100 px-1 rounded">generate_lead</code> key events fired in those sessions.
+                  {!selectedGA4 && " Connect a GA4 property to populate this tab."}
+                </p>
+              </div>
+              <ScrollTable maxH="24rem">
+                <table className="w-full text-xs">
+                  <thead><tr className="border-b border-gray-50 bg-gray-50/60 sticky top-0">
+                    <SortableTh label="Page" sortKey="path" sort={ga4Sort.sort} onToggle={ga4Sort.toggle} className="py-3 px-5 text-left font-semibold text-gray-400" />
+                    <SortableTh label="Sessions" sortKey="sessions" sort={ga4Sort.sort} onToggle={ga4Sort.toggle} className="py-3 px-3 text-left font-semibold text-gray-400" />
+                    <SortableTh label="Generate Lead Events" sortKey="leads" sort={ga4Sort.sort} onToggle={ga4Sort.toggle} className="py-3 px-3 text-left font-semibold text-gray-400" />
+                    <th className="py-3 px-3 text-left font-semibold text-gray-400">Lead Rate</th>
+                  </tr></thead>
+                  <tbody>
+                    {ga4Sort.sorted.map((r, i) => (
+                      <tr key={i} className="border-b border-gray-50 last:border-0 hover:bg-purple-50/20">
+                        <td className="py-2.5 px-5 font-medium text-[#5b4fa8] max-w-[380px] truncate" title={r.url}>
+                          <UrlLink url={r.url} slug={r.path} />
+                        </td>
+                        <td className="py-2.5 px-3 font-semibold text-gray-800">{r.sessions.toLocaleString()}</td>
+                        <td className="py-2.5 px-3 text-gray-500">{r.leads.toLocaleString()}</td>
+                        <td className="py-2.5 px-3 text-gray-500">{r.sessions > 0 ? `${((r.leads / r.sessions) * 100).toFixed(1)}%` : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </ScrollTable>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WatchWizardView() {
   const [step, setStep]               = useState(0);
   const [answers, setAnswers]         = useState<Record<string, string>>({});
@@ -5966,6 +6188,12 @@ export default function App() {
   const [brandLoading, setBrandLoading] = useState(false);
   const [brandTab, setBrandTab] = useState<"overview" | "queries" | "pages" | "leads">("overview");
   const [convLoading, setConvLoading] = useState(false);
+
+  // ── New Page SEO Data state ──────────────────────────────────────────────
+  const [newPageData, setNewPageData] = useState<NewPageSeoData | null>(null);
+  const [newPageLoading, setNewPageLoading] = useState(false);
+  const [newPageError, setNewPageError] = useState<string | null>(null);
+
 
   // ── Daily Snapshot state ──────────────────────────────────────────────────
   interface SnapResult {
@@ -7274,6 +7502,125 @@ export default function App() {
     setBrandLoading(false);
   }, [selectedGSC, selectedGA4, accessToken, gscFetchFilters, ga4FetchFilters]);
 
+  // ── New Page SEO Data fetch ────────────────────────────────────────────────
+  // Per-page GSC + GA4 pulls for the hand-maintained NEW_PAGES list. The window
+  // is (today − ~16 months) to (today − lag), computed fresh on every call, so
+  // it automatically covers more ground the longer these pages have been live
+  // rather than being pinned to a fixed "last 3 months".
+  const fetchNewPageSeoData = useCallback(async () => {
+    if (!selectedGSC || !accessToken) return;
+    setNewPageLoading(true);
+    setNewPageError(null);
+    try {
+      const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+      const iso     = (d: Date) => d.toISOString().split("T")[0];
+      const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return iso(d); };
+
+      const WINDOW_START = daysAgo(16 * 30); // ~16 months — GSC's full retention window; slides forward daily
+      const GSC_END = daysAgo(2);             // GSC data lags ~2 days
+      const GA4_END = daysAgo(1);              // GA4 lags ~1 day
+
+      // ── GSC: one "date"-dimensioned, page-filtered fetch per URL ──────────
+      const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
+      const gscFetches = NEW_PAGES.map(({ url }) =>
+        fetch(gscBase, {
+          method: "POST", headers,
+          body: JSON.stringify({
+            startDate: WINDOW_START, endDate: GSC_END,
+            dimensions: ["date"],
+            dimensionFilterGroups: [{ filters: [{ dimension: "page", operator: "equals", expression: url }] }],
+            rowLimit: 1000,
+          }),
+        }).then((r) => r.json()).catch(() => ({ rows: [] })) as Promise<{ rows?: GSCApiRow[] }>
+      );
+      const gscJsons = await Promise.all(gscFetches);
+
+      // ── GA4: sessions + generate_lead per URL (optional — degrades gracefully) ──
+      let ga4SessionsJsons: { rows?: GA4ApiRow[] }[] = [];
+      let ga4LeadsJsons: { rows?: GA4ApiRow[] }[] = [];
+      if (selectedGA4) {
+        const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
+        const ga4Post = (body: object) =>
+          fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(body) }).then((r) => r.json()).catch(() => ({ rows: [] })) as Promise<{ rows?: GA4ApiRow[] }>;
+        const orgFilter  = { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS" as const, value: "Organic Search" } } };
+        const leadFilter = { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT" as const, value: "generate_lead" } } };
+
+        const sessionsFetches = NEW_PAGES.map(({ path }) => {
+          const pageFilter = { filter: { fieldName: "landingPagePlusQueryString", stringFilter: { matchType: "EXACT" as const, value: path } } };
+          return ga4Post({
+            dateRanges: [{ startDate: WINDOW_START, endDate: GA4_END }],
+            dimensions: [{ name: "date" }],
+            metrics: [{ name: "sessions" }],
+            dimensionFilter: { andGroup: { expressions: [pageFilter, orgFilter] } },
+            limit: 1000,
+          });
+        });
+        const leadsFetches = NEW_PAGES.map(({ path }) => {
+          const pageFilter = { filter: { fieldName: "landingPagePlusQueryString", stringFilter: { matchType: "EXACT" as const, value: path } } };
+          return ga4Post({
+            dateRanges: [{ startDate: WINDOW_START, endDate: GA4_END }],
+            dimensions: [{ name: "date" }],
+            metrics: [{ name: "keyEvents" }],
+            dimensionFilter: { andGroup: { expressions: [pageFilter, orgFilter, leadFilter] } },
+            limit: 1000,
+          });
+        });
+        [ga4SessionsJsons, ga4LeadsJsons] = await Promise.all([Promise.all(sessionsFetches), Promise.all(leadsFetches)]);
+      }
+
+      // ── Aggregate per-page totals + a combined daily series ───────────────
+      const ga4DateToIso = (ymd: string) => (ymd.length === 8 ? `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}` : ymd);
+      const dailyMap = new Map<string, NewPageDaily>();
+      const getDay = (dateKey: string): NewPageDaily => {
+        const existing = dailyMap.get(dateKey);
+        if (existing) return existing;
+        const fresh: NewPageDaily = { date: dateKey, clicks: 0, impressions: 0, sessions: 0, leads: 0 };
+        dailyMap.set(dateKey, fresh);
+        return fresh;
+      };
+
+      const rows: NewPageRow[] = NEW_PAGES.map(({ url, path }, i) => {
+        const gscRows = gscJsons[i]?.rows ?? [];
+        let clicks = 0, impressions = 0, weightedPos = 0;
+        gscRows.forEach((r) => {
+          const c = Math.round(r.clicks), imp = Math.round(r.impressions);
+          clicks += c; impressions += imp; weightedPos += r.position * imp;
+          const day = getDay(r.keys[0]); // GSC date keys are already "YYYY-MM-DD"
+          day.clicks += c; day.impressions += imp;
+        });
+        const position = impressions > 0 ? weightedPos / impressions : 0;
+        const ctr = impressions > 0 ? clicks / impressions : 0;
+
+        let sessions = 0;
+        (ga4SessionsJsons[i]?.rows ?? []).forEach((r) => {
+          const s = parseInt(r.metricValues[0]?.value ?? "0", 10) || 0;
+          sessions += s;
+          const day = getDay(ga4DateToIso(r.dimensionValues[0].value));
+          day.sessions += s;
+        });
+
+        let leads = 0;
+        (ga4LeadsJsons[i]?.rows ?? []).forEach((r) => {
+          const l = parseInt(r.metricValues[0]?.value ?? "0", 10) || 0;
+          leads += l;
+          const day = getDay(ga4DateToIso(r.dimensionValues[0].value));
+          day.leads += l;
+        });
+
+        return { url, path, clicks, impressions, ctr, position, sessions, leads };
+      });
+
+      const daily = Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+
+      setNewPageData({ rows, daily, windowStart: WINDOW_START, windowEnd: GSC_END });
+    } catch (e) {
+      console.error("fetchNewPageSeoData", e);
+      setNewPageError("Failed to load new page SEO data.");
+    } finally {
+      setNewPageLoading(false);
+    }
+  }, [selectedGSC, selectedGA4, accessToken]);
+
   // ── Daily Snapshot fetch — GSC fetched once, both GA4 properties fire in parallel ──
   const fetchDailySnapshot = useCallback(async () => {
     if (!accessToken) return;
@@ -8406,6 +8753,7 @@ export default function App() {
   useEffect(() => { if (activeView === "seoIssues" && selectedGA4 && accessToken) void fetchSeoIssues(); }, [activeView, selectedGA4, accessToken, fetchSeoIssues]);
   useEffect(() => { if (activeView === "productCategories" && selectedGA4 && selectedGSC && accessToken) void fetchProductCategories(); }, [activeView, selectedGA4, selectedGSC, accessToken, fetchProductCategories]);
   useEffect(() => { if (activeView === "brandVsNonBrand" && selectedGSC && accessToken) void fetchBrandData(); }, [activeView, selectedGSC, accessToken, fetchBrandData]);
+  useEffect(() => { if (activeView === "newPageSeo" && selectedGSC && accessToken) void fetchNewPageSeoData(); }, [activeView, selectedGSC, accessToken, fetchNewPageSeoData]);
   useEffect(() => {
     if (activeView === "nbSeo" && selectedGSC && accessToken) void fetchNbsData();
   }, [activeView, selectedGSC, accessToken, fetchNbsData]);
@@ -8561,6 +8909,7 @@ export default function App() {
     await Promise.all([fetchGA4(), fetchGSC()]);
     if (activeView === "conversions") await fetchConversions();
     if (activeView === "seoIssues") await fetchSeoIssues();
+    if (activeView === "newPageSeo") await fetchNewPageSeoData();
     setRefreshing(false);
   }
 
@@ -9134,6 +9483,7 @@ export default function App() {
     { key: "seoIssues", label: "SEO Issues", icon: AlertTriangle },
     { key: "performance", label: "Performance", icon: BarChart2 },
     { key: "seoActions", label: "SEO Action Generator", icon: ListChecks },
+    { key: "newPageSeo", label: "New Page SEO Data", icon: FilePlus2 },
     { key: "dailySnapshot", label: "Daily Snapshot", icon: Activity },
     { key: "dailyStandup",  label: "Daily Stand-Up", icon: Activity },
     { key: "dailyObservation", label: "Daily Observation", icon: Clock },
@@ -9157,6 +9507,7 @@ export default function App() {
     seoIssues: "SEO Issues — surface technical and on-page problems that may be hurting your rankings.",
     performance: "Performance — analyse Core Web Vitals and page speed signals from your Search Console data.",
     seoActions: "SEO Action Generator — a weekly, self-refreshing content-strategy to-do list (refresh, internal links, new pages, redirects) built straight from GSC clicks and trends.",
+    newPageSeo: "New Page SEO Data — GSC clicks, impressions, position and GA4 organic sessions + generate_lead events for your most recently published pages, with a self-expanding date window.",
     dailySnapshot: "Daily Snapshot — yesterday's GA4 + GSC (48h lag) non-brand and AIO metrics, ready to paste into Slack.",
     dailyStandup: "Daily Stand-Up — Fitbit-style SEO health check for VCC & Vintage.com, with deliverables section, ready to paste into Slack.",
     dailyObservation: "Daily Observation — WoW & YoY organic performance (GA4 + GSC, matched to day of week) for both properties, plus what changed yesterday in Trello and Notion.",
@@ -9170,6 +9521,7 @@ export default function App() {
   const NAV_CATEGORIES: { key: string; label: string; icon: React.ElementType; views: ActiveView[] }[] = [
     { key: "analytics", label: "Analytics", icon: BarChart3, views: ["ga4", "gsc", "googleAds", "blend", "intl"] },
     { key: "seoInsights", label: "SEO Insights", icon: Lightbulb, views: ["opportunities", "gscOpportunities", "productCategories", "brandVsNonBrand", "nbSeo", "seoIssues", "performance", "seoActions"] },
+    { key: "newPages", label: "New Pages", icon: FilePlus2, views: ["newPageSeo"] },
     { key: "conversions", label: "Conversions", icon: ShoppingCart, views: ["conversions", "nbSignUps"] },
     { key: "reporting", label: "Reporting", icon: Activity, views: ["dailySnapshot", "dailyStandup", "dailyObservation"] },
     { key: "tools", label: "Tools", icon: Building2, views: ["crm", "watchWizard"] },
@@ -10717,6 +11069,23 @@ ${combinedHtml}
                       return `${formatDisplayDate(cmp.startDate)} – ${formatDisplayDate(cmp.endDate)}`;
                     })()}
                     selectedGSC={selectedGSC}
+                  />
+                </section>
+              </>
+            )}
+
+            {/* ── New Page SEO Data ───────────────────────────────────────── */}
+            {activeView === "newPageSeo" && (
+              <>
+                <SectionDivider label="NEW PAGE SEO DATA" />
+                <section>
+                  <NewPageSeoView
+                    data={newPageData}
+                    loading={newPageLoading}
+                    error={newPageError}
+                    selectedGSC={selectedGSC}
+                    selectedGA4={selectedGA4}
+                    onRefresh={() => void fetchNewPageSeoData()}
                   />
                 </section>
               </>
