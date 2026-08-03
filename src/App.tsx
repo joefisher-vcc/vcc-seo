@@ -4995,6 +4995,10 @@ const NEW_PAGE_URLS: string[] = [
   "https://www.vintagecashcow.co.uk/items-we-buy/apple-products/iphone",
   "https://www.vintagecashcow.co.uk/blog/item-age-calculator",
   "https://www.vintagecashcow.co.uk/items-we-buy/apple-products/ipads",
+  "https://www.vintagecashcow.co.uk/items-we-buy/apple-products/macbooks",
+  "https://www.vintagecashcow.co.uk/blog/silver-hallmarks-explained-how-to-identify-uk-silver",
+  "https://www.vintagecashcow.co.uk/items-we-buy/vintage-electronics/laptops",
+  "https://www.vintagecashcow.co.uk/items-we-buy/vintage-electronics/computers",
 ];
 const NEW_PAGES: { url: string; path: string }[] = NEW_PAGE_URLS.map((url) => ({ url, path: toPagePath(url) }));
 
