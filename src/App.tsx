@@ -4977,12 +4977,14 @@ function SeoActionGeneratorView({ selectedGA4, selectedGSC, accessToken, vccCate
 
 
 // ─── New Page SEO Data ──────────────────────────────────────────────────────
-// Tracks GSC + GA4 performance for a hand-maintained list of recently-published
-// pages. The look-back window is computed fresh on every fetch (today − ~16
-// months, GSC's full retention span) rather than a fixed "last 3 months", so
-// coverage keeps growing automatically as the pages age — no need to edit a
-// date range by hand. Add new URLs to NEW_PAGE_URLS as they're published.
-const NEW_PAGE_URLS: string[] = [
+// Tracks GSC + GA4 performance for a list of recently-published pages. The
+// list is synced from column A of a Google Sheet (see NEW_PAGE_SHEET_ID
+// below) so new URLs just need to be added to the sheet — no code changes.
+// If the sheet can't be reached (not shared, offline, etc.) this fallback
+// list is used instead. The look-back window is computed fresh on every
+// fetch (today − ~16 months, GSC's full retention span) rather than a fixed
+// "last 3 months", so coverage keeps growing automatically as pages age.
+const NEW_PAGE_URLS_FALLBACK: string[] = [
   "https://www.vintagecashcow.co.uk/blog/when-was-gold-discovered",
   "https://www.vintagecashcow.co.uk/blog/what-is-gold-bullion",
   "https://www.vintagecashcow.co.uk/blog/what-is-yellow-gold",
@@ -5000,7 +5002,54 @@ const NEW_PAGE_URLS: string[] = [
   "https://www.vintagecashcow.co.uk/items-we-buy/vintage-electronics/laptops",
   "https://www.vintagecashcow.co.uk/items-we-buy/vintage-electronics/computers",
 ];
-const NEW_PAGES: { url: string; path: string }[] = NEW_PAGE_URLS.map((url) => ({ url, path: toPagePath(url) }));
+
+// Google Sheet that drives the New Page SEO Data list. Column A should
+// contain one full page URL per row (a header row in row 1 is fine — it's
+// auto-detected and skipped since it won't start with "http").
+// The sheet must be shared as "Anyone with the link — Viewer" for this to work,
+// since it's fetched directly from the browser with no server-side auth.
+const NEW_PAGE_SHEET_ID = "1G5xzavCESMSwTSEAz3-k9VI43tDw7XX1BlnAhQfttp8";
+const NEW_PAGE_SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/${NEW_PAGE_SHEET_ID}/export?format=csv&gid=0`;
+
+// Minimal CSV line parser — handles quoted fields with embedded commas, which
+// is all we need for a single-column ("A") URL list.
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else { inQuotes = false; }
+      } else { cur += ch; }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      out.push(cur); cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+// Fetches column A of the New Page Sheet and returns cleaned, deduped URLs.
+async function fetchNewPageUrlsFromSheet(): Promise<string[]> {
+  const res = await fetch(NEW_PAGE_SHEET_CSV_URL, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Sheet fetch failed (${res.status})`);
+  const csv = await res.text();
+  const lines = csv.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const urls = lines
+    .map((line) => parseCsvLine(line)[0]?.trim() ?? "")
+    .filter((cell) => /^https?:\/\//i.test(cell)); // drops header row + blanks automatically
+  return Array.from(new Set(urls));
+}
+
+function buildNewPages(urls: string[]): { url: string; path: string }[] {
+  return urls.map((url) => ({ url, path: toPagePath(url) }));
+}
 
 interface NewPageRow {
   url: string;
@@ -5027,9 +5076,15 @@ interface NewPageSeoViewProps {
   selectedGSC: string;
   selectedGA4: string;
   onRefresh: () => void;
+  pageCount: number;
+  sheetSyncing: boolean;
+  sheetError: string | null;
+  sheetSyncedAt: string | null;
+  sheetUsingFallback: boolean;
+  onSyncSheet: () => void;
 }
 
-function NewPageSeoView({ data, loading, error, selectedGSC, selectedGA4, onRefresh }: NewPageSeoViewProps) {
+function NewPageSeoView({ data, loading, error, selectedGSC, selectedGA4, onRefresh, pageCount, sheetSyncing, sheetError, sheetSyncedAt, sheetUsingFallback, onSyncSheet }: NewPageSeoViewProps) {
   const [sub, setSub] = useState<"gsc" | "ga4">("gsc");
   const gscSort = useTableSort<NewPageRow>(data?.rows ?? [], { key: "clicks", dir: "desc" });
   const ga4Sort = useTableSort<NewPageRow>(data?.rows ?? [], { key: "sessions", dir: "desc" });
@@ -5060,10 +5115,18 @@ function NewPageSeoView({ data, loading, error, selectedGSC, selectedGA4, onRefr
         <div className="flex-1 min-w-0">
           <h2 className="text-sm font-bold text-gray-900">New Page SEO Data</h2>
           <p className="text-xs text-gray-400">
-            {NEW_PAGES.length} recently published pages · GSC + GA4
+            {pageCount} recently published pages · GSC + GA4
             {data && <> · {formatDisplayDate(data.windowStart)} – {formatDisplayDate(data.windowEnd)} (grows automatically)</>}
           </p>
         </div>
+        <button
+          onClick={onSyncSheet}
+          disabled={sheetSyncing}
+          title="Re-check column A of the Google Sheet for new URLs"
+          className="flex items-center gap-1.5 text-xs font-semibold text-gray-600 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-xl px-3 py-2 transition-colors disabled:opacity-50"
+        >
+          <RefreshCw size={12} className={sheetSyncing ? "animate-spin" : ""} /> Sync from Sheet
+        </button>
         <button
           onClick={onRefresh}
           disabled={loading}
@@ -5073,6 +5136,16 @@ function NewPageSeoView({ data, loading, error, selectedGSC, selectedGA4, onRefr
         </button>
       </div>
 
+      {sheetUsingFallback && (
+        <div className="bg-amber-50 border border-amber-100 text-amber-700 text-xs rounded-xl px-4 py-2.5">
+          Couldn't read the Google Sheet{sheetError ? ` (${sheetError})` : ""} — showing the hard-coded fallback list instead.
+          Make sure the sheet is shared as "Anyone with the link — Viewer", then hit "Sync from Sheet".
+        </div>
+      )}
+      {!sheetUsingFallback && sheetSyncedAt && (
+        <p className="text-[11px] text-gray-400">Synced from sheet at {sheetSyncedAt}</p>
+      )}
+
       {error && (
         <div className="bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl px-4 py-2.5">{error}</div>
       )}
@@ -5080,7 +5153,7 @@ function NewPageSeoView({ data, loading, error, selectedGSC, selectedGA4, onRefr
       {loading && (
         <div className="flex items-center justify-center py-16 gap-2">
           <div className="w-5 h-5 border-2 border-purple-200 border-t-[#5b4fa8] rounded-full animate-spin" />
-          <span className="text-sm text-gray-400">Fetching new page data across {NEW_PAGES.length} URLs…</span>
+          <span className="text-sm text-gray-400">Fetching new page data across {pageCount} URLs…</span>
         </div>
       )}
 
@@ -6197,6 +6270,33 @@ export default function App() {
   const [newPageData, setNewPageData] = useState<NewPageSeoData | null>(null);
   const [newPageLoading, setNewPageLoading] = useState(false);
   const [newPageError, setNewPageError] = useState<string | null>(null);
+  const [newPageUrls, setNewPageUrls] = useState<string[]>(NEW_PAGE_URLS_FALLBACK);
+  const [newPageUsingFallback, setNewPageUsingFallback] = useState(true);
+  const [sheetSyncing, setSheetSyncing] = useState(false);
+  const [sheetError, setSheetError] = useState<string | null>(null);
+  const [sheetSyncedAt, setSheetSyncedAt] = useState<string | null>(null);
+  const newPages = useMemo(() => buildNewPages(newPageUrls), [newPageUrls]);
+
+  const syncNewPageUrlsFromSheet = useCallback(async () => {
+    setSheetSyncing(true);
+    setSheetError(null);
+    try {
+      const urls = await fetchNewPageUrlsFromSheet();
+      if (urls.length === 0) throw new Error("Sheet returned no URLs in column A");
+      setNewPageUrls(urls);
+      setNewPageUsingFallback(false);
+      setSheetSyncedAt(new Date().toLocaleTimeString());
+    } catch (e) {
+      console.error("syncNewPageUrlsFromSheet", e);
+      setSheetError(e instanceof Error ? e.message : "Unknown error");
+      setNewPageUsingFallback(true);
+    } finally {
+      setSheetSyncing(false);
+    }
+  }, []);
+
+  // Sync the sheet once on load so the New Page list is fresh without a manual click.
+  useEffect(() => { void syncNewPageUrlsFromSheet(); }, [syncNewPageUrlsFromSheet]);
 
 
   // ── Daily Snapshot state ──────────────────────────────────────────────────
@@ -7507,7 +7607,7 @@ export default function App() {
   }, [selectedGSC, selectedGA4, accessToken, gscFetchFilters, ga4FetchFilters]);
 
   // ── New Page SEO Data fetch ────────────────────────────────────────────────
-  // Per-page GSC + GA4 pulls for the hand-maintained NEW_PAGES list. The window
+  // Per-page GSC + GA4 pulls for the sheet-synced newPages list. The window
   // is (today − ~16 months) to (today − lag), computed fresh on every call, so
   // it automatically covers more ground the longer these pages have been live
   // rather than being pinned to a fixed "last 3 months".
@@ -7526,7 +7626,7 @@ export default function App() {
 
       // ── GSC: one "date"-dimensioned, page-filtered fetch per URL ──────────
       const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
-      const gscFetches = NEW_PAGES.map(({ url }) =>
+      const gscFetches = newPages.map(({ url }) =>
         fetch(gscBase, {
           method: "POST", headers,
           body: JSON.stringify({
@@ -7549,7 +7649,7 @@ export default function App() {
         const orgFilter  = { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "CONTAINS" as const, value: "Organic Search" } } };
         const leadFilter = { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT" as const, value: "generate_lead" } } };
 
-        const sessionsFetches = NEW_PAGES.map(({ path }) => {
+        const sessionsFetches = newPages.map(({ path }) => {
           const pageFilter = { filter: { fieldName: "landingPagePlusQueryString", stringFilter: { matchType: "EXACT" as const, value: path } } };
           return ga4Post({
             dateRanges: [{ startDate: WINDOW_START, endDate: GA4_END }],
@@ -7559,7 +7659,7 @@ export default function App() {
             limit: 1000,
           });
         });
-        const leadsFetches = NEW_PAGES.map(({ path }) => {
+        const leadsFetches = newPages.map(({ path }) => {
           const pageFilter = { filter: { fieldName: "landingPagePlusQueryString", stringFilter: { matchType: "EXACT" as const, value: path } } };
           return ga4Post({
             dateRanges: [{ startDate: WINDOW_START, endDate: GA4_END }],
@@ -7583,7 +7683,7 @@ export default function App() {
         return fresh;
       };
 
-      const rows: NewPageRow[] = NEW_PAGES.map(({ url, path }, i) => {
+      const rows: NewPageRow[] = newPages.map(({ url, path }, i) => {
         const gscRows = gscJsons[i]?.rows ?? [];
         let clicks = 0, impressions = 0, weightedPos = 0;
         gscRows.forEach((r) => {
@@ -7623,7 +7723,7 @@ export default function App() {
     } finally {
       setNewPageLoading(false);
     }
-  }, [selectedGSC, selectedGA4, accessToken]);
+  }, [selectedGSC, selectedGA4, accessToken, newPages]);
 
   // ── Daily Snapshot fetch — GSC fetched once, both GA4 properties fire in parallel ──
   const fetchDailySnapshot = useCallback(async () => {
@@ -11090,6 +11190,12 @@ ${combinedHtml}
                     selectedGSC={selectedGSC}
                     selectedGA4={selectedGA4}
                     onRefresh={() => void fetchNewPageSeoData()}
+                    pageCount={newPages.length}
+                    sheetSyncing={sheetSyncing}
+                    sheetError={sheetError}
+                    sheetSyncedAt={sheetSyncedAt}
+                    sheetUsingFallback={newPageUsingFallback}
+                    onSyncSheet={() => void syncNewPageUrlsFromSheet()}
                   />
                 </section>
               </>
