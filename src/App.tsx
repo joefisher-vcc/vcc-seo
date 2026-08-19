@@ -180,6 +180,9 @@ const LS_TRELLO_KEY      = "vcc_trello_api_key";
 const LS_TRELLO_TOKEN    = "vcc_trello_token";
 const LS_TRELLO_BOARD_ID = "vcc_trello_board_id";
 const LS_OBS_NOTES       = "vcc_daily_observation_notes";
+const LS_MIGRATION_TASKS      = "vcc_migration_tasks_v1";
+const LS_MIGRATION_REBRAND_DT = "vcc_migration_rebrand_date_v1";
+const LS_MIGRATION_START_DT   = "vcc_migration_project_start_date_v1";
 // Defaults so the Trello connect card is pre-filled — just needs "Save & Connect".
 const TRELLO_KEY_DEFAULT      = "74264699e0b16595ffef5c2eb24f3100";
 const TRELLO_BOARD_ID_DEFAULT = "5Lzv2YcB";
@@ -236,7 +239,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "dailyObservation" | "crm" | "watchWizard" | "googleAds" | "seoActions" | "newPageSeo";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "dailyObservation" | "crm" | "watchWizard" | "googleAds" | "seoActions" | "newPageSeo" | "migrationHelp";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -5275,6 +5278,668 @@ function NewPageSeoView({ data, loading, error, selectedGSC, selectedGA4, onRefr
   );
 }
 
+// ─── Migration Help ─────────────────────────────────────────────────────────
+
+type MigrationTaskStatus = "todo" | "inProgress" | "done";
+type MigrationTaskPriority = "high" | "medium" | "low";
+
+interface MigrationTask {
+  id: string;
+  task: string;
+  owner: string;
+  priority: MigrationTaskPriority;
+  status: MigrationTaskStatus;
+  notes: string;
+}
+
+/** Seed checklist covering the usual bases for a domain/brand migration (arcavindi → vintage.com
+ *  in this case). Purely a starting point — every row is editable/removable, and new ones can be
+ *  added freely. Kept broad rather than VCC-specific since the same list is reusable elsewhere. */
+const MIGRATION_TASK_SEED: MigrationTask[] = [
+  { id: "seed-1",  task: "301 redirect map: every arcavindi URL → its vintage.com equivalent (no chains, no loops)", owner: "", priority: "high", status: "inProgress", notes: "" },
+  { id: "seed-2",  task: "Verify vintage.com in Google Search Console (and keep the old property for historical data)", owner: "", priority: "high", status: "todo", notes: "" },
+  { id: "seed-3",  task: "Submit updated XML sitemap for vintage.com in GSC", owner: "", priority: "high", status: "todo", notes: "" },
+  { id: "seed-4",  task: "Use GSC Change of Address tool (if same Search Console account) to signal the move to Google", owner: "", priority: "high", status: "todo", notes: "" },
+  { id: "seed-5",  task: "Update GA4 property / data streams to track vintage.com as primary domain", owner: "", priority: "high", status: "todo", notes: "" },
+  { id: "seed-6",  task: "Canonical tags updated site-wide to vintage.com URLs", owner: "", priority: "high", status: "todo", notes: "" },
+  { id: "seed-7",  task: "robots.txt on vintage.com allows crawling and points to the new sitemap", owner: "", priority: "medium", status: "todo", notes: "" },
+  { id: "seed-8",  task: "Structured data / schema.org markup updated to reference vintage.com", owner: "", priority: "medium", status: "todo", notes: "" },
+  { id: "seed-9",  task: "Internal links site-wide updated from arcavindi to vintage.com (no internal redirects)", owner: "", priority: "medium", status: "todo", notes: "" },
+  { id: "seed-10", task: "Backlink outreach: ask highest-value referring domains to update links directly", owner: "", priority: "medium", status: "todo", notes: "" },
+  { id: "seed-11", task: "Google Business Profile, social profiles & bios updated to vintage.com", owner: "", priority: "medium", status: "todo", notes: "" },
+  { id: "seed-12", task: "PPC / Google Ads final URLs updated to vintage.com", owner: "", priority: "medium", status: "todo", notes: "" },
+  { id: "seed-13", task: "Email signatures, invoices & transactional emails updated to vintage.com", owner: "", priority: "low", status: "todo", notes: "" },
+  { id: "seed-14", task: "SSL/certificate + www vs non-www + trailing-slash rules consistent on vintage.com", owner: "", priority: "high", status: "todo", notes: "" },
+  { id: "seed-15", task: "Monitor GSC coverage report for a spike in 404s / \"not found\" pages post-launch", owner: "", priority: "high", status: "todo", notes: "" },
+];
+
+function loadMigrationTasks(): MigrationTask[] {
+  try {
+    const raw = localStorage.getItem(LS_MIGRATION_TASKS);
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore corrupt storage */ }
+  return MIGRATION_TASK_SEED;
+}
+
+const MIGRATION_PRIORITY_RANK: Record<MigrationTaskPriority, number> = { high: 0, medium: 1, low: 2 };
+const MIGRATION_STATUS_RANK: Record<MigrationTaskStatus, number> = { todo: 0, inProgress: 1, done: 2 };
+
+function MigrationChecklist() {
+  const [tasks, setTasks] = useState<MigrationTask[]>(loadMigrationTasks);
+  const [sortBy, setSortBy] = useState<"priority" | "status">("priority");
+  const [hideDone, setHideDone] = useState(false);
+  const [newTask, setNewTask] = useState("");
+
+  useEffect(() => {
+    try { localStorage.setItem(LS_MIGRATION_TASKS, JSON.stringify(tasks)); } catch { /* ignore quota */ }
+  }, [tasks]);
+
+  const updateTask = useCallback((id: string, patch: Partial<MigrationTask>) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  }, []);
+
+  const removeTask = useCallback((id: string) => {
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const addTask = useCallback(() => {
+    const label = newTask.trim();
+    if (!label) return;
+    setTasks((prev) => [...prev, { id: `t-${Date.now()}`, task: label, owner: "", priority: "medium", status: "todo", notes: "" }]);
+    setNewTask("");
+  }, [newTask]);
+
+  const sortedTasks = useMemo(() => {
+    const arr = hideDone ? tasks.filter((t) => t.status !== "done") : tasks;
+    return [...arr].sort((a, b) => {
+      const primary = sortBy === "priority"
+        ? MIGRATION_PRIORITY_RANK[a.priority] - MIGRATION_PRIORITY_RANK[b.priority]
+        : MIGRATION_STATUS_RANK[a.status] - MIGRATION_STATUS_RANK[b.status];
+      if (primary !== 0) return primary;
+      return MIGRATION_PRIORITY_RANK[a.priority] - MIGRATION_PRIORITY_RANK[b.priority];
+    });
+  }, [tasks, sortBy, hideDone]);
+
+  const doneCount = tasks.filter((t) => t.status === "done").length;
+
+  return (
+    <ChartCard
+      title="Migration Checklist"
+      tip="Editable, saved locally in your browser. Sort by priority or status, tick items off as they're completed."
+    >
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
+        <span className="text-xs text-gray-500 font-medium">{doneCount} / {tasks.length} done</span>
+        <div className="flex items-center gap-2">
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as "priority" | "status")}
+            className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 text-gray-600"
+          >
+            <option value="priority">Sort by priority</option>
+            <option value="status">Sort by status</option>
+          </select>
+          <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+            <input type="checkbox" checked={hideDone} onChange={(e) => setHideDone(e.target.checked)} className="rounded" />
+            Hide done
+          </label>
+        </div>
+      </div>
+
+      <div className="flex gap-2 mb-4">
+        <input
+          value={newTask}
+          onChange={(e) => setNewTask(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") addTask(); }}
+          placeholder="Add a migration task…"
+          className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2"
+        />
+        <button
+          onClick={addTask}
+          className="px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg"
+        >
+          Add
+        </button>
+      </div>
+
+      <ScrollTable maxH="26rem">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 sticky top-0">
+            <tr className="text-left text-xs text-gray-500 uppercase tracking-wide">
+              <th className="py-2 px-3 w-8"></th>
+              <th className="py-2 px-3">Task</th>
+              <th className="py-2 px-3 w-32">Owner</th>
+              <th className="py-2 px-3 w-28">Priority</th>
+              <th className="py-2 px-3 w-32">Status</th>
+              <th className="py-2 px-3 w-8"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedTasks.map((t) => (
+              <tr key={t.id} className={`border-b border-gray-50 last:border-0 ${t.status === "done" ? "opacity-50" : ""}`}>
+                <td className="py-2 px-3">
+                  <input
+                    type="checkbox"
+                    checked={t.status === "done"}
+                    onChange={(e) => updateTask(t.id, { status: e.target.checked ? "done" : "todo" })}
+                    className="rounded"
+                  />
+                </td>
+                <td className="py-2 px-3">
+                  <input
+                    value={t.task}
+                    onChange={(e) => updateTask(t.id, { task: e.target.value })}
+                    className={`w-full bg-transparent border-none focus:outline-none focus:ring-1 focus:ring-purple-200 rounded px-1 ${t.status === "done" ? "line-through" : ""}`}
+                  />
+                </td>
+                <td className="py-2 px-3">
+                  <input
+                    value={t.owner}
+                    onChange={(e) => updateTask(t.id, { owner: e.target.value })}
+                    placeholder="—"
+                    className="w-full bg-transparent border-none focus:outline-none focus:ring-1 focus:ring-purple-200 rounded px-1 text-gray-500"
+                  />
+                </td>
+                <td className="py-2 px-3">
+                  <select
+                    value={t.priority}
+                    onChange={(e) => updateTask(t.id, { priority: e.target.value as MigrationTaskPriority })}
+                    className={`text-xs rounded-full px-2 py-1 border font-semibold ${
+                      t.priority === "high" ? "bg-rose-50 text-rose-700 border-rose-200" :
+                      t.priority === "medium" ? "bg-amber-50 text-amber-700 border-amber-200" :
+                      "bg-gray-50 text-gray-600 border-gray-200"
+                    }`}
+                  >
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                </td>
+                <td className="py-2 px-3">
+                  <select
+                    value={t.status}
+                    onChange={(e) => updateTask(t.id, { status: e.target.value as MigrationTaskStatus })}
+                    className={`text-xs rounded-full px-2 py-1 border font-semibold ${
+                      t.status === "done" ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
+                      t.status === "inProgress" ? "bg-purple-50 text-purple-700 border-purple-200" :
+                      "bg-gray-50 text-gray-600 border-gray-200"
+                    }`}
+                  >
+                    <option value="todo">To do</option>
+                    <option value="inProgress">In progress</option>
+                    <option value="done">Done</option>
+                  </select>
+                </td>
+                <td className="py-2 px-3">
+                  <button onClick={() => removeTask(t.id)} className="text-gray-300 hover:text-rose-500">
+                    <Trash2 size={14} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </ScrollTable>
+    </ChartCard>
+  );
+}
+
+interface MigrationPageChange {
+  path: string;
+  preClicks: number;
+  postClicks: number;
+  preImpressions: number;
+  postImpressions: number;
+  prePosition: number;
+  postPosition: number;
+  preSessions: number | null;
+  postSessions: number | null;
+  clicksDelta: number;
+  clicksDeltaPct: number | null;
+  status: "vanished" | "new" | "dropped" | "improved";
+}
+
+interface MigrationChannelChange {
+  channel: string;
+  preSessions: number;
+  postSessions: number;
+}
+
+interface MigrationHelpViewProps {
+  selectedGSC: string;
+  selectedGA4: string;
+  accessToken: string;
+}
+
+function MigrationHelpView({ selectedGSC, selectedGA4, accessToken }: MigrationHelpViewProps) {
+  const [rebrandDate, setRebrandDate] = useState(() => localStorage.getItem(LS_MIGRATION_REBRAND_DT) || nDaysAgo(30));
+  const [projectStartDate, setProjectStartDate] = useState(() => localStorage.getItem(LS_MIGRATION_START_DT) || "2026-05-05");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [changes, setChanges] = useState<MigrationPageChange[]>([]);
+  const [summary, setSummary] = useState<{ preClicks: number; postClicks: number; preImpressions: number; postImpressions: number; windowDays: number } | null>(null);
+  const [filter, setFilter] = useState<"all" | "vanished" | "dropped" | "new" | "improved">("all");
+  const [ga4Available, setGa4Available] = useState(false);
+  const [channelChanges, setChannelChanges] = useState<MigrationChannelChange[]>([]);
+  const [leadSummary, setLeadSummary] = useState<{ preLeads: number; postLeads: number } | null>(null);
+
+  useEffect(() => { try { localStorage.setItem(LS_MIGRATION_REBRAND_DT, rebrandDate); } catch { /* ignore */ } }, [rebrandDate]);
+  useEffect(() => { try { localStorage.setItem(LS_MIGRATION_START_DT, projectStartDate); } catch { /* ignore */ } }, [projectStartDate]);
+
+  const runComparison = useCallback(async () => {
+    if (!selectedGSC || !accessToken) { setError("Connect a GSC property first (Analytics → GSC) to run this comparison."); return; }
+    setLoading(true);
+    setError(null);
+    try {
+      const gscBase = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(selectedGSC)}/searchAnalytics/query`;
+      const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+
+      const rebrand = new Date(rebrandDate + "T00:00:00");
+      const today = new Date();
+      // GSC data typically lags ~2 days
+      const lagEnd = new Date(today); lagEnd.setDate(lagEnd.getDate() - 2);
+      const postStart = new Date(rebrand);
+      const postEnd = lagEnd;
+      const windowDays = Math.max(1, Math.round((postEnd.getTime() - postStart.getTime()) / 86400000) + 1);
+      const preEnd = new Date(rebrand); preEnd.setDate(preEnd.getDate() - 1);
+      const preStart = new Date(preEnd); preStart.setDate(preStart.getDate() - (windowDays - 1));
+
+      const preStartIso = toISODate(preStart), preEndIso = toISODate(preEnd);
+      const postStartIso = toISODate(postStart), postEndIso = toISODate(postEnd);
+
+      const gscPost = (sd: string, ed: string) =>
+        fetch(gscBase, { method: "POST", headers, body: JSON.stringify({ startDate: sd, endDate: ed, dimensions: ["page"], rowLimit: 5000 }) })
+          .then((r) => r.json()) as Promise<{ rows?: GSCApiRow[] }>;
+
+      const [preJson, postJson] = await Promise.all([
+        gscPost(preStartIso, preEndIso),
+        gscPost(postStartIso, postEndIso),
+      ]);
+
+      type PageStats = { clicks: number; impressions: number; position: number };
+      const toMap = (json: { rows?: GSCApiRow[] }) => {
+        const m = new Map<string, PageStats>();
+        (json.rows ?? []).forEach((r) => {
+          const path = toPagePath(r.keys[0]);
+          const cur = m.get(path) ?? { clicks: 0, impressions: 0, position: 0 };
+          m.set(path, { clicks: cur.clicks + Math.round(r.clicks), impressions: cur.impressions + Math.round(r.impressions), position: r.position });
+        });
+        return m;
+      };
+      const preMap = toMap(preJson);
+      const postMap = toMap(postJson);
+
+      // ── GA4 signals (optional — degrade gracefully if no property connected) ──
+      // 1. Organic-search sessions per page, day-matched pre/post rebrand — merged into the same
+      //    table as GSC clicks so a "vanished" page can be read against actual visitor traffic,
+      //    not just Search Console's clicks metric.
+      // 2. Sessions per channel group, site-wide — catches issues GSC alone can't see, e.g. a
+      //    direct-traffic collapse from broken bookmarks, or a referral drop from stale backlinks
+      //    that now 404 instead of redirecting.
+      // 3. Sessions referred to /free-selling-pack (the site's generate_lead proxy) — a stand-in
+      //    for actual conversions, to catch a broken funnel even where traffic looks fine.
+      const ga4SessionsByPage = new Map<string, { pre: number; post: number }>();
+      const channelMap = new Map<string, { pre: number; post: number }>();
+      let ga4Ok = false;
+      let preLeads = 0, postLeads = 0;
+
+      if (selectedGA4) {
+        try {
+          const ga4Base = `https://analyticsdata.googleapis.com/v1beta/properties/${selectedGA4}:runReport`;
+          const ga4Post = (body: object) => fetch(ga4Base, { method: "POST", headers, body: JSON.stringify(body) }).then((r) => r.json());
+
+          const orgFilter = { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "EXACT" as const, value: "Organic Search" } } };
+
+          const [
+            preOrgJson, postOrgJson,
+            preChannelJson, postChannelJson,
+            preLeadJson, postLeadJson,
+          ] = await Promise.all([
+            ga4Post({ dateRanges: [{ startDate: preStartIso, endDate: preEndIso }], dimensions: [{ name: "pagePath" }], metrics: [{ name: "sessions" }], dimensionFilter: orgFilter, limit: 5000 }),
+            ga4Post({ dateRanges: [{ startDate: postStartIso, endDate: postEndIso }], dimensions: [{ name: "pagePath" }], metrics: [{ name: "sessions" }], dimensionFilter: orgFilter, limit: 5000 }),
+            ga4Post({ dateRanges: [{ startDate: preStartIso, endDate: preEndIso }], dimensions: [{ name: "sessionDefaultChannelGroup" }], metrics: [{ name: "sessions" }] }),
+            ga4Post({ dateRanges: [{ startDate: postStartIso, endDate: postEndIso }], dimensions: [{ name: "sessionDefaultChannelGroup" }], metrics: [{ name: "sessions" }] }),
+            ga4Post({ dateRanges: [{ startDate: preStartIso, endDate: preEndIso }], dimensions: [{ name: "pagePath" }], metrics: [{ name: "sessions" }], dimensionFilter: { filter: { fieldName: "pagePath", stringFilter: { matchType: "BEGINS_WITH" as const, value: "/free-selling-pack" } } }, limit: 100 }),
+            ga4Post({ dateRanges: [{ startDate: postStartIso, endDate: postEndIso }], dimensions: [{ name: "pagePath" }], metrics: [{ name: "sessions" }], dimensionFilter: { filter: { fieldName: "pagePath", stringFilter: { matchType: "BEGINS_WITH" as const, value: "/free-selling-pack" } } }, limit: 100 }),
+          ]);
+
+          (preOrgJson as { rows?: GA4ApiRow[] }).rows?.forEach((r) => {
+            const path = toPagePath(r.dimensionValues[0].value);
+            const sessions = parseInt(r.metricValues[0]?.value ?? "0", 10) || 0;
+            const cur = ga4SessionsByPage.get(path) ?? { pre: 0, post: 0 };
+            ga4SessionsByPage.set(path, { pre: cur.pre + sessions, post: cur.post });
+          });
+          (postOrgJson as { rows?: GA4ApiRow[] }).rows?.forEach((r) => {
+            const path = toPagePath(r.dimensionValues[0].value);
+            const sessions = parseInt(r.metricValues[0]?.value ?? "0", 10) || 0;
+            const cur = ga4SessionsByPage.get(path) ?? { pre: 0, post: 0 };
+            ga4SessionsByPage.set(path, { pre: cur.pre, post: cur.post + sessions });
+          });
+
+          (preChannelJson as { rows?: GA4ApiRow[] }).rows?.forEach((r) => {
+            const channel = r.dimensionValues[0].value || "(unassigned)";
+            const sessions = parseInt(r.metricValues[0]?.value ?? "0", 10) || 0;
+            const cur = channelMap.get(channel) ?? { pre: 0, post: 0 };
+            channelMap.set(channel, { pre: cur.pre + sessions, post: cur.post });
+          });
+          (postChannelJson as { rows?: GA4ApiRow[] }).rows?.forEach((r) => {
+            const channel = r.dimensionValues[0].value || "(unassigned)";
+            const sessions = parseInt(r.metricValues[0]?.value ?? "0", 10) || 0;
+            const cur = channelMap.get(channel) ?? { pre: 0, post: 0 };
+            channelMap.set(channel, { pre: cur.pre, post: cur.post + sessions });
+          });
+
+          preLeads = ((preLeadJson as { rows?: GA4ApiRow[] }).rows ?? []).reduce((sum, r) => sum + (parseInt(r.metricValues[0]?.value ?? "0", 10) || 0), 0);
+          postLeads = ((postLeadJson as { rows?: GA4ApiRow[] }).rows ?? []).reduce((sum, r) => sum + (parseInt(r.metricValues[0]?.value ?? "0", 10) || 0), 0);
+
+          ga4Ok = true;
+        } catch (e) {
+          console.error("MigrationHelpView GA4 signals", e);
+        }
+      }
+      setGa4Available(ga4Ok);
+      setLeadSummary(ga4Ok ? { preLeads, postLeads } : null);
+      setChannelChanges(
+        ga4Ok
+          ? Array.from(channelMap.entries())
+              .map(([channel, v]) => ({ channel, preSessions: v.pre, postSessions: v.post }))
+              .sort((a, b) => (b.preSessions + b.postSessions) - (a.preSessions + a.postSessions))
+          : []
+      );
+
+      const allPaths = new Set<string>([...preMap.keys(), ...postMap.keys(), ...ga4SessionsByPage.keys()]);
+      const rows: MigrationPageChange[] = [];
+      let preClicksTotal = 0, postClicksTotal = 0, preImpTotal = 0, postImpTotal = 0;
+
+      allPaths.forEach((path) => {
+        const pre = preMap.get(path) ?? { clicks: 0, impressions: 0, position: 0 };
+        const post = postMap.get(path) ?? { clicks: 0, impressions: 0, position: 0 };
+        const ga4Sessions = ga4SessionsByPage.get(path);
+        preClicksTotal += pre.clicks; postClicksTotal += post.clicks;
+        preImpTotal += pre.impressions; postImpTotal += post.impressions;
+
+        // Only surface pages that mattered pre-migration (had real clicks or GA4 sessions) so the
+        // list stays focused on redirect/indexing risk rather than noise from long-tail pages.
+        const hadTraffic = pre.clicks >= 2 || post.clicks >= 2 || (ga4Sessions && (ga4Sessions.pre >= 2 || ga4Sessions.post >= 2));
+        if (!hadTraffic) return;
+
+        const delta = post.clicks - pre.clicks;
+        const deltaPct = pre.clicks > 0 ? (delta / pre.clicks) * 100 : null;
+
+        let status: MigrationPageChange["status"];
+        if (pre.clicks >= 2 && post.clicks === 0) status = "vanished";
+        else if (pre.clicks === 0 && post.clicks >= 2) status = "new";
+        else if (deltaPct !== null && deltaPct <= -30) status = "dropped";
+        else status = "improved";
+
+        rows.push({
+          path,
+          preClicks: pre.clicks, postClicks: post.clicks,
+          preImpressions: pre.impressions, postImpressions: post.impressions,
+          prePosition: pre.position, postPosition: post.position,
+          preSessions: ga4Sessions ? ga4Sessions.pre : null,
+          postSessions: ga4Sessions ? ga4Sessions.post : null,
+          clicksDelta: delta, clicksDeltaPct: deltaPct,
+          status,
+        });
+      });
+
+      rows.sort((a, b) => a.clicksDelta - b.clicksDelta);
+      setChanges(rows);
+      setSummary({ preClicks: preClicksTotal, postClicks: postClicksTotal, preImpressions: preImpTotal, postImpressions: postImpTotal, windowDays });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load comparison.");
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedGSC, selectedGA4, accessToken, rebrandDate]);
+
+  const filteredChanges = useMemo(
+    () => (filter === "all" ? changes : changes.filter((c) => c.status === filter)),
+    [changes, filter]
+  );
+
+  const vanishedCount = changes.filter((c) => c.status === "vanished").length;
+  const droppedCount = changes.filter((c) => c.status === "dropped").length;
+  const newCount = changes.filter((c) => c.status === "new").length;
+
+  const overallClicksDeltaPct = summary && summary.preClicks > 0
+    ? ((summary.postClicks - summary.preClicks) / summary.preClicks) * 100
+    : null;
+
+  const totalPreSessions = channelChanges.reduce((s, c) => s + c.preSessions, 0);
+  const totalPostSessions = channelChanges.reduce((s, c) => s + c.postSessions, 0);
+  const totalSessionsDeltaPct = totalPreSessions > 0 ? ((totalPostSessions - totalPreSessions) / totalPreSessions) * 100 : null;
+  const leadsDeltaPct = leadSummary && leadSummary.preLeads > 0
+    ? ((leadSummary.postLeads - leadSummary.preLeads) / leadSummary.preLeads) * 100
+    : null;
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-purple-50 border border-purple-100 rounded-2xl p-5 text-sm text-gray-700 flex flex-wrap items-center gap-x-8 gap-y-3">
+        <div>
+          <div className="text-xs font-semibold text-purple-700 uppercase tracking-wide mb-1">Project started</div>
+          <input
+            type="date"
+            value={projectStartDate}
+            onChange={(e) => setProjectStartDate(e.target.value)}
+            className="text-sm border border-gray-200 rounded-lg px-2 py-1 bg-white"
+          />
+        </div>
+        <div>
+          <div className="text-xs font-semibold text-purple-700 uppercase tracking-wide mb-1">Rebrand date (arcavindi → vintage.com)</div>
+          <input
+            type="date"
+            value={rebrandDate}
+            onChange={(e) => setRebrandDate(e.target.value)}
+            className="text-sm border border-gray-200 rounded-lg px-2 py-1 bg-white"
+          />
+        </div>
+        <div className="flex-1 min-w-[200px] text-xs text-gray-500">
+          Adjust the rebrand date if it wasn't exact — the comparison below uses day-matched windows
+          immediately before vs. after it.
+        </div>
+      </div>
+
+      <MigrationChecklist />
+
+      {!selectedGA4 && (
+        <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+          <AlertTriangle size={14} />
+          No GA4 property connected — the comparison below will run on GSC data only. Connect one under Analytics → GA4 to also see sessions, channel-mix, and lead-conversion signals.
+        </div>
+      )}
+
+      {ga4Available && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <ChartCard
+            title="Sessions by channel, pre vs. post rebrand"
+            tip="GA4 sessions grouped by default channel — catches issues GSC alone can't see, e.g. a direct-traffic drop from stale bookmarks, or a referral drop from backlinks that now 404 instead of redirecting."
+          >
+            <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
+              <span>Total sessions</span>
+              <span className="flex items-center gap-1">
+                {totalPreSessions.toLocaleString()} → {totalPostSessions.toLocaleString()}
+                {totalSessionsDeltaPct !== null && (
+                  <span className={totalSessionsDeltaPct < 0 ? "text-rose-600 font-semibold" : "text-emerald-600 font-semibold"}>
+                    ({totalSessionsDeltaPct >= 0 ? "+" : ""}{totalSessionsDeltaPct.toFixed(1)}%)
+                  </span>
+                )}
+              </span>
+            </div>
+            <ScrollTable maxH="14rem">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 sticky top-0">
+                  <tr className="text-left text-xs text-gray-500 uppercase tracking-wide">
+                    <th className="py-2 px-3">Channel</th>
+                    <th className="py-2 px-3">Pre → Post</th>
+                    <th className="py-2 px-3">Δ%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {channelChanges.map((c) => {
+                    const pct = c.preSessions > 0 ? ((c.postSessions - c.preSessions) / c.preSessions) * 100 : null;
+                    return (
+                      <tr key={c.channel} className="border-b border-gray-50 last:border-0">
+                        <td className="py-2 px-3 font-medium text-gray-700">{c.channel}</td>
+                        <td className="py-2 px-3 text-gray-600">{c.preSessions.toLocaleString()} → {c.postSessions.toLocaleString()}</td>
+                        <td className="py-2 px-3">
+                          {pct === null ? "—" : (
+                            <span className={pct < 0 ? "text-rose-600 font-semibold" : "text-emerald-600 font-semibold"}>
+                              {pct >= 0 ? "+" : ""}{pct.toFixed(0)}%
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </ScrollTable>
+          </ChartCard>
+
+          <ChartCard
+            title="Lead conversions (/free-selling-pack referrals)"
+            tip="Sessions referred into /free-selling-pack from anywhere on the site — a proxy for generate_lead conversions, so a broken funnel shows up even if traffic itself looks unaffected."
+          >
+            {leadSummary ? (
+              <div className="flex flex-col items-center justify-center h-full py-6">
+                <div className="text-3xl font-bold text-gray-800 mb-1">
+                  {leadSummary.preLeads.toLocaleString()} → {leadSummary.postLeads.toLocaleString()}
+                </div>
+                {leadsDeltaPct !== null && (
+                  <div className={`text-sm font-semibold ${leadsDeltaPct < 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                    {leadsDeltaPct >= 0 ? "+" : ""}{leadsDeltaPct.toFixed(1)}% vs. pre-rebrand window
+                  </div>
+                )}
+                <div className="text-xs text-gray-400 mt-2">pre-rebrand → post-rebrand</div>
+              </div>
+            ) : (
+              <div className="text-sm text-gray-400 text-center py-8">No data yet.</div>
+            )}
+          </ChartCard>
+        </div>
+      )}
+
+      <ChartCard
+        title="What's changed on vintagecashcow since the rebrand"
+        tip="Compares GSC page-level clicks/impressions (plus GA4 organic sessions, when connected) in the window immediately before the rebrand date vs. the equivalent window after it — flags pages that vanished, dropped, or are new, so redirect/indexing issues surface early."
+      >
+        <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+          <button
+            onClick={runComparison}
+            disabled={loading}
+            className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg"
+          >
+            <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+            {loading ? "Comparing…" : "Run comparison"}
+          </button>
+          {summary && (
+            <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap">
+              <span>{summary.windowDays}-day windows either side of {formatDisplayDate(rebrandDate)}</span>
+              <span className="flex items-center gap-1">
+                Clicks: {summary.preClicks.toLocaleString()} → {summary.postClicks.toLocaleString()}
+                {overallClicksDeltaPct !== null && (
+                  <span className={overallClicksDeltaPct < 0 ? "text-rose-600 font-semibold" : "text-emerald-600 font-semibold"}>
+                    ({overallClicksDeltaPct >= 0 ? "+" : ""}{overallClicksDeltaPct.toFixed(1)}%)
+                  </span>
+                )}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <div className="flex items-center gap-2 text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-lg px-3 py-2 mb-4">
+            <AlertTriangle size={14} /> {error}
+          </div>
+        )}
+
+        {!error && !summary && !loading && (
+          <div className="text-sm text-gray-400 text-center py-10">
+            Set the rebrand date above, then run the comparison to see which pages may have broken redirects or indexing issues.
+          </div>
+        )}
+
+        {loading && <Spinner />}
+
+        {summary && !loading && (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+              {[
+                { label: "Vanished", count: vanishedCount, cls: "bg-rose-50 text-rose-700 border-rose-200", key: "vanished" as const },
+                { label: "Dropped ≥30%", count: droppedCount, cls: "bg-amber-50 text-amber-700 border-amber-200", key: "dropped" as const },
+                { label: "New", count: newCount, cls: "bg-emerald-50 text-emerald-700 border-emerald-200", key: "new" as const },
+                { label: "All flagged", count: changes.length, cls: "bg-gray-50 text-gray-700 border-gray-200", key: "all" as const },
+              ].map((s) => (
+                <button
+                  key={s.key}
+                  onClick={() => setFilter(s.key)}
+                  className={`text-left rounded-xl border px-3 py-2.5 transition ${s.cls} ${filter === s.key ? "ring-2 ring-purple-300" : ""}`}
+                >
+                  <div className="text-lg font-bold">{s.count}</div>
+                  <div className="text-xs font-medium">{s.label}</div>
+                </button>
+              ))}
+            </div>
+
+            {filteredChanges.length === 0 ? (
+              <div className="text-sm text-gray-400 text-center py-8">No pages match this filter — nothing concerning here.</div>
+            ) : (
+              <ScrollTable maxH="24rem">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr className="text-left text-xs text-gray-500 uppercase tracking-wide">
+                      <th className="py-2 px-3">Page</th>
+                      <th className="py-2 px-3">Status</th>
+                      <th className="py-2 px-3">Clicks (pre → post)</th>
+                      <th className="py-2 px-3">Δ%</th>
+                      {ga4Available && <th className="py-2 px-3">GA4 Organic Sessions (pre → post)</th>}
+                      <th className="py-2 px-3">Impressions (pre → post)</th>
+                      <th className="py-2 px-3">Position (pre → post)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredChanges.map((c) => (
+                      <tr key={c.path} className="border-b border-gray-50 last:border-0 hover:bg-purple-50/20">
+                        <td className="py-2 px-3 font-medium text-[#5b4fa8] max-w-[320px] truncate" title={c.path}>{c.path}</td>
+                        <td className="py-2 px-3">
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
+                            c.status === "vanished" ? "bg-rose-50 text-rose-700 border-rose-200" :
+                            c.status === "dropped" ? "bg-amber-50 text-amber-700 border-amber-200" :
+                            c.status === "new" ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
+                            "bg-gray-50 text-gray-600 border-gray-200"
+                          }`}>
+                            {c.status === "vanished" ? "Vanished" : c.status === "dropped" ? "Dropped" : c.status === "new" ? "New" : "Improved"}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-gray-700">{c.preClicks.toLocaleString()} → {c.postClicks.toLocaleString()}</td>
+                        <td className="py-2 px-3">
+                          {c.clicksDeltaPct === null ? "—" : (
+                            <span className={c.clicksDeltaPct < 0 ? "text-rose-600 font-semibold" : "text-emerald-600 font-semibold"}>
+                              {c.clicksDeltaPct >= 0 ? "+" : ""}{c.clicksDeltaPct.toFixed(0)}%
+                            </span>
+                          )}
+                        </td>
+                        {ga4Available && (
+                          <td className="py-2 px-3 text-gray-500">
+                            {c.preSessions === null && c.postSessions === null ? "—" : `${(c.preSessions ?? 0).toLocaleString()} → ${(c.postSessions ?? 0).toLocaleString()}`}
+                          </td>
+                        )}
+                        <td className="py-2 px-3 text-gray-500">{c.preImpressions.toLocaleString()} → {c.postImpressions.toLocaleString()}</td>
+                        <td className="py-2 px-3 text-gray-500">{c.prePosition ? c.prePosition.toFixed(1) : "—"} → {c.postPosition ? c.postPosition.toFixed(1) : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </ScrollTable>
+            )}
+          </>
+        )}
+      </ChartCard>
+    </div>
+  );
+}
+
 function WatchWizardView() {
   const [step, setStep]               = useState(0);
   const [answers, setAnswers]         = useState<Record<string, string>>({});
@@ -9593,6 +10258,7 @@ export default function App() {
     { key: "dailyObservation", label: "Daily Observation", icon: Clock },
     { key: "crm",           label: "CRM",            icon: Building2 },
     { key: "watchWizard", label: "Watch Wizard", icon: Camera },
+    { key: "migrationHelp", label: "Migration Help", icon: Link2 },
   ];
 
   const VIEW_TOOLTIPS: Record<ActiveView, string> = {
@@ -9617,6 +10283,7 @@ export default function App() {
     dailyObservation: "Daily Observation — WoW & YoY organic performance (GA4 + GSC, matched to day of week) for both properties, plus what changed yesterday in Trello and Notion.",
     crm: "CRM — HubSpot contacts, companies, deals and pipeline overview.",
     watchWizard: "Watch Wizard — answer 5 quick questions to identify your watch",
+    migrationHelp: "Migration Help — track outstanding domain-migration tasks and see what's changed in GSC since the arcavindi → vintage.com rebrand.",
   };
 
   // ─── Mega Nav grouping ──────────────────────────────────────────────────────
@@ -9629,6 +10296,7 @@ export default function App() {
     { key: "conversions", label: "Conversions", icon: ShoppingCart, views: ["conversions", "nbSignUps"] },
     { key: "reporting", label: "Reporting", icon: Activity, views: ["dailySnapshot", "dailyStandup", "dailyObservation"] },
     { key: "tools", label: "Tools", icon: Building2, views: ["crm", "watchWizard"] },
+    { key: "migration", label: "Migration", icon: Link2, views: ["migrationHelp"] },
   ];
 
   const [openNavCategory, setOpenNavCategory] = useState<string | null>(null);
@@ -13797,6 +14465,13 @@ ${combinedHtml}
             {activeView === "crm" && <CrmView />}
 
             {activeView === "watchWizard" && <WatchWizardView />}
+
+            {activeView === "migrationHelp" && (
+              <>
+                <SectionDivider label="MIGRATION HELP" />
+                <MigrationHelpView selectedGSC={selectedGSC} selectedGA4={selectedGA4} accessToken={accessToken} />
+              </>
+            )}
 
             {activeView === "dailyStandup" && (() => {
               // ── helpers ──────────────────────────────────────────────────
