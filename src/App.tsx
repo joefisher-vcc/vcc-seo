@@ -6563,7 +6563,9 @@ const VCC_REDIRECT_TSV: string = "/\t/\t301\n/ are they worth using\t\t404\n/ ar
 // One question: for every old Vintage Cash Cow URL, how many Organic Search sessions did it
 // get before the rebrand vs after — and where did those sessions go on vintage.com?
 //
-// • GA4 only (Organic Search sessions, by landing page + hostname), both properties.
+// • Source (switchable): Search Console clicks per page from the vintagecashcow.co.uk and vintage.com
+//   GSC properties (default — doesn't depend on GA4 tagging), or GA4 Organic Search sessions per
+//   landing page + hostname.
 // • Sessions are grouped by the HOSTNAME they happened on, not by which GA4 property recorded
 //   them. If both properties recorded the same hostname (e.g. the old VCC tag still firing on
 //   vintage.com), that hostname is counted from ONE property only, so nothing is double counted.
@@ -6578,6 +6580,9 @@ const VCC_REDIRECT_TSV: string = "/\t/\t301\n/ are they worth using\t\t404\n/ ar
 
 const LS_POST_REBRAND_DATE = "vcc_post_rebrand_date_v1";
 const LS_POST_REBRAND_GA4  = "vcc_post_rebrand_ga4_v2";
+const LS_POST_REBRAND_GSC  = "vcc_post_rebrand_gsc_v1";
+const LS_POST_REBRAND_SRC  = "vcc_post_rebrand_source_v1";
+type PrSource = "gsc" | "ga4";
 const LS_POST_REBRAND_MAP  = "vcc_post_rebrand_redirect_map_v1";
 const POST_REBRAND_DEFAULT_DATE = "2026-10-01";
 
@@ -6589,7 +6594,7 @@ interface PrWindows { postStart: string; postEnd: string; postDays: number; cmpS
 type PrMatch = "pasted" | "list" | "path" | null;
 type PrStatus = "held" | "partial" | "dropped" | "home" | "nomatch" | "notRedirected";
 
-const PR_PROP_LABEL: Record<PrProp, string> = { vcc: "VCC GA4", av: "Vintage.com GA4" };
+const prPropLabel = (src: PrSource, p: PrProp) => `${p === "vcc" ? "VCC" : "Vintage.com"} ${src === "gsc" ? "GSC" : "GA4"}`;
 
 function prTodayLocal(): string {
   const d = new Date();
@@ -6678,10 +6683,11 @@ interface PrRow {
 interface PostRebrandViewProps {
   accessToken: string;
   ga4Properties: { value: string; label: string }[];
-  defaults: { vccGa4: string; avGa4: string };
+  gscProperties: { value: string; label: string }[];
+  defaults: { vccGa4: string; avGa4: string; vccGsc: string; avGsc: string };
 }
 
-function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandViewProps) {
+function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults }: PostRebrandViewProps) {
   const lsGet = (k: string, d: string) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
   const [rebrandDate, setRebrandDate] = useState(() => lsGet(LS_POST_REBRAND_DATE, POST_REBRAND_DEFAULT_DATE));
   const [props, setProps] = useState<Record<PrProp, string>>(() => {
@@ -6691,6 +6697,11 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
     return { vcc: "", av: "" };
   });
   const [mapText, setMapText] = useState(() => lsGet(LS_POST_REBRAND_MAP, ""));
+  const [source, setSource] = useState<PrSource>(() => (lsGet(LS_POST_REBRAND_SRC, "gsc") === "ga4" ? "ga4" : "gsc"));
+  const [gscProps, setGscProps] = useState<Record<PrProp, string>>(() => {
+    try { const r = localStorage.getItem(LS_POST_REBRAND_GSC); if (r) { const j = JSON.parse(r); return { vcc: j.vcc || "", av: j.av || "" }; } } catch { /* ignore */ }
+    return { vcc: "", av: "" };
+  });
   const [showSettings, setShowSettings] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -6708,6 +6719,17 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
   useEffect(() => { try { localStorage.setItem(LS_POST_REBRAND_DATE, rebrandDate); } catch { /* ignore */ } }, [rebrandDate]);
   useEffect(() => { try { localStorage.setItem(LS_POST_REBRAND_GA4, JSON.stringify(props)); } catch { /* ignore */ } }, [props]);
   useEffect(() => { try { localStorage.setItem(LS_POST_REBRAND_MAP, mapText); } catch { /* ignore */ } }, [mapText]);
+  useEffect(() => { try { localStorage.setItem(LS_POST_REBRAND_SRC, source); } catch { /* ignore */ } }, [source]);
+  useEffect(() => { try { localStorage.setItem(LS_POST_REBRAND_GSC, JSON.stringify(gscProps)); } catch { /* ignore */ } }, [gscProps]);
+  useEffect(() => {
+    setGscProps((p) => {
+      const next = { vcc: p.vcc || defaults.vccGsc, av: p.av || defaults.avGsc };
+      return next.vcc === p.vcc && next.av === p.av ? p : next;
+    });
+  }, [defaults.vccGsc, defaults.avGsc]);
+  const srcProps = source === "gsc" ? gscProps : props;
+  const M = source === "gsc" ? "GSC clicks" : "organic sessions";
+  const MCap = source === "gsc" ? "GSC clicks" : "Org. sessions";
   useEffect(() => {
     setProps((p) => {
       const next = { vcc: p.vcc || defaults.vccGa4, av: p.av || defaults.avGa4 };
@@ -6720,7 +6742,7 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
   const lastKey = useRef("");
   const run = useCallback(async () => {
     if (!accessToken) { setError("Sign in with Google first."); return; }
-    if (!props.vcc) { setError("Choose your Vintage Cash Cow GA4 property in Settings below — without it there are no old VCC URLs to show."); setShowSettings(true); return; }
+    if (!srcProps.vcc) { setError(`Choose the Vintage Cash Cow ${source === "gsc" ? "Search Console" : "GA4"} property in Settings below — without it there are no old VCC URLs to show.`); setShowSettings(true); return; }
     const myReq = ++reqId.current;
     setLoading(true); setError(null);
     const warns: string[] = [];
@@ -6758,9 +6780,44 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
           hm[path] = (hm[path] ?? 0) + n;
         });
       } catch (e) {
-        warns.push(`${PR_PROP_LABEL[p]} (${k === "cmp" ? "comparison" : "post"} window): ${e instanceof Error ? e.message : String(e)}`);
+        warns.push(`${prPropLabel("ga4", p)} (${k === "cmp" ? "week before" : "last 7 days"}): ${e instanceof Error ? e.message : String(e)}`);
       }
     }));
+    // ── Search Console: clicks per page URL (host taken from the URL itself) ──
+    const loadGscSlot = (p: PrProp, site: string) => Promise.all((["cmp", "post"] as PrWinKey[]).map(async (k) => {
+      out[p][k] = {};
+      const range = k === "cmp" ? { startDate: w.cmpStart, endDate: w.cmpEnd } : { startDate: w.postStart, endDate: w.postEnd };
+      try {
+        const st = (stats[`${p}|${k}`] = { rows: 0, sessions: 0 });
+        for (let startRow = 0; startRow < 100000; startRow += 25000) {
+          const r = await fetch(`https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(site)}/searchAnalytics/query`, {
+            method: "POST", headers, body: JSON.stringify({ ...range, dimensions: ["page"], rowLimit: 25000, startRow, dataState: "all" }),
+          });
+          const j = await r.json();
+          if (!r.ok || j.error) throw new Error(j.error?.message || `HTTP ${r.status}`);
+          const rows = (j.rows ?? []) as GSCApiRow[];
+          rows.forEach((row) => {
+            const url = row.keys[0] || "";
+            let host = "(not set)";
+            try { host = new URL(url).host.toLowerCase(); } catch { /* relative */ }
+            const hm = (out[p][k][host] ??= {});
+            const path = toPagePath(url);
+            hm[path] = (hm[path] ?? 0) + row.clicks;
+            st.rows++; st.sessions += row.clicks;
+          });
+          if (rows.length < 25000) break;
+        }
+      } catch (e) {
+        warns.push(`${prPropLabel("gsc", p)} (${k === "cmp" ? "week before" : "last 7 days"}): ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }));
+    if (source === "gsc") {
+      await Promise.all((["vcc", "av"] as PrProp[]).filter((p) => gscProps[p]).map((p) => loadGscSlot(p, gscProps[p])));
+      if (myReq !== reqId.current) return;
+      setDetect(null);
+      setRaw(out); setWin(w); setWarnings(warns); setFetchStats(stats); setLoadedAt(new Date()); setLoading(false);
+      return;
+    }
     await Promise.all((["vcc", "av"] as PrProp[]).filter((p) => props[p]).map((p) => loadSlot(p, props[p])));
 
     // If the chosen "VCC" property recorded (almost) no vintagecashcow.co.uk organic sessions before the
@@ -6793,23 +6850,23 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
         await loadSlot("vcc", best.id);
         if (myReq !== reqId.current) return;
         setProps((x) => ({ ...x, vcc: best.id }));
-        lastKey.current = rebrandDate; // avoid an immediate auto-reload from the property change
+        lastKey.current = `${rebrandDate}|${source}`; // avoid an immediate auto-reload from the property change
       }
     }
     setDetect(detected);
     if (myReq !== reqId.current) return;
     setRaw(out); setWin(w); setWarnings(warns); setFetchStats(stats); setLoadedAt(new Date()); setLoading(false);
-  }, [accessToken, props, rebrandDate, ga4Properties]);
+  }, [accessToken, props, gscProps, source, srcProps.vcc, rebrandDate, ga4Properties]);
 
   // Auto-load once properties are known; reload when the date or comparison changes.
   useEffect(() => {
-    const key = rebrandDate;
+    const key = `${rebrandDate}|${source}`;
     if (!autoRan.current) {
-      if (!accessToken || !props.vcc) return;
+      if (!accessToken || !srcProps.vcc) return;
       autoRan.current = true; lastKey.current = key; void run(); return;
     }
     if (key !== lastKey.current) { lastKey.current = key; void run(); }
-  }, [accessToken, props, run, rebrandDate]);
+  }, [accessToken, srcProps.vcc, run, rebrandDate, source]);
 
   // ── Hostname audit: which property's data to use for each hostname ──
   const hostAudit = useMemo(() => {
@@ -6920,9 +6977,9 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
       <div className="rounded-2xl p-6 text-white shadow-sm" style={{ background: "linear-gradient(135deg,#4c1d95 0%,#7e22ce 55%,#0d9488 100%)" }}>
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="max-w-2xl">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-white/70">GA4 · Organic Search sessions · by landing page</p>
+            <p className="text-[11px] font-bold uppercase tracking-widest text-white/70">{source === "gsc" ? "Search Console · clicks per URL" : "GA4 · Organic Search sessions · by landing page"} · joined to the redirect list</p>
             <h2 className="text-2xl font-bold mt-1">Post Rebrand Analysis</h2>
-            <p className="text-sm text-white/80 mt-1.5">Every old Vintage Cash Cow URL's organic sessions in the week before the migration on <strong>{formatDisplayDate(rebrandDate)}</strong>, next to the vintage.com URL it redirects to and that page's organic sessions over the last 7 days (same weekdays).</p>
+            <p className="text-sm text-white/80 mt-1.5">Every old Vintage Cash Cow URL's {M} in the week before the migration on <strong>{formatDisplayDate(rebrandDate)}</strong>, next to the vintage.com URL it redirects to and that page's {M} over the last 7 days (same weekdays).</p>
           </div>
           <div className="flex flex-col items-end gap-2">
             <button type="button" onClick={() => void run()} disabled={loading}
@@ -6938,6 +6995,15 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
             <input type="date" value={rebrandDate} max={prTodayLocal()} onChange={(e) => e.target.value && setRebrandDate(e.target.value)}
               className="bg-white/10 border border-white/25 rounded-xl px-3 py-1.5 text-sm text-white [color-scheme:dark] focus:outline-none focus:border-white/60" />
           </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-white/70 mb-1">Metric</label>
+            <div className="inline-flex bg-white/10 rounded-xl p-0.5">
+              {([["gsc", "Search Console clicks"], ["ga4", "GA4 organic sessions"]] as [PrSource, string][]).map(([val, l]) => (
+                <button key={val} type="button" onClick={() => setSource(val)}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${source === val ? "bg-white text-purple-800" : "text-white/80 hover:text-white"}`}>{l}</button>
+              ))}
+            </div>
+          </div>
           <button type="button" onClick={() => setShowSettings((v) => !v)} className="text-xs font-semibold text-white/80 hover:text-white underline underline-offset-2">
             Settings {showSettings ? "▾" : "▸"}
           </button>
@@ -6945,6 +7011,12 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
         {showSettings && (
           <div className="mt-4 bg-white rounded-xl p-4 text-gray-800 grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="space-y-3">
+              {(["vcc", "av"] as PrProp[]).map((p) => (
+                <div key={`gsc-${p}`}>
+                  <label className="block text-[11px] font-semibold text-gray-500 mb-1">{p === "vcc" ? "Vintage Cash Cow Search Console property" : "Vintage.com Search Console property"}</label>
+                  <Select value={gscProps[p]} onChange={(v) => setGscProps((x) => ({ ...x, [p]: v }))} options={gscProperties} placeholder="— none —" disabled={gscProperties.length === 0} />
+                </div>
+              ))}
               {(["vcc", "av"] as PrProp[]).map((p) => (
                 <div key={p}>
                   <label className="block text-[11px] font-semibold text-gray-500 mb-1">{p === "vcc" ? "Vintage Cash Cow GA4 property" : "Vintage.com GA4 property"}</label>
@@ -6968,12 +7040,12 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
       {warnings.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-900 space-y-1">{warnings.map((w, i) => <p key={i}>{w}</p>)}</div>
       )}
-      {props.vcc && props.vcc === props.av && (
+      {source === "ga4" && props.vcc && props.vcc === props.av && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-900">Both slots point at the same GA4 property — that's fine if one property now tracks both domains, but check Settings if that's not expected.</div>
       )}
-      {!props.vcc && !loading && (
+      {!srcProps.vcc && !loading && (
         <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-xl px-4 py-3 text-sm flex items-center justify-between gap-3 flex-wrap">
-          <span>Choose your <strong>Vintage Cash Cow GA4 property</strong> (and the Vintage.com one) to load the table.</span>
+          <span>Choose your <strong>Vintage Cash Cow {source === "gsc" ? "Search Console" : "GA4"} property</strong> (and the Vintage.com one) to load the table.</span>
           <button type="button" onClick={() => setShowSettings(true)} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-amber-600 text-white hover:bg-amber-700">Open settings</button>
         </div>
       )}
@@ -6990,7 +7062,7 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
           <p className="text-[11px] text-gray-500 -mt-3 px-1">
             Loaded: {(["vcc", "av"] as PrProp[]).map((p) => (["cmp", "post"] as PrWinKey[]).map((k) => {
               const st = fetchStats[`${p}|${k}`];
-              return `${PR_PROP_LABEL[p]} ${k === "cmp" ? "week before" : "last 7 days"}: ${st ? `${prInt(st.sessions)} sessions` : "not loaded"}`;
+              return `${prPropLabel(source, p)} ${k === "cmp" ? "week before" : "last 7 days"}: ${st ? `${prInt(st.sessions)} ${source === "gsc" ? "clicks" : "sessions"}` : "not loaded"}`;
             }).join(" · ")).join(" · ")}
           </p>
           {detect?.picked && detect.picked !== detect.previous && (
@@ -7001,7 +7073,9 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
           )}
           {Object.keys(domainPages.vcc).length === 0 && (
             <div className="bg-red-50 border border-red-200 text-red-800 rounded-xl px-4 py-3 text-sm space-y-2">
-              <p><strong>No vintagecashcow.co.uk organic sessions found</strong> in {prRange(win.cmpStart, win.cmpEnd)} in any GA4 property this Google login can access{detect?.ran ? ` (checked ${detect.results.length})` : ""}. Without them there are no old VCC URLs to list. Either VCC's GA4 lives under a different Google account, or the date range is before tracking started.</p>
+              {source === "gsc"
+                ? <p><strong>No vintagecashcow.co.uk clicks found</strong> in {prRange(win.cmpStart, win.cmpEnd)} in the Search Console property “{gscProps.vcc || "none"}”. Check the Vintage Cash Cow Search Console property in Settings.</p>
+                : <p><strong>No vintagecashcow.co.uk organic sessions found</strong> in {prRange(win.cmpStart, win.cmpEnd)} in any GA4 property this Google login can access{detect?.ran ? ` (checked ${detect.results.length})` : ""}. Switch the metric to <strong>Search Console clicks</strong> — it reads the vintagecashcow.co.uk Search Console property directly.</p>}
               {detect?.ran && (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
@@ -7020,20 +7094,20 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
             <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
               <p className="text-[11px] font-semibold text-purple-700">VCC URLs · week before migration</p>
               <p className="text-xl font-bold text-gray-900 mt-2 leading-none">{prInt(summary.v.pre)}</p>
-              <p className="text-[10px] text-gray-400 mt-1">organic sessions · {prRange(win.cmpStart, win.cmpEnd)}</p>
+              <p className="text-[10px] text-gray-400 mt-1">{M} · {prRange(win.cmpStart, win.cmpEnd)}</p>
             </div>
             <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
               <p className="text-[11px] font-semibold text-teal-700">Vintage.com URLs they redirect to · last 7 days</p>
               <p className="text-xl font-bold text-gray-900 mt-2 leading-none">{prInt(summary.matchedAfter)}</p>
-              <p className="text-[10px] text-gray-400 mt-1">organic sessions · {prRange(win.postStart, win.postEnd)} · not counting URLs sent to the homepage</p>
+              <p className="text-[10px] text-gray-400 mt-1">{M} · {prRange(win.postStart, win.postEnd)} · not counting URLs sent to the homepage</p>
             </div>
             <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
               <div className="flex items-start justify-between gap-2"><p className="text-[11px] font-semibold text-gray-700">Difference</p><PrDelta cur={summary.matchedAfter} prev={summary.v.pre} /></div>
               <p className={`text-xl font-bold mt-2 leading-none ${summary.matchedAfter - summary.v.pre < 0 ? "text-red-600" : "text-emerald-600"}`}>{summary.matchedAfter - summary.v.pre > 0 ? "+" : ""}{prInt(summary.matchedAfter - summary.v.pre)}</p>
-              <p className="text-[10px] text-gray-400 mt-1">organic sessions per week</p>
+              <p className="text-[10px] text-gray-400 mt-1">{M} per week</p>
             </div>
             <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-              <p className="text-[11px] font-semibold text-gray-500">All vintage.com organic · last 7 days</p>
+              <p className="text-[11px] font-semibold text-gray-500">All vintage.com {M} · last 7 days</p>
               <p className="text-xl font-bold text-gray-900 mt-2 leading-none">{prInt(summary.n.post)}</p>
               <p className="text-[10px] text-gray-400 mt-1">every page incl. homepage · was {prInt(summary.n.pre)} the week before</p>
             </div>
@@ -7044,7 +7118,7 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
             <div className="flex items-end justify-between gap-3 flex-wrap mb-4">
               <div>
                 <h2 className="text-base font-bold text-gray-900">VCC URLs (week before migration) → vintage.com URLs (last 7 days)</h2>
-                <p className="text-xs text-gray-500 mt-0.5 max-w-3xl">Left: organic sessions each old VCC landing page got in the 7 days before the migration. Right: the vintage.com page it 301s to and its organic sessions over the last 7 days (same weekdays). Held up ≥ 90% of the old figure, partly lost 50–90%, dropped &lt; 50%. Homepage redirects aren't credited with homepage traffic. Where several VCC URLs redirect to one page, that page's sessions are split between them by their old traffic.</p>
+                <p className="text-xs text-gray-500 mt-0.5 max-w-3xl">Left: {M} each old VCC URL got in the 7 days before the migration. Right: the vintage.com URL it 301s to (from the redirect list) and its {M} over the last 7 days (same weekdays). Held up ≥ 90% of the old figure, partly lost 50–90%, dropped &lt; 50%. Homepage redirects aren't credited with homepage traffic. Where several VCC URLs redirect to one page, that page's figure is split between them by their old traffic.</p>
               </div>
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
@@ -7099,9 +7173,9 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
                       <th colSpan={3} className={`${th} text-gray-700 border-l border-gray-200`}>Difference</th>
                     </tr>
                     <tr>
-                      <th className={th}>VCC URL</th><th className={`${th} text-right`}>Org. sessions<br /><span className="normal-case font-normal text-gray-400">{prRange(win.cmpStart, win.cmpEnd)}</span></th>
-                      <th className={`${th} border-l border-gray-200`}>Vintage.com URL</th><th className={`${th} text-right`}>Org. sessions<br /><span className="normal-case font-normal text-gray-400">{prRange(win.postStart, win.postEnd)}</span></th>
-                      <th className={`${th} text-right border-l border-gray-200`}>Sessions</th><th className={`${th} text-right`}>% change</th><th className={th}>Status</th>
+                      <th className={th}>VCC URL</th><th className={`${th} text-right`}>{MCap}<br /><span className="normal-case font-normal text-gray-400">{prRange(win.cmpStart, win.cmpEnd)}</span></th>
+                      <th className={`${th} border-l border-gray-200`}>Vintage.com URL</th><th className={`${th} text-right`}>{MCap}<br /><span className="normal-case font-normal text-gray-400">{prRange(win.postStart, win.postEnd)}</span></th>
+                      <th className={`${th} text-right border-l border-gray-200`}>{source === "gsc" ? "Clicks" : "Sessions"}</th><th className={`${th} text-right`}>% change</th><th className={th}>Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -7139,7 +7213,7 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
           {/* Data check */}
           <details open={sharedHosts.length > 0} className={`rounded-2xl p-5 text-xs shadow-sm border ${sharedHosts.length ? "bg-amber-50/60 border-amber-200" : "bg-white border-gray-100"}`}>
             <summary className="cursor-pointer font-semibold text-gray-800">
-              GA4 data check — organic sessions by hostname{sharedHosts.length > 0 && <span className="text-amber-800"> · {sharedHosts.length} hostname{sharedHosts.length > 1 ? "s" : ""} recorded by both properties (de-duplicated)</span>}
+              Data check — {M} by hostname{sharedHosts.length > 0 && <span className="text-amber-800"> · {sharedHosts.length} hostname{sharedHosts.length > 1 ? "s" : ""} recorded by both properties (de-duplicated)</span>}
             </summary>
             {sharedHosts.length > 0 && (
               <p className="mt-3 text-amber-900 leading-relaxed">
@@ -7150,8 +7224,8 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
               <table className="w-full text-left">
                 <thead><tr className="bg-gray-50">
                   <th className={th}>Hostname</th><th className={th}>Counted as</th>
-                  <th className={`${th} text-right`}>VCC GA4 week before</th><th className={`${th} text-right`}>VCC GA4 last 7d</th>
-                  <th className={`${th} text-right`}>V.com GA4 week before</th><th className={`${th} text-right`}>V.com GA4 last 7d</th><th className={th}>Using</th>
+                  <th className={`${th} text-right`}>{prPropLabel(source, "vcc")} week before</th><th className={`${th} text-right`}>{prPropLabel(source, "vcc")} last 7d</th>
+                  <th className={`${th} text-right`}>{prPropLabel(source, "av")} week before</th><th className={`${th} text-right`}>{prPropLabel(source, "av")} last 7d</th><th className={th}>Using</th>
                 </tr></thead>
                 <tbody className="divide-y divide-gray-100">
                   {hostAudit.map((h) => (
@@ -7162,7 +7236,7 @@ function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandVi
                       <td className={`${td} text-right ${h.source === "vcc" ? "font-semibold" : "text-gray-400"}`}>{prInt(h.n.vcc.post)}</td>
                       <td className={`${td} text-right ${h.source === "av" ? "font-semibold" : "text-gray-400"}`}>{prInt(h.n.av.cmp)}</td>
                       <td className={`${td} text-right ${h.source === "av" ? "font-semibold" : "text-gray-400"}`}>{prInt(h.n.av.post)}</td>
-                      <td className={td}>{h.source ? PR_PROP_LABEL[h.source] : "—"}{h.shared && <span className="ml-1.5 text-[10px] font-bold text-amber-700">both tagged</span>}</td>
+                      <td className={td}>{h.source ? prPropLabel(source, h.source) : "—"}{h.shared && <span className="ml-1.5 text-[10px] font-bold text-amber-700">both tagged</span>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -7769,8 +7843,15 @@ export default function App() {
       ga4Properties.find((p) => p.label === VCC_GA4_LABEL) ??
       ga4Properties.find((p) => norm(p.label).includes("vintagecashcow") && p.value !== avGA4Id) ??
       ga4Properties.find((p) => /\bvcc\b/i.test(p.label) && p.value !== avGA4Id);
-    return { vccGa4: vcc?.value ?? "", avGa4: avGA4Id };
-  }, [ga4Properties, avGA4Id]);
+    // Prefer the whole-site property (sc-domain:… or the bare https://www.… root) over sub-folder properties like /blog/.
+    const pickGsc = (test: (v: string) => boolean) => {
+      const c = gscProperties.map((p) => p.value).filter((v) => test(v.toLowerCase()));
+      return c.find((v) => v.startsWith("sc-domain:")) ?? c.find((v) => /^https?:\/\/[^/]+\/?$/i.test(v)) ?? c[0] ?? "";
+    };
+    const vccGsc = pickGsc((v) => v.includes("vintagecashcow"));
+    const avGsc = pickGsc((v) => /(^|[/.:])vintage\.com/.test(v)) || avGscId;
+    return { vccGa4: vcc?.value ?? "", avGa4: avGA4Id, vccGsc, avGsc };
+  }, [ga4Properties, avGA4Id, gscProperties, avGscId]);
 
   // ── Persist selected properties across refreshes ─────────────────────────
   useEffect(() => { if (selectedGA4) localStorage.setItem(LS_SELECTED_GA4, selectedGA4); else localStorage.removeItem(LS_SELECTED_GA4); }, [selectedGA4]);
@@ -15116,6 +15197,7 @@ ${combinedHtml}
                 <PostRebrandView
                   accessToken={accessToken}
                   ga4Properties={ga4Properties}
+                  gscProperties={gscProperties}
                   defaults={postRebrandDefaults}
                 />
               </>
