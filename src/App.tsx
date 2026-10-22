@@ -1703,7 +1703,8 @@ interface GscOppProps {
 type OppQuerySortKey = "query" | "impressions" | "clicks" | "ctr" | "position";
 type OppPageSortKey  = "page" | "impressions" | "clicks" | "ctr" | "position" | "queries";
 
-const BRAND_TERMS_GLOBAL = ["vintage cash cow", "vintagecashcow", "vcc"];
+// "vin" = any query containing "vin" anywhere (vintage, vinted, vintage.com, arcavindi…) is brand.
+const BRAND_TERMS_GLOBAL = ["vin", "vintage cash cow", "vintagecashcow", "vcc"];
 
 function isBrandQuery(q: string) {
   const ql = q.toLowerCase();
@@ -1726,7 +1727,8 @@ function isBrandQuery(q: string) {
  *     matches "cash cow", "cow and cash", "vintage cash big cow"; "cash+vintage" matches
  *     "vintage cash cow" and "vintage things for cash").
  *
- * Plus a built-in rule: any query containing 7+ consecutive digits (phone numbers) is brand.
+ * Plus built-in rules: any query containing 7+ consecutive digits (phone numbers) is brand, and any
+ * query containing "vin" anywhere (vintage, vinted, vintage.com, arcavindi…) is brand.
  */
 const NBSEO_DEFAULT_BRAND_TERMS = [
   // ── Broad rules — these three alone catch the vast majority of brand traffic ─────────
@@ -1836,6 +1838,8 @@ function nbSeoClassify(query: string, terms: string[]): "brand" | "nonBrand" {
   const ql = query.toLowerCase().trim();
   if (!ql) return "nonBrand";
   if (looksLikePhoneNumber(ql)) return "brand";
+  // Built-in rule: any query containing "vin" anywhere is brand (vintage, vinted, vintage.com, arcavindi…).
+  if (ql.includes("vin")) return "brand";
   for (const raw of terms) {
     const t = raw.toLowerCase().trim();
     if (!t) continue;
@@ -6797,6 +6801,11 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
   const [qBrand, setQBrand] = useState<"all" | "nonBrand" | "brand">("nonBrand");
   const [qRank, setQRank] = useState<"clicks" | "impressions">("clicks");
   const [qSearch, setQSearch] = useState("");
+  const [q4, setQ4] = useState<{ vccPre: Record<string, PrGscAgg>; avPre: Record<string, PrGscAgg>; capped: boolean } | null>(null);
+  const [q4Tab, setQ4Tab] = useState<"drops" | "gains" | "lost" | "new" | "all">("drops");
+  const [q4Brand, setQ4Brand] = useState<"all" | "nonBrand" | "brand">("nonBrand");
+  const [q4Rank, setQ4Rank] = useState<"clicks" | "impressions">("clicks");
+  const [q4Search, setQ4Search] = useState("");
   const [wowSearch, setWowSearch] = useState("");
   const [detect, setDetect] = useState<{ ran: boolean; picked: string | null; previous: string; results: { id: string; label: string; vccOrganic: number; vccAll: number; topHost: string }[] } | null>(null);
 
@@ -6937,9 +6946,31 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
         warns.push(`Vintage.com GSC week-on-week (${key === "last" ? "last 7 days" : "previous 7 days"}): ${e instanceof Error ? e.message : String(e)}`);
       }
     })).then(() => undefined) : Promise.resolve();
+    // Table 4: every query in the week before the migration, for both sites (post side reuses qOut.last).
+    const q4Out: { vccPre: Record<string, PrGscAgg>; avPre: Record<string, PrGscAgg>; capped: boolean } = { vccPre: {}, avPre: {}, capped: false };
+    const q4Task = Promise.all(([["vccPre", gscProps.vcc], ["avPre", gscProps.av]] as ["vccPre" | "avPre", string][]).filter(([, site]) => site).map(async ([key, site]) => {
+      try {
+        for (let startRow = 0; startRow < 100000; startRow += 25000) {
+          const r = await fetch(`https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(site)}/searchAnalytics/query`, {
+            method: "POST", headers, body: JSON.stringify({ startDate: w.cmpStart, endDate: w.cmpEnd, dimensions: ["query"], rowLimit: 25000, startRow, dataState: "all" }),
+          });
+          const j = await r.json();
+          if (!r.ok || j.error) throw new Error(j.error?.message || `HTTP ${r.status}`);
+          const rows = (j.rows ?? []) as GSCApiRow[];
+          rows.forEach((row) => { q4Out[key][row.keys[0]] = { clicks: row.clicks, impressions: row.impressions, posSum: row.position * row.impressions }; });
+          if (rows.length < 25000) break;
+          if (startRow + 25000 >= 100000) q4Out.capped = true;
+        }
+      } catch (e) {
+        warns.push(`${key === "vccPre" ? "VCC" : "Vintage.com"} GSC queries (week before migration): ${e instanceof Error ? e.message : String(e)}`);
+      }
+    })).then(() => undefined);
     const finishWow = async () => {
-      await Promise.all([wowTask, qTask]);
-      if (myReq === reqId.current) { setWow(gscProps.av ? wowOut : null); setQWow(gscProps.av ? qOut : null); }
+      await Promise.all([wowTask, qTask, q4Task]);
+      if (myReq === reqId.current) {
+        setWow(gscProps.av ? wowOut : null); setQWow(gscProps.av ? qOut : null);
+        setQ4(gscProps.vcc || gscProps.av ? q4Out : null);
+      }
     };
 
     if (source === "gsc") {
@@ -7188,6 +7219,45 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
       iPrev: qRowsScoped.reduce((t, x) => t + x.iPrev, 0), iLast: qRowsScoped.reduce((t, x) => t + x.iLast, 0),
     };
   }, [qRowsScoped, qRank]);
+
+  // ── Table 4: queries before (VCC + vintage.com, week before migration) vs after (vintage.com, last 7 days) ──
+  const q4RowsAll = useMemo(() => {
+    if (!q4) return [];
+    const after = qWow?.last ?? {};
+    const keys = new Set([...Object.keys(q4.vccPre), ...Object.keys(q4.avPre), ...Object.keys(after)]);
+    const z = { clicks: 0, impressions: 0, posSum: 0 };
+    return Array.from(keys).map((q) => {
+      const v = q4.vccPre[q] ?? z, a = q4.avPre[q] ?? z, n = after[q] ?? z;
+      const iB = v.impressions + a.impressions;
+      return {
+        q, brand: nbSeoClassify(q, qTerms) === "brand",
+        cV: v.clicks, cA: a.clicks, cB: v.clicks + a.clicks, cN: n.clicks,
+        iB, iN: n.impressions,
+        pB: iB ? (v.posSum + a.posSum) / iB : 0, pN: n.impressions ? n.posSum / n.impressions : 0,
+      };
+    });
+  }, [q4, qWow, qTerms]);
+  const q4Scoped = useMemo(() => q4RowsAll.filter((r) => q4Brand === "all" || (q4Brand === "brand") === r.brand), [q4RowsAll, q4Brand]);
+  const q4Visible = useMemo(() => {
+    const s0 = q4Search.trim().toLowerCase();
+    const d = (r: (typeof q4Scoped)[number]) => q4Rank === "clicks" ? r.cN - r.cB : r.iN - r.iB;
+    let r = q4Scoped.filter((x) => !s0 || x.q.includes(s0));
+    if (q4Tab === "drops") r = r.filter((x) => d(x) < 0).sort((a, b) => d(a) - d(b) || (a.iN - a.iB) - (b.iN - b.iB));
+    else if (q4Tab === "gains") r = r.filter((x) => d(x) > 0).sort((a, b) => d(b) - d(a) || (b.iN - b.iB) - (a.iN - a.iB));
+    else if (q4Tab === "lost") r = r.filter((x) => x.iB > 0 && x.iN === 0).sort((a, b) => b.cB - a.cB || b.iB - a.iB);
+    else if (q4Tab === "new") r = r.filter((x) => x.iB === 0 && x.iN > 0).sort((a, b) => b.cN - a.cN || b.iN - a.iN);
+    else r = [...r].sort((a, b) => b.cB - a.cB || b.iB - a.iB);
+    return r;
+  }, [q4Scoped, q4Tab, q4Search, q4Rank]);
+  const q4Counts = useMemo(() => {
+    const d = (r: (typeof q4Scoped)[number]) => q4Rank === "clicks" ? r.cN - r.cB : r.iN - r.iB;
+    return {
+      drops: q4Scoped.filter((x) => d(x) < 0).length, gains: q4Scoped.filter((x) => d(x) > 0).length,
+      lost: q4Scoped.filter((x) => x.iB > 0 && x.iN === 0).length, new: q4Scoped.filter((x) => x.iB === 0 && x.iN > 0).length, all: q4Scoped.length,
+      cB: q4Scoped.reduce((t, x) => t + x.cB, 0), cN: q4Scoped.reduce((t, x) => t + x.cN, 0),
+      iB: q4Scoped.reduce((t, x) => t + x.iB, 0), iN: q4Scoped.reduce((t, x) => t + x.iN, 0),
+    };
+  }, [q4Scoped, q4Rank]);
 
   const wowTotals = useMemo(() => wowRows.reduce((t, r) => ({
     cPrev: t.cPrev + r.cPrev, cLast: t.cLast + r.cLast, iPrev: t.iPrev + r.iPrev, iLast: t.iLast + r.iLast,
@@ -7567,7 +7637,7 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
               <h2 className="text-base font-bold text-gray-900">Vintage.com search queries — rising & falling week on week</h2>
               <p className="text-xs text-gray-500 mt-0.5 max-w-3xl">
                 Every query in the vintage.com Search Console property: <strong>{prWeekdayRange(win.postStart, win.postEnd)}</strong> vs <strong>{prWeekdayRange(win.wowPrevStart, win.wowPrevEnd)}</strong> (same weekdays, ending 2 days ago).
-                Brand = the brand list from the Non-Brand SEO view plus new-brand spellings (vintage.com, vintage com…). Google hides rare queries, so these totals are a bit lower than page-level clicks.
+                Brand = any query containing “vin”, plus the brand list from the Non-Brand SEO view. Google hides rare queries, so these totals are a bit lower than page-level clicks.
               </p>
             </div>
             {!qWow ? (
@@ -7657,6 +7727,114 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
                 </ScrollTable>
                 {qVisible.length > ROW_CAP && <p className="text-[11px] text-gray-400 mt-2">Showing the first {ROW_CAP} of {prInt(qVisible.length)} — use the filter to narrow down.</p>}
                 {qWow.capped && <p className="text-[11px] text-amber-700 mt-1">Search Console returned 100,000+ queries for a week — only the top 100,000 were loaded.</p>}
+              </>
+            )}
+          </section>
+
+          {/* Table 4: queries pre vs post rebrand */}
+          <section className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+            <div className="mb-4">
+              <h2 className="text-base font-bold text-gray-900">Search queries — before vs after the rebrand</h2>
+              <p className="text-xs text-gray-500 mt-0.5 max-w-3xl">
+                <strong>Before</strong> = GSC clicks for each query across both sites in the week before the migration ({prWeekdayRange(win.cmpStart, win.cmpEnd)}): Vintage Cash Cow + vintage.com.
+                <strong> After</strong> = the same query on vintage.com over the last 7 days ({prWeekdayRange(win.postStart, win.postEnd)}). Same weekdays. Brand = any query containing “vin”, plus the Non-Brand SEO brand list.
+              </p>
+            </div>
+            {!q4 ? (
+              <p className="text-xs text-gray-400">Choose both Search Console properties in Settings to load this.</p>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center gap-3 mb-4">
+                  <div className="inline-flex bg-gray-100 rounded-xl p-0.5 flex-wrap">
+                    {([["nonBrand", "Non-brand"], ["brand", "Brand"], ["all", "All queries"]] as [typeof q4Brand, string][]).map(([val, l]) => (
+                      <button key={val} type="button" onClick={() => setQ4Brand(val)}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${q4Brand === val ? "bg-white text-purple-700 shadow-sm" : "text-gray-500 hover:text-gray-800"}`}>{l}</button>
+                    ))}
+                  </div>
+                  <div className="inline-flex bg-gray-100 rounded-xl p-0.5 flex-wrap">
+                    {([["clicks", "Rank by clicks"], ["impressions", "Rank by impressions"]] as [typeof q4Rank, string][]).map(([val, l]) => (
+                      <button key={val} type="button" onClick={() => setQ4Rank(val)}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${q4Rank === val ? "bg-white text-purple-700 shadow-sm" : "text-gray-500 hover:text-gray-800"}`}>{l}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                  <div className="bg-gray-50 rounded-xl p-3">
+                    <div className="flex items-start justify-between gap-2"><p className="text-[11px] font-semibold text-gray-500">Clicks · {q4Brand === "all" ? "all" : q4Brand === "brand" ? "brand" : "non-brand"} queries</p><PrDelta cur={q4Counts.cN} prev={q4Counts.cB} /></div>
+                    <p className="text-lg font-bold text-gray-900 mt-1 leading-none">{prInt(q4Counts.cN)}</p>
+                    <p className="text-[10px] text-gray-400 mt-1">was {prInt(q4Counts.cB)} the week before the migration</p>
+                  </div>
+                  <div className="bg-gray-50 rounded-xl p-3">
+                    <div className="flex items-start justify-between gap-2"><p className="text-[11px] font-semibold text-gray-500">Impressions</p><PrDelta cur={q4Counts.iN} prev={q4Counts.iB} /></div>
+                    <p className="text-lg font-bold text-gray-900 mt-1 leading-none">{prInt(q4Counts.iN)}</p>
+                    <p className="text-[10px] text-gray-400 mt-1">was {prInt(q4Counts.iB)} the week before the migration</p>
+                  </div>
+                  <div className="bg-red-50 rounded-xl p-3">
+                    <p className="text-[11px] font-semibold text-red-600">Queries lost entirely</p>
+                    <p className="text-lg font-bold text-red-600 mt-1 leading-none">{prInt(q4Counts.lost)}</p>
+                    <p className="text-[10px] text-red-500/70 mt-1">{prInt(q4Counts.drops)} down on {q4Rank}</p>
+                  </div>
+                  <div className="bg-emerald-50 rounded-xl p-3">
+                    <p className="text-[11px] font-semibold text-emerald-700">New queries since the rebrand</p>
+                    <p className="text-lg font-bold text-emerald-700 mt-1 leading-none">{prInt(q4Counts.new)}</p>
+                    <p className="text-[10px] text-emerald-600/70 mt-1">{prInt(q4Counts.gains)} up on {q4Rank}</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                  <div className="inline-flex bg-gray-100 rounded-xl p-0.5 flex-wrap">
+                    {([["drops", `Biggest drops (${q4Counts.drops})`], ["gains", `Biggest gains (${q4Counts.gains})`], ["lost", `Lost (${q4Counts.lost})`], ["new", `New (${q4Counts.new})`], ["all", `All (${q4Counts.all})`]] as [typeof q4Tab, string][]).map(([val, l]) => (
+                      <button key={val} type="button" onClick={() => setQ4Tab(val)}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${q4Tab === val ? "bg-white text-purple-700 shadow-sm" : "text-gray-500 hover:text-gray-800"}`}>{l}</button>
+                    ))}
+                  </div>
+                  <div className="w-60"><TextInput value={q4Search} onChange={setQ4Search} placeholder="Filter queries…" /></div>
+                </div>
+                <ScrollTable maxH="36rem">
+                  <table className="w-full text-left">
+                    <thead className="sticky top-0 bg-gray-50 z-[1]">
+                      <tr>
+                        <th colSpan={q4Brand === "all" ? 2 : 1} className={th}></th>
+                        <th colSpan={3} className={`${th} text-purple-700 bg-purple-50/70 border-l border-gray-200`}>Before · {prRange(win.cmpStart, win.cmpEnd)}</th>
+                        <th colSpan={2} className={`${th} text-teal-700 bg-teal-50/70 border-l border-gray-200`}>After · vintage.com · {prRange(win.postStart, win.postEnd)}</th>
+                        <th colSpan={3} className={`${th} border-l border-gray-200`}>Difference</th>
+                        <th colSpan={2} className={`${th} border-l border-gray-200`}>Avg position</th>
+                      </tr>
+                      <tr>
+                        <th className={th}>Query</th>{q4Brand === "all" && <th className={th}>Type</th>}
+                        <th className={`${th} text-right border-l border-gray-200`}>VCC clicks</th><th className={`${th} text-right`}>V.com clicks</th><th className={`${th} text-right`}>Impr.</th>
+                        <th className={`${th} text-right border-l border-gray-200`}>Clicks</th><th className={`${th} text-right`}>Impr.</th>
+                        <th className={`${th} text-right border-l border-gray-200`}>Δ clicks</th><th className={`${th} text-right`}>%</th><th className={th}>Status</th>
+                        <th className={`${th} text-right border-l border-gray-200`}>Before</th><th className={`${th} text-right`}>After</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {q4Visible.slice(0, ROW_CAP).map((r) => {
+                        const d = r.cN - r.cB;
+                        const posBetter = r.pB > 0 && r.pN > 0 ? r.pB - r.pN : 0;
+                        const st = r.iN === 0 ? ["Lost", "bg-red-100 text-red-700"] : r.iB === 0 ? ["New", "bg-emerald-100 text-emerald-700"] : d < 0 ? ["Down", "bg-red-50 text-red-600"] : d > 0 ? ["Up", "bg-emerald-50 text-emerald-700"] : ["Same", "bg-gray-100 text-gray-500"];
+                        return (
+                          <tr key={r.q} className="hover:bg-purple-50/30">
+                            <td className={`${td} max-w-[320px] truncate font-medium`} title={r.q}>{r.q}</td>
+                            {q4Brand === "all" && <td className={td}><span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${r.brand ? "bg-purple-50 text-purple-700" : "bg-gray-100 text-gray-600"}`}>{r.brand ? "Brand" : "Non-brand"}</span></td>}
+                            <td className={`${td} text-right border-l border-gray-100`}>{prInt(r.cV)}</td>
+                            <td className={`${td} text-right text-gray-500`}>{prInt(r.cA)}</td>
+                            <td className={`${td} text-right text-gray-500`}>{prInt(r.iB)}</td>
+                            <td className={`${td} text-right font-semibold border-l border-gray-100`}>{prInt(r.cN)}</td>
+                            <td className={`${td} text-right text-gray-500`}>{prInt(r.iN)}</td>
+                            <td className={`${td} text-right font-semibold border-l border-gray-100 ${d < 0 ? "text-red-500" : d > 0 ? "text-emerald-600" : "text-gray-400"}`}>{d > 0 ? "+" : ""}{prInt(d)}</td>
+                            <td className={`${td} text-right`}><PrDelta cur={r.cN} prev={r.cB} /></td>
+                            <td className={td}><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${st[1]}`}>{st[0]}</span></td>
+                            <td className={`${td} text-right text-gray-500 border-l border-gray-100`}>{r.pB ? r.pB.toFixed(1) : "—"}</td>
+                            <td className={`${td} text-right font-semibold ${posBetter > 0.05 ? "text-emerald-600" : posBetter < -0.05 ? "text-red-500" : ""}`}>{r.pN ? r.pN.toFixed(1) : "—"}</td>
+                          </tr>
+                        );
+                      })}
+                      {q4Visible.length === 0 && <tr><td colSpan={13} className="px-3 py-8 text-center text-xs text-gray-400">No queries in this view.</td></tr>}
+                    </tbody>
+                  </table>
+                </ScrollTable>
+                {q4Visible.length > ROW_CAP && <p className="text-[11px] text-gray-400 mt-2">Showing the first {ROW_CAP} of {prInt(q4Visible.length)} — use the filter to narrow down.</p>}
+                {(q4.capped || qWow?.capped) && <p className="text-[11px] text-amber-700 mt-1">Search Console returned 100,000+ queries for a week — only the top 100,000 were loaded.</p>}
               </>
             )}
           </section>
@@ -9253,7 +9431,7 @@ export default function App() {
   }, [selectedGA4, selectedGSC, accessToken, ga4FetchFilters, gscFetchFilters]);
 
   // Brand terms — anything containing these is "branded"
-  const BRAND_PATTERNS = ["cash cow", "vintage cash cow", "vintagecashcow", "cashcow", "vcc"];
+  const BRAND_PATTERNS = ["vin", "cash cow", "vintage cash cow", "vintagecashcow", "cashcow", "vcc"];
   const isBranded = (q: string) => {
     const l = q.toLowerCase();
     return BRAND_PATTERNS.some((b) => l.includes(b));
