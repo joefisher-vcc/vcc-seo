@@ -57,8 +57,6 @@ import {
   ResponsiveContainer,
   AreaChart,
   Area,
-  ComposedChart,
-  ReferenceLine,
 } from "recharts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -6556,785 +6554,309 @@ function CrmView() {
 
 // ─── Post Rebrand Analysis ────────────────────────────────────────────────────
 //
-// BRIEF — "Post Rebrand Analysis" (rebrand date default 1 Oct 2026)
-// ------------------------------------------------------------------
-// Goal: one organic-search dashboard that blends Search Console + GA4 for BOTH
-// properties (Vintage Cash Cow and Vintage.com) so we can see whether organic
-// performance — and above all NON-BRAND performance — has held up or improved
-// since the rebrand.
+// One question: for every old Vintage Cash Cow URL, how many Organic Search sessions did it
+// get before the rebrand vs after — and where did those sessions go on vintage.com?
 //
-// Windows (all derived automatically, nothing to maintain):
-//   • Data end      = the latest day Search Console has final data for on BOTH
-//                     sites (normally today − 2/3). GA4 is cut to the same day so
-//                     the two sources always cover identical dates.
-//   • Post window   = rebrand date → data end.
-//   • Comparison    = either (a) "Pre-rebrand": same number of days, shifted back
-//                     by whole weeks so every weekday lines up (Wed vs Wed), or
-//                     (b) "Last year": the same window 364 days earlier (also
-//                     weekday-matched) to strip out seasonality.
-//   • WoW window    = last 7 complete days vs the 7 days before (same weekdays).
-//   • Baseline      = the 4 full weeks immediately before the rebrand — used as
-//                     the "normal" for each weekday and each week.
-//
-// Brand vs non-brand:
-//   • Uses the same editable brand list as the Non-Brand SEO view, plus a few
-//     new-brand variants ("vintage com", "vintagecom", "vintage dot com",
-//     "www.vintage"). Daily brand clicks come from a GSC regex filter compiled
-//     from that list; non-brand = total − brand (so anonymised long-tail queries
-//     count as non-brand, which they almost always are).
-//   • Brand queries are further split into OLD brand (cash cow family) vs NEW
-//     brand (vintage.com / arcavindi / bare "vintage") to show the brand
-//     transition.
-//
-// Sections:
-//   1. Headline KPIs (scope: Combined / VCC / Vintage.com) — GSC + GA4 organic.
-//   2. Property breakdown table — every KPI, both sites + combined, side by side.
-//   3. Trends — daily stacked chart by site with rebrand marker + 7-day avg,
-//      post-vs-comparison overlay aligned by weekday, brand vs non-brand split.
-//   4. WoW sanity check — last 7 days vs previous 7, "days up" counter, weekly
-//      roll-up since rebrand vs pre-rebrand baseline week, and a day-by-day
-//      table (same weekday last week + pre-rebrand weekday average).
-//   5. Non-brand queries — winners / losers / new / lost, ranking-position
-//      distribution.
-//   6. Branded queries — old vs new brand transition + query table.
-//   7. Landing pages — GA4 organic sessions, leads, engagement joined to GSC
-//      clicks & position per page.
-//   8. Devices, search engines & channel mix.
+// • GA4 only (Organic Search sessions, by landing page + hostname), both properties.
+// • Sessions are grouped by the HOSTNAME they happened on, not by which GA4 property recorded
+//   them. If both properties recorded the same hostname (e.g. the old VCC tag still firing on
+//   vintage.com), that hostname is counted from ONE property only, so nothing is double counted.
+// • Windows: post = rebrand date → yesterday; comparison = same number of days, shifted back by
+//   whole weeks (weekday-matched), or the same days last year.
+// • VCC URL → vintage.com URL matching, in priority order: (1) pasted redirect map, (2) identical
+//   path on vintage.com, (3) identical final slug (only when unique), otherwise "no match".
+// • When several VCC URLs point at the same vintage.com URL, that URL's sessions are shared out
+//   in proportion to each VCC URL's pre-rebrand sessions so "kept %" isn't double counted.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const LS_POST_REBRAND_DATE  = "vcc_post_rebrand_date_v1";
-const LS_POST_REBRAND_PROPS = "vcc_post_rebrand_props_v1";
-const LS_POST_REBRAND_CMP   = "vcc_post_rebrand_cmp_v1";
+const LS_POST_REBRAND_DATE = "vcc_post_rebrand_date_v1";
+const LS_POST_REBRAND_CMP  = "vcc_post_rebrand_cmp_v1";
+const LS_POST_REBRAND_GA4  = "vcc_post_rebrand_ga4_v2";
+const LS_POST_REBRAND_MAP  = "vcc_post_rebrand_redirect_map_v1";
 const POST_REBRAND_DEFAULT_DATE = "2026-10-01";
 
-/** Extra new-brand spellings that the shared brand list may not include yet. */
-const PR_EXTRA_BRAND_TERMS = ["vintage com", "vintagecom", "vintage dot com", "www.vintage"];
-/** Brand queries matching any of these are "new brand"; every other brand query is "old brand". */
-const PR_NEW_BRAND_TERMS = ["vintage.com", "vintage com", "vintagecom", "vintage dot com", "www.vintage", "=vintage", "arcavindi", "arca vindi"];
-
-const PR_SITE_META = {
-  vcc: { label: "Vintage Cash Cow", short: "VCC", color: "#7e22ce", fallbackHost: "www.vintagecashcow.co.uk" },
-  av:  { label: "Vintage.com",      short: "Vintage.com", color: "#0d9488", fallbackHost: "www.vintage.com" },
-} as const;
-type PrSite = keyof typeof PR_SITE_META;
-const PR_SITES: PrSite[] = ["vcc", "av"];
-type PrScope = "combined" | PrSite;
 type PrCmpMode = "pre" | "yoy";
-type PrPropKey = "vccGa4" | "vccGsc" | "avGa4" | "avGsc";
-type PrProps = Record<PrPropKey, string>;
+type PrProp = "vcc" | "av";
+type PrWinKey = "cmp" | "post";
+/** prop → window → hostname → landing-page path → organic sessions */
+type PrRaw = Record<PrProp, Record<PrWinKey, Record<string, Record<string, number>>>>;
+interface PrWindows { postStart: string; postEnd: string; postDays: number; cmpStart: string; cmpEnd: string; shift: number }
+type PrMatch = "map" | "path" | "slug" | null;
+type PrStatus = "held" | "partial" | "dropped" | "nomatch";
 
-interface PrDay {
-  clicks: number; impressions: number; posSum: number;
-  brandClicks: number; brandImpressions: number;
-  sessions: number; users: number; newUsers: number; engaged: number; pageviews: number; leads: number;
-}
-const prEmptyDay = (): PrDay => ({ clicks: 0, impressions: 0, posSum: 0, brandClicks: 0, brandImpressions: 0, sessions: 0, users: 0, newUsers: 0, engaged: 0, pageviews: 0, leads: 0 });
-function prAddInto(a: PrDay, b: PrDay) {
-  (Object.keys(a) as (keyof PrDay)[]).forEach((k) => { a[k] += b[k]; });
-}
-
-interface PrAgg { clicks: number; impressions: number; posSum: number }
-interface PrPageAgg { clicks: number; impressions: number; posSum: number; sessions: number; engaged: number; leads: number }
-type PrNumMap = Record<string, number>;
-
-interface PrSiteData {
-  host: string;
-  hasGsc: boolean;
-  hasGa4: boolean;
-  brandSplitOk: boolean;
-  daily: Record<string, PrDay>;
-  queries: { cmp: Record<string, PrAgg>; post: Record<string, PrAgg> };
-  queriesCapped: boolean;
-  pages: { cmp: Record<string, PrPageAgg>; post: Record<string, PrPageAgg> };
-  devices: { cmp: PrNumMap; post: PrNumMap };
-  sources: { cmp: PrNumMap; post: PrNumMap };
-  channels: { cmp: PrNumMap; post: PrNumMap };
-}
-
-interface PrWindows {
-  mode: PrCmpMode;
-  rebrand: string; dataEnd: string;
-  postStart: string; postEnd: string; postDays: number;
-  cmpStart: string; cmpEnd: string; shift: number;
-  trendStart: string;
-  baseStart: string; baseEnd: string;
-  wowStart: string; wowEnd: string; wowPrevStart: string; wowPrevEnd: string;
-}
+const PR_PROP_LABEL: Record<PrProp, string> = { vcc: "VCC GA4", av: "Vintage.com GA4" };
 
 function prTodayLocal(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
-function prDates(start: string, end: string): string[] {
-  const out: string[] = [];
-  for (let d = start; d <= end; d = addDaysISO(d, 1)) out.push(d);
-  return out;
-}
-function prWeekday(iso: string): string {
-  return new Date(iso + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short" });
-}
-function prRange(s: string, e: string) { return `${formatDisplayDate(s)} – ${formatDisplayDate(e)}`; }
-
 function prComputeWindows(rebrand: string, dataEnd: string, mode: PrCmpMode): PrWindows {
   const postDays = daysInclusive(rebrand, dataEnd);
-  // Shift back by whole weeks so weekdays line up; pre-rebrand mode = smallest whole-week shift that clears the post window.
   const shift = mode === "pre" ? 7 * Math.ceil(postDays / 7) : 364;
-  const cmpStart = addDaysISO(rebrand, -shift);
-  const cmpEnd = addDaysISO(dataEnd, -shift);
-  const baseStart = addDaysISO(rebrand, -28);
-  const baseEnd = addDaysISO(rebrand, -1);
-  const preStartForTrend = mode === "pre" ? cmpStart : baseStart;
-  const trendStart = preStartForTrend < baseStart ? preStartForTrend : baseStart;
-  return {
-    mode, rebrand, dataEnd,
-    postStart: rebrand, postEnd: dataEnd, postDays,
-    cmpStart, cmpEnd, shift,
-    trendStart, baseStart, baseEnd,
-    wowStart: addDaysISO(dataEnd, -6), wowEnd: dataEnd,
-    wowPrevStart: addDaysISO(dataEnd, -13), wowPrevEnd: addDaysISO(dataEnd, -7),
-  };
+  return { postStart: rebrand, postEnd: dataEnd, postDays, cmpStart: addDaysISO(rebrand, -shift), cmpEnd: addDaysISO(dataEnd, -shift), shift };
 }
-
-/** Compile the brand-term DSL used by nbSeoClassify into one RE2 regex for GSC's includingRegex filter. */
-function prBrandTermsToRe2(terms: string[]): string {
-  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const perms = (arr: string[]): string[][] =>
-    arr.length <= 1 ? [arr] : arr.flatMap((x, i) => perms([...arr.slice(0, i), ...arr.slice(i + 1)]).map((p) => [x, ...p]));
-  const parts = new Set<string>();
-  terms.forEach((raw) => {
-    const t = raw.toLowerCase().trim();
-    if (!t) return;
-    if (t.startsWith("=")) { const x = t.slice(1).trim(); if (x) parts.add(`^${esc(x)}$`); return; }
-    if (t.startsWith("&")) { const x = t.slice(1).trim(); if (x) parts.add(`\\b${esc(x)}\\b`); return; }
-    if (t.includes("+")) {
-      const ps = t.split("+").map((p) => p.trim()).filter(Boolean).slice(0, 4);
-      if (ps.length >= 2) parts.add(`(?:${perms(ps).map((p) => p.map(esc).join(".*")).join("|")})`);
-      return;
-    }
-    parts.add(t.length <= 3 ? `\\b${esc(t)}\\b` : esc(t));
-  });
-  // Built-in phone-number rule (7+ digits, separators allowed) — mirrors looksLikePhoneNumber.
-  parts.add("(?:\\d[\\s().+\\-]*){7,}");
-  return `(?i)(?:${Array.from(parts).join("|")})`;
-}
-
-// ── Formatting helpers ──
+const prRange = (s: string, e: string) => `${formatDisplayDate(s)} – ${formatDisplayDate(e)}`;
 const prInt = (n: number) => Math.round(n).toLocaleString("en-GB");
-const prPct = (r: number) => (isFinite(r) ? `${(r * 100).toFixed(1)}%` : "—");
-const prPos = (p: number) => (p > 0 && isFinite(p) ? p.toFixed(1) : "—");
-const prDiv = (a: number, b: number) => (b ? a / b : 0);
+const prNormHost = (h: string) => h.toLowerCase().replace(/^www\./, "");
+const prIsVccHost = (h: string) => prNormHost(h).includes("vintagecashcow");
+const prIsNewHost = (h: string) => { const n = prNormHost(h); return n === "vintage.com" || n.endsWith(".vintage.com"); };
+const prSlug = (path: string) => path.split("/").filter(Boolean).pop() ?? "";
 
-type PrDeltaKind = "pct" | "pp" | "pos";
-function PrDelta({ cur, prev, kind = "pct", lowerBetter = false, className = "" }: { cur: number; prev: number; kind?: PrDeltaKind; lowerBetter?: boolean; className?: string }) {
-  let text = "—";
-  let dir = 0; // +1 good, -1 bad, 0 neutral
-  if (kind === "pct") {
-    if (!prev) { if (cur > 0) { text = "new"; dir = lowerBetter ? -1 : 1; } }
-    else {
-      const p = ((cur - prev) / Math.abs(prev)) * 100;
-      text = `${p >= 0 ? "+" : "−"}${Math.abs(p).toFixed(1)}%`;
-      dir = Math.abs(p) < 0.5 ? 0 : (p > 0) !== lowerBetter ? 1 : -1;
-    }
-  } else if (kind === "pp") {
-    if (prev || cur) {
-      const d = (cur - prev) * 100;
-      text = `${d >= 0 ? "+" : "−"}${Math.abs(d).toFixed(1)}pp`;
-      dir = Math.abs(d) < 0.05 ? 0 : (d > 0) !== lowerBetter ? 1 : -1;
-    }
-  } else if (prev > 0 && cur > 0) {
-    const d = cur - prev; // positions: lower is better
-    text = `${d > 0 ? "+" : d < 0 ? "−" : "±"}${Math.abs(d).toFixed(1)}`;
-    dir = Math.abs(d) < 0.05 ? 0 : d < 0 ? 1 : -1;
+/** Parse "old, new" / "old -> new" / tab-separated lines. Full URLs or paths both work. */
+function prParseRedirectMap(text: string): Map<string, string> {
+  const m = new Map<string, string>();
+  text.split(/\r?\n/).forEach((line) => {
+    const parts = line.split(/\s*(?:,|\t|->|→|\s{2,}|\s)\s*/).map((x) => x.trim()).filter(Boolean);
+    if (parts.length < 2) return;
+    const [from, to] = [toPagePath(parts[0]), toPagePath(parts[1])];
+    if (from && to && !/^(old|from|source)/i.test(parts[0])) m.set(from, to);
+  });
+  return m;
+}
+
+function PrDelta({ cur, prev, className = "" }: { cur: number; prev: number; className?: string }) {
+  let text = "—", dir = 0;
+  if (!prev) { if (cur > 0) { text = "new"; dir = 1; } }
+  else {
+    const p = ((cur - prev) / prev) * 100;
+    text = `${p >= 0 ? "+" : "−"}${Math.abs(p).toFixed(0)}%`;
+    dir = Math.abs(p) < 0.5 ? 0 : p > 0 ? 1 : -1;
   }
   const cls = dir > 0 ? "bg-emerald-50 text-emerald-700" : dir < 0 ? "bg-red-50 text-red-600" : "bg-gray-100 text-gray-500";
-  return <span className={`inline-flex items-center text-[10px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap ${cls} ${className}`}>{text}</span>;
+  return <span className={`inline-flex text-[10px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap ${cls} ${className}`}>{text}</span>;
 }
 
-// ── Metric registry ──
-interface PrQStats { count: number; top3: number; top10: number; nbCount: number; nbTop10: number; nbPosSum: number; nbImpr: number }
-interface PrWinStats { t: PrDay; q: PrQStats; allSessions: number; organicFromChannels: number }
-interface PrKpiDef {
-  key: string; label: string; src: "GSC" | "GA4"; kind: PrDeltaKind; lowerBetter?: boolean; star?: boolean; tip: string;
-  get: (w: PrWinStats) => number; fmt: (n: number) => string;
-}
-const PR_KPIS: PrKpiDef[] = [
-  { key: "nbClicks", label: "Non-brand clicks", src: "GSC", kind: "pct", star: true, tip: "GSC clicks from queries that don't match the brand list (incl. anonymised long-tail).", get: (w) => w.t.clicks - w.t.brandClicks, fmt: prInt },
-  { key: "nbImpr", label: "Non-brand impressions", src: "GSC", kind: "pct", star: true, tip: "GSC impressions from non-brand queries — the best early signal of visibility.", get: (w) => w.t.impressions - w.t.brandImpressions, fmt: prInt },
-  { key: "nbCtr", label: "Non-brand CTR", src: "GSC", kind: "pp", tip: "Non-brand clicks ÷ non-brand impressions.", get: (w) => prDiv(w.t.clicks - w.t.brandClicks, w.t.impressions - w.t.brandImpressions), fmt: prPct },
-  { key: "nbPos", label: "Non-brand avg position", src: "GSC", kind: "pos", lowerBetter: true, tip: "Impression-weighted average position across named non-brand queries.", get: (w) => prDiv(w.q.nbPosSum, w.q.nbImpr), fmt: prPos },
-  { key: "nbShare", label: "Non-brand share of clicks", src: "GSC", kind: "pp", tip: "What % of all organic clicks are non-brand.", get: (w) => prDiv(w.t.clicks - w.t.brandClicks, w.t.clicks), fmt: prPct },
-  { key: "nbQueries", label: "Non-brand ranking queries", src: "GSC", kind: "pct", tip: "Distinct named non-brand queries with ≥1 impression.", get: (w) => w.q.nbCount, fmt: prInt },
-  { key: "nbTop10", label: "Non-brand queries in top 10", src: "GSC", kind: "pct", tip: "Distinct non-brand queries averaging position ≤ 10.", get: (w) => w.q.nbTop10, fmt: prInt },
-  { key: "brandClicks", label: "Brand clicks", src: "GSC", kind: "pct", tip: "Clicks from brand queries (old + new brand).", get: (w) => w.t.brandClicks, fmt: prInt },
-  { key: "brandImpr", label: "Brand impressions", src: "GSC", kind: "pct", tip: "Impressions from brand queries — a proxy for brand search demand.", get: (w) => w.t.brandImpressions, fmt: prInt },
-  { key: "clicks", label: "Total clicks", src: "GSC", kind: "pct", tip: "All Search Console clicks.", get: (w) => w.t.clicks, fmt: prInt },
-  { key: "impr", label: "Total impressions", src: "GSC", kind: "pct", tip: "All Search Console impressions.", get: (w) => w.t.impressions, fmt: prInt },
-  { key: "ctr", label: "CTR", src: "GSC", kind: "pp", tip: "Clicks ÷ impressions.", get: (w) => prDiv(w.t.clicks, w.t.impressions), fmt: prPct },
-  { key: "pos", label: "Avg position", src: "GSC", kind: "pos", lowerBetter: true, tip: "Impression-weighted average position (all queries).", get: (w) => prDiv(w.t.posSum, w.t.impressions), fmt: prPos },
-  { key: "queries", label: "Ranking queries", src: "GSC", kind: "pct", tip: "Distinct named queries with ≥1 impression.", get: (w) => w.q.count, fmt: prInt },
-  { key: "top3", label: "Queries in top 3", src: "GSC", kind: "pct", tip: "Distinct queries averaging position ≤ 3.", get: (w) => w.q.top3, fmt: prInt },
-  { key: "top10", label: "Queries in top 10", src: "GSC", kind: "pct", tip: "Distinct queries averaging position ≤ 10.", get: (w) => w.q.top10, fmt: prInt },
-  { key: "sessions", label: "Organic sessions", src: "GA4", kind: "pct", star: true, tip: "GA4 sessions where default channel group = Organic Search.", get: (w) => w.t.sessions, fmt: prInt },
-  { key: "users", label: "Organic users", src: "GA4", kind: "pct", tip: "GA4 total users from Organic Search (summed by day).", get: (w) => w.t.users, fmt: prInt },
-  { key: "newUsers", label: "New organic users", src: "GA4", kind: "pct", tip: "First-time users from Organic Search.", get: (w) => w.t.newUsers, fmt: prInt },
-  { key: "engaged", label: "Engaged sessions", src: "GA4", kind: "pct", tip: "Organic sessions lasting 10s+, with 2+ pageviews or a key event.", get: (w) => w.t.engaged, fmt: prInt },
-  { key: "engRate", label: "Engagement rate", src: "GA4", kind: "pp", tip: "Engaged sessions ÷ sessions (organic).", get: (w) => prDiv(w.t.engaged, w.t.sessions), fmt: prPct },
-  { key: "pps", label: "Pages / session", src: "GA4", kind: "pct", tip: "Organic pageviews ÷ organic sessions.", get: (w) => prDiv(w.t.pageviews, w.t.sessions), fmt: (n) => n.toFixed(2) },
-  { key: "leads", label: "Organic leads", src: "GA4", kind: "pct", star: true, tip: "generate_lead key events in Organic Search sessions.", get: (w) => w.t.leads, fmt: prInt },
-  { key: "cvr", label: "Lead conversion rate", src: "GA4", kind: "pp", tip: "Organic leads ÷ organic sessions.", get: (w) => prDiv(w.t.leads, w.t.sessions), fmt: (n) => (isFinite(n) ? `${(n * 100).toFixed(2)}%` : "—") },
-  { key: "orgShare", label: "Organic share of sessions", src: "GA4", kind: "pp", tip: "Organic Search sessions ÷ all sessions (all channels), from the same GA4 channel report.", get: (w) => prDiv(w.organicFromChannels, w.allSessions), fmt: prPct },
-];
+const PR_STATUS_META: Record<PrStatus, { label: string; cls: string }> = {
+  held:    { label: "Held up",      cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  partial: { label: "Partly lost",  cls: "bg-amber-50 text-amber-700 border-amber-200" },
+  dropped: { label: "Dropped",      cls: "bg-red-50 text-red-600 border-red-200" },
+  nomatch: { label: "No V.com match", cls: "bg-gray-100 text-gray-600 border-gray-200" },
+};
+const PR_MATCH_LABEL: Record<Exclude<PrMatch, null>, string> = { map: "redirect map", path: "same path", slug: "same slug" };
 
-/** Additive daily metrics usable in charts and day-level tables. */
-const PR_DAILY_METRICS: { key: string; label: string; get: (d: PrDay) => number }[] = [
-  { key: "nbClicks", label: "Non-brand clicks", get: (d) => d.clicks - d.brandClicks },
-  { key: "nbImpr", label: "Non-brand impressions", get: (d) => d.impressions - d.brandImpressions },
-  { key: "brandClicks", label: "Brand clicks", get: (d) => d.brandClicks },
-  { key: "clicks", label: "Total clicks", get: (d) => d.clicks },
-  { key: "impr", label: "Total impressions", get: (d) => d.impressions },
-  { key: "sessions", label: "Organic sessions", get: (d) => d.sessions },
-  { key: "users", label: "Organic users", get: (d) => d.users },
-  { key: "engaged", label: "Engaged sessions", get: (d) => d.engaged },
-  { key: "leads", label: "Organic leads", get: (d) => d.leads },
-];
-const prDailyMetric = (k: string) => PR_DAILY_METRICS.find((m) => m.key === k) ?? PR_DAILY_METRICS[0];
-
-function PrSegmented<T extends string>({ value, onChange, options }: { value: T; onChange: (v: T) => void; options: { value: T; label: string }[] }) {
-  return (
-    <div className="inline-flex bg-gray-100 rounded-xl p-0.5 flex-wrap">
-      {options.map((o) => (
-        <button key={o.value} type="button" onClick={() => onChange(o.value)}
-          className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${value === o.value ? "bg-white text-purple-700 shadow-sm" : "text-gray-500 hover:text-gray-800"}`}>
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function PrSectionHead({ id, title, sub, right }: { id: string; title: string; sub?: string; right?: React.ReactNode }) {
-  return (
-    <div id={id} className="flex items-end justify-between gap-3 flex-wrap mb-4 scroll-mt-24">
-      <div>
-        <h2 className="text-base font-bold text-gray-900">{title}</h2>
-        {sub && <p className="text-xs text-gray-500 mt-0.5 max-w-3xl">{sub}</p>}
-      </div>
-      {right}
-    </div>
-  );
+interface PrRow {
+  path: string; vPre: number; vPost: number;
+  dest: string | null; match: PrMatch; sharedBy: number;
+  dPre: number; dPost: number;          // destination URL's full sessions
+  aPre: number; aPost: number;          // destination sessions allocated to this VCC URL
+  kept: number | null; net: number; status: PrStatus;
 }
 
 interface PostRebrandViewProps {
   accessToken: string;
   ga4Properties: { value: string; label: string }[];
-  gscProperties: { value: string; label: string }[];
-  defaults: PrProps;
-  brandTerms: string[];
+  defaults: { vccGa4: string; avGa4: string };
 }
 
-function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, brandTerms }: PostRebrandViewProps) {
-  const [rebrandDate, setRebrandDate] = useState(() => { try { return localStorage.getItem(LS_POST_REBRAND_DATE) || POST_REBRAND_DEFAULT_DATE; } catch { return POST_REBRAND_DEFAULT_DATE; } });
-  const [cmpMode, setCmpMode] = useState<PrCmpMode>(() => { try { return (localStorage.getItem(LS_POST_REBRAND_CMP) as PrCmpMode) || "pre"; } catch { return "pre"; } });
-  const [props, setProps] = useState<PrProps>(() => {
-    try { const raw = localStorage.getItem(LS_POST_REBRAND_PROPS); if (raw) return { vccGa4: "", vccGsc: "", avGa4: "", avGsc: "", ...JSON.parse(raw) }; } catch { /* ignore */ }
-    return { vccGa4: "", vccGsc: "", avGa4: "", avGsc: "" };
+function PostRebrandView({ accessToken, ga4Properties, defaults }: PostRebrandViewProps) {
+  const lsGet = (k: string, d: string) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
+  const [rebrandDate, setRebrandDate] = useState(() => lsGet(LS_POST_REBRAND_DATE, POST_REBRAND_DEFAULT_DATE));
+  const [cmpMode, setCmpMode] = useState<PrCmpMode>(() => (lsGet(LS_POST_REBRAND_CMP, "pre") === "yoy" ? "yoy" : "pre"));
+  const [props, setProps] = useState<Record<PrProp, string>>(() => {
+    try { const r = localStorage.getItem(LS_POST_REBRAND_GA4); if (r) return { vcc: "", av: "", ...JSON.parse(r) }; } catch { /* ignore */ }
+    return { vcc: "", av: "" };
   });
-  const [showProps, setShowProps] = useState(false);
-  const [scope, setScope] = useState<PrScope>("combined");
+  const [mapText, setMapText] = useState(() => lsGet(LS_POST_REBRAND_MAP, ""));
+  const [showSettings, setShowSettings] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [raw, setRaw] = useState<PrRaw | null>(null);
   const [win, setWin] = useState<PrWindows | null>(null);
-  const [data, setData] = useState<Record<PrSite, PrSiteData> | null>(null);
   const [loadedAt, setLoadedAt] = useState<Date | null>(null);
-
-  const [trendMetric, setTrendMetric] = useState("nbClicks");
-  const [dailyMetric, setDailyMetric] = useState("nbClicks");
-  const [nbTab, setNbTab] = useState<"winners" | "losers" | "new" | "lost" | "all">("winners");
-  const [nbSearch, setNbSearch] = useState("");
-  const [brTab, setBrTab] = useState<"all" | "old" | "new">("all");
-  const [lpTab, setLpTab] = useState<"winners" | "losers" | "all">("winners");
-  const [lpRank, setLpRank] = useState<"sessions" | "clicks">("sessions");
-  const [lpSearch, setLpSearch] = useState("");
+  const [tab, setTab] = useState<"drops" | "held" | "nomatch" | "all" | "unmatchedNew">("drops");
+  const [search, setSearch] = useState("");
+  const [minPre, setMinPre] = useState(10);
 
   useEffect(() => { try { localStorage.setItem(LS_POST_REBRAND_DATE, rebrandDate); } catch { /* ignore */ } }, [rebrandDate]);
   useEffect(() => { try { localStorage.setItem(LS_POST_REBRAND_CMP, cmpMode); } catch { /* ignore */ } }, [cmpMode]);
-  useEffect(() => { try { localStorage.setItem(LS_POST_REBRAND_PROPS, JSON.stringify(props)); } catch { /* ignore */ } }, [props]);
-  // Fill any empty property slot from the app-level defaults once properties have loaded.
+  useEffect(() => { try { localStorage.setItem(LS_POST_REBRAND_GA4, JSON.stringify(props)); } catch { /* ignore */ } }, [props]);
+  useEffect(() => { try { localStorage.setItem(LS_POST_REBRAND_MAP, mapText); } catch { /* ignore */ } }, [mapText]);
   useEffect(() => {
     setProps((p) => {
-      const next = { ...p };
-      let changed = false;
-      (Object.keys(defaults) as PrPropKey[]).forEach((k) => { if (!next[k] && defaults[k]) { next[k] = defaults[k]; changed = true; } });
-      return changed ? next : p;
+      const next = { vcc: p.vcc || defaults.vccGa4, av: p.av || defaults.avGa4 };
+      return next.vcc === p.vcc && next.av === p.av ? p : next;
     });
-  }, [defaults]);
-
-  const allTerms = useMemo(() => Array.from(new Set([...brandTerms, ...PR_EXTRA_BRAND_TERMS])), [brandTerms]);
+  }, [defaults.vccGa4, defaults.avGa4]);
 
   const reqId = useRef(0);
   const run = useCallback(async () => {
     if (!accessToken) { setError("Sign in with Google first."); return; }
+    if (!props.vcc && !props.av) { setError("Pick the GA4 properties first (Settings ▸)."); setShowSettings(true); return; }
     const myReq = ++reqId.current;
-    const isStale = () => myReq !== reqId.current;
-    if (!props.vccGsc && !props.avGsc && !props.vccGa4 && !props.avGa4) { setError("Pick at least one GA4 or GSC property for each site (Properties ▸)."); setShowProps(true); return; }
     setLoading(true); setError(null);
     const warns: string[] = [];
-    const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+    const w = prComputeWindows(rebrandDate, addDaysISO(prTodayLocal(), -1), cmpMode);
+    if (w.postEnd < rebrandDate) { setError("No post-rebrand days yet."); setLoading(false); return; }
+    const out: PrRaw = { vcc: { cmp: {}, post: {} }, av: { cmp: {}, post: {} } };
+    const body = (k: PrWinKey) => ({
+      dateRanges: [k === "cmp" ? { startDate: w.cmpStart, endDate: w.cmpEnd } : { startDate: w.postStart, endDate: w.postEnd }],
+      dimensions: [{ name: "landingPage" }, { name: "hostName" }],
+      metrics: [{ name: "sessions" }],
+      dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "EXACT", value: "Organic Search" } } },
+      limit: 100000,
+    });
+    const tasks: Promise<void>[] = [];
+    (["vcc", "av"] as PrProp[]).forEach((p) => {
+      if (!props[p]) return;
+      (["cmp", "post"] as PrWinKey[]).forEach((k) => {
+        tasks.push((async () => {
+          try {
+            const r = await fetch(`https://analyticsdata.googleapis.com/v1beta/properties/${props[p]}:runReport`, {
+              method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify(body(k)),
+            });
+            const j = await r.json();
+            if (!r.ok || j.error) throw new Error(j.error?.message || `HTTP ${r.status}`);
+            ((j.rows ?? []) as GA4ApiRow[]).forEach((row) => {
+              const lp = row.dimensionValues[0]?.value || "";
+              if (!lp || lp === "(not set)") return;
+              const host = (row.dimensionValues[1]?.value || "(not set)").toLowerCase();
+              const path = toPagePath(lp);
+              const hm = (out[p][k][host] ??= {});
+              hm[path] = (hm[path] ?? 0) + (parseFloat(row.metricValues[0]?.value ?? "0") || 0);
+            });
+          } catch (e) {
+            warns.push(`${PR_PROP_LABEL[p]} (${k === "cmp" ? "comparison" : "post"} window): ${e instanceof Error ? e.message : String(e)}`);
+          }
+        })());
+      });
+    });
+    await Promise.all(tasks);
+    if (myReq !== reqId.current) return;
+    setRaw(out); setWin(w); setWarnings(warns); setLoadedAt(new Date()); setLoading(false);
+  }, [accessToken, props, rebrandDate, cmpMode]);
 
-    const gsc = async (site: string, body: object): Promise<GSCApiRow[]> => {
-      const r = await fetch(`https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(site)}/searchAnalytics/query`, { method: "POST", headers, body: JSON.stringify(body) });
-      const j = await r.json();
-      if (!r.ok || j.error) throw new Error(j.error?.message || `GSC HTTP ${r.status}`);
-      return (j.rows ?? []) as GSCApiRow[];
-    };
-    const ga4 = async (prop: string, body: object): Promise<GA4ApiRow[]> => {
-      const r = await fetch(`https://analyticsdata.googleapis.com/v1beta/properties/${prop}:runReport`, { method: "POST", headers, body: JSON.stringify(body) });
-      const j = await r.json();
-      if (!r.ok || j.error) throw new Error(j.error?.message || `GA4 HTTP ${r.status}`);
-      return (j.rows ?? []) as GA4ApiRow[];
-    };
-    const safe = async <T,>(label: string, p: Promise<T>, fallback: T): Promise<T> => {
-      try { return await p; } catch (e) { warns.push(`${label}: ${e instanceof Error ? e.message : String(e)}`); return fallback; }
-    };
-
-    try {
-      // 1 — Find the latest day with final GSC data on every connected site, so both windows and both sources cover identical days.
-      const today = prTodayLocal();
-      let dataEnd = addDaysISO(today, -2);
-      const lastDays: string[] = [];
-      for (const s of PR_SITES) {
-        const gscProp = s === "vcc" ? props.vccGsc : props.avGsc;
-        if (!gscProp) continue;
-        const rows = await safe(`${PR_SITE_META[s].short} GSC freshness`, gsc(gscProp, { startDate: addDaysISO(today, -10), endDate: today, dimensions: ["date"], rowLimit: 20 }), [] as GSCApiRow[]);
-        const last = rows.map((r) => r.keys[0]).sort().pop();
-        if (last) lastDays.push(last);
-      }
-      if (lastDays.length) dataEnd = lastDays.sort()[0];
-      if (isStale()) return;
-      if (dataEnd < rebrandDate) { setError(`No post-rebrand data yet — Search Console has data up to ${formatDisplayDate(dataEnd)}.`); return; }
-
-      const w = prComputeWindows(rebrandDate, dataEnd, cmpMode);
-      const brandRegex = prBrandTermsToRe2(allTerms);
-      const dailyRanges = [{ s: w.trendStart, e: w.dataEnd }, ...(cmpMode === "yoy" ? [{ s: w.cmpStart, e: w.cmpEnd }] : [])];
-      const orgFilter = { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { matchType: "EXACT", value: "Organic Search" } } };
-      const leadFilter = { filter: { fieldName: "eventName", stringFilter: { matchType: "EXACT", value: "generate_lead" } } };
-      const leadOrg = { andGroup: { expressions: [leadFilter, orgFilter] } };
-      const winRange = (k: "cmp" | "post") => (k === "cmp" ? { startDate: w.cmpStart, endDate: w.cmpEnd } : { startDate: w.postStart, endDate: w.postEnd });
-
-      const loadSite = async (s: PrSite): Promise<PrSiteData> => {
-        const gscProp = s === "vcc" ? props.vccGsc : props.avGsc;
-        const ga4Prop = s === "vcc" ? props.vccGa4 : props.avGa4;
-        const L = PR_SITE_META[s].short;
-        const out: PrSiteData = {
-          host: gscProp ? siteHostFromGsc(gscProp) : PR_SITE_META[s].fallbackHost,
-          hasGsc: !!gscProp, hasGa4: !!ga4Prop, brandSplitOk: true,
-          daily: {}, queries: { cmp: {}, post: {} }, queriesCapped: false,
-          pages: { cmp: {}, post: {} }, devices: { cmp: {}, post: {} }, sources: { cmp: {}, post: {} }, channels: { cmp: {}, post: {} },
-        };
-        const day = (iso: string) => (out.daily[iso] ??= prEmptyDay());
-        const page = (k: "cmp" | "post", p: string) => (out.pages[k][p] ??= { clicks: 0, impressions: 0, posSum: 0, sessions: 0, engaged: 0, leads: 0 });
-        const num = (v?: string) => (v ? parseFloat(v) || 0 : 0);
-        const ga4Iso = (v: string) => `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}`;
-        const tasks: Promise<void>[] = [];
-
-        if (gscProp) {
-          dailyRanges.forEach(({ s: sd, e: ed }) => {
-            tasks.push(safe(`${L} GSC daily`, gsc(gscProp, { startDate: sd, endDate: ed, dimensions: ["date"], rowLimit: 1000 }), []).then((rows) => rows.forEach((r) => {
-              const d = day(r.keys[0]); d.clicks += r.clicks; d.impressions += r.impressions; d.posSum += r.position * r.impressions;
-            })));
-            tasks.push(gsc(gscProp, { startDate: sd, endDate: ed, dimensions: ["date"], rowLimit: 1000, dimensionFilterGroups: [{ filters: [{ dimension: "query", operator: "includingRegex", expression: brandRegex }] }] })
-              .then((rows) => rows.forEach((r) => { const d = day(r.keys[0]); d.brandClicks += r.clicks; d.brandImpressions += r.impressions; }))
-              .catch((e) => { out.brandSplitOk = false; warns.push(`${L} GSC brand split: ${e instanceof Error ? e.message : String(e)} — non-brand figures will include brand traffic.`); }));
-          });
-          (["cmp", "post"] as const).forEach((k) => {
-            tasks.push(safe(`${L} GSC queries`, gsc(gscProp, { ...winRange(k), dimensions: ["query"], rowLimit: 25000 }), []).then((rows) => {
-              if (rows.length >= 25000) out.queriesCapped = true;
-              rows.forEach((r) => { out.queries[k][r.keys[0]] = { clicks: r.clicks, impressions: r.impressions, posSum: r.position * r.impressions }; });
-            }));
-            tasks.push(safe(`${L} GSC pages`, gsc(gscProp, { ...winRange(k), dimensions: ["page"], rowLimit: 10000 }), []).then((rows) => rows.forEach((r) => {
-              const p = page(k, toPagePath(r.keys[0])); p.clicks += r.clicks; p.impressions += r.impressions; p.posSum += r.position * r.impressions;
-            })));
-            tasks.push(safe(`${L} GSC devices`, gsc(gscProp, { ...winRange(k), dimensions: ["device"] }), []).then((rows) => rows.forEach((r) => {
-              const dv = r.keys[0].charAt(0) + r.keys[0].slice(1).toLowerCase();
-              out.devices[k][dv] = (out.devices[k][dv] ?? 0) + r.clicks;
-            })));
-          });
-        }
-
-        if (ga4Prop) {
-          dailyRanges.forEach(({ s: sd, e: ed }) => {
-            tasks.push(safe(`${L} GA4 daily`, ga4(ga4Prop, {
-              dateRanges: [{ startDate: sd, endDate: ed }], dimensions: [{ name: "date" }],
-              metrics: [{ name: "sessions" }, { name: "totalUsers" }, { name: "newUsers" }, { name: "engagedSessions" }, { name: "screenPageViews" }],
-              dimensionFilter: orgFilter, limit: 1000,
-            }), []).then((rows) => rows.forEach((r) => {
-              const d = day(ga4Iso(r.dimensionValues[0].value));
-              d.sessions += num(r.metricValues[0]?.value); d.users += num(r.metricValues[1]?.value); d.newUsers += num(r.metricValues[2]?.value);
-              d.engaged += num(r.metricValues[3]?.value); d.pageviews += num(r.metricValues[4]?.value);
-            })));
-            tasks.push(safe(`${L} GA4 daily leads`, ga4(ga4Prop, {
-              dateRanges: [{ startDate: sd, endDate: ed }], dimensions: [{ name: "date" }], metrics: [{ name: "keyEvents" }], dimensionFilter: leadOrg, limit: 1000,
-            }), []).then((rows) => rows.forEach((r) => { day(ga4Iso(r.dimensionValues[0].value)).leads += num(r.metricValues[0]?.value); })));
-          });
-          (["cmp", "post"] as const).forEach((k) => {
-            const dr = [winRange(k)];
-            tasks.push(safe(`${L} GA4 landing pages`, ga4(ga4Prop, { dateRanges: dr, dimensions: [{ name: "landingPage" }], metrics: [{ name: "sessions" }, { name: "engagedSessions" }], dimensionFilter: orgFilter, limit: 10000 }), []).then((rows) => rows.forEach((r) => {
-              const p = page(k, toPagePath(r.dimensionValues[0].value || "/")); p.sessions += num(r.metricValues[0]?.value); p.engaged += num(r.metricValues[1]?.value);
-            })));
-            tasks.push(safe(`${L} GA4 landing-page leads`, ga4(ga4Prop, { dateRanges: dr, dimensions: [{ name: "landingPage" }], metrics: [{ name: "keyEvents" }], dimensionFilter: leadOrg, limit: 10000 }), []).then((rows) => rows.forEach((r) => {
-              page(k, toPagePath(r.dimensionValues[0].value || "/")).leads += num(r.metricValues[0]?.value);
-            })));
-            tasks.push(safe(`${L} GA4 sources`, ga4(ga4Prop, { dateRanges: dr, dimensions: [{ name: "sessionSource" }], metrics: [{ name: "sessions" }], dimensionFilter: orgFilter, limit: 50 }), []).then((rows) => rows.forEach((r) => {
-              const src = r.dimensionValues[0].value || "(not set)"; out.sources[k][src] = (out.sources[k][src] ?? 0) + num(r.metricValues[0]?.value);
-            })));
-            tasks.push(safe(`${L} GA4 channels`, ga4(ga4Prop, { dateRanges: dr, dimensions: [{ name: "sessionDefaultChannelGroup" }], metrics: [{ name: "sessions" }], limit: 50 }), []).then((rows) => rows.forEach((r) => {
-              const ch = r.dimensionValues[0].value || "(unassigned)"; out.channels[k][ch] = (out.channels[k][ch] ?? 0) + num(r.metricValues[0]?.value);
-            })));
-          });
-        }
-        await Promise.all(tasks);
-        return out;
-      };
-
-      const [vcc, av] = await Promise.all([loadSite("vcc"), loadSite("av")]);
-      if (isStale()) return;
-      setWin(w);
-      setData({ vcc, av });
-      setLoadedAt(new Date());
-    } catch (e) {
-      if (!isStale()) setError(e instanceof Error ? e.message : "Failed to load post-rebrand analysis.");
-    } finally {
-      if (!isStale()) { setWarnings(warns); setLoading(false); }
-    }
-  }, [accessToken, props, rebrandDate, cmpMode, allTerms]);
-
-  // Auto-load once when at least one property per site is known; afterwards, reload whenever
-  // the rebrand date or comparison mode changes (property changes wait for "Reload").
+  // Auto-load once properties are known; reload when the date or comparison changes.
   const autoRan = useRef(false);
-  const lastParams = useRef("");
+  const lastKey = useRef("");
   useEffect(() => {
     const key = `${rebrandDate}|${cmpMode}`;
     if (!autoRan.current) {
-      if (!accessToken || !((props.vccGsc || props.vccGa4) && (props.avGsc || props.avGa4))) return;
-      autoRan.current = true;
-      lastParams.current = key;
-      void run();
-      return;
+      if (!accessToken || !(props.vcc || props.av)) return;
+      autoRan.current = true; lastKey.current = key; void run(); return;
     }
-    if (key !== lastParams.current) { lastParams.current = key; void run(); }
+    if (key !== lastKey.current) { lastKey.current = key; void run(); }
   }, [accessToken, props, run, rebrandDate, cmpMode]);
 
-  // ── Derived data ──
-  const sitesFor = useCallback((sc: PrScope): PrSite[] => (sc === "combined" ? PR_SITES : [sc]), []);
+  // ── Hostname audit: which property's data to use for each hostname ──
+  const hostAudit = useMemo(() => {
+    if (!raw) return [];
+    const hosts = new Set<string>();
+    (["vcc", "av"] as PrProp[]).forEach((p) => (["cmp", "post"] as PrWinKey[]).forEach((k) => Object.keys(raw[p][k]).forEach((h) => hosts.add(h))));
+    const tot = (p: PrProp, k: PrWinKey, h: string) => Object.values(raw[p][k][h] ?? {}).reduce((a, b) => a + b, 0);
+    return Array.from(hosts).map((host) => {
+      const n = { vcc: { cmp: tot("vcc", "cmp", host), post: tot("vcc", "post", host) }, av: { cmp: tot("av", "cmp", host), post: tot("av", "post", host) } };
+      const seen = (["vcc", "av"] as PrProp[]).filter((p) => n[p].cmp + n[p].post > 0);
+      // Both properties saw it → same visits tagged twice; use the property with the larger count.
+      const source: PrProp | null = seen.length === 0 ? null : seen.length === 1 ? seen[0] : (n.vcc.cmp + n.vcc.post >= n.av.cmp + n.av.post ? "vcc" : "av");
+      const group = prIsVccHost(host) ? "VCC" : prIsNewHost(host) ? "Vintage.com" : "Other";
+      return { host, n, source, shared: seen.length === 2, group };
+    }).sort((a, b) => (b.n.vcc.cmp + b.n.vcc.post + b.n.av.cmp + b.n.av.post) - (a.n.vcc.cmp + a.n.vcc.post + a.n.av.cmp + a.n.av.post));
+  }, [raw]);
 
-  const dayFor = useCallback((sc: PrScope, iso: string): PrDay => {
-    const d = prEmptyDay();
-    if (!data) return d;
-    sitesFor(sc).forEach((s) => { const x = data[s].daily[iso]; if (x) prAddInto(d, x); });
-    return d;
-  }, [data, sitesFor]);
-
-  const sumWin = useCallback((sc: PrScope, start: string, end: string): PrDay => {
-    const t = prEmptyDay();
-    prDates(start, end).forEach((iso) => prAddInto(t, dayFor(sc, iso)));
-    return t;
-  }, [dayFor]);
-
-  /** Classify each distinct query once. */
-  const queryClass = useMemo(() => {
-    const m = new Map<string, "nonBrand" | "old" | "new">();
-    if (!data) return m;
-    PR_SITES.forEach((s) => (["cmp", "post"] as const).forEach((k) => Object.keys(data[s].queries[k]).forEach((q) => {
-      if (m.has(q)) return;
-      if (nbSeoClassify(q, allTerms) === "nonBrand") m.set(q, "nonBrand");
-      else m.set(q, nbSeoClassify(q, PR_NEW_BRAND_TERMS) === "brand" ? "new" : "old");
-    })));
-    return m;
-  }, [data, allTerms]);
-
-  const mergedQueries = useCallback((sc: PrScope, k: "cmp" | "post") => {
-    const m: Record<string, PrAgg & { sites: Set<PrSite> }> = {};
-    if (!data) return m;
-    sitesFor(sc).forEach((s) => Object.entries(data[s].queries[k]).forEach(([q, a]) => {
-      const cur = (m[q] ??= { clicks: 0, impressions: 0, posSum: 0, sites: new Set() });
-      cur.clicks += a.clicks; cur.impressions += a.impressions; cur.posSum += a.posSum; cur.sites.add(s);
-    }));
-    return m;
-  }, [data, sitesFor]);
-
-  const qStats = useCallback((sc: PrScope, k: "cmp" | "post"): PrQStats => {
-    const st: PrQStats = { count: 0, top3: 0, top10: 0, nbCount: 0, nbTop10: 0, nbPosSum: 0, nbImpr: 0 };
-    Object.entries(mergedQueries(sc, k)).forEach(([q, a]) => {
-      if (a.impressions <= 0) return;
-      const pos = a.posSum / a.impressions;
-      st.count++; if (pos <= 3) st.top3++; if (pos <= 10) st.top10++;
-      if (queryClass.get(q) === "nonBrand") { st.nbCount++; if (pos <= 10) st.nbTop10++; st.nbPosSum += a.posSum; st.nbImpr += a.impressions; }
+  // ── Path-level sessions per domain group (each hostname counted once) ──
+  const domainPages = useMemo(() => {
+    const vcc: Record<string, { pre: number; post: number }> = {};
+    const nw: Record<string, { pre: number; post: number }> = {};
+    let vccHost = "www.vintagecashcow.co.uk", newHost = "www.vintage.com", vccHostN = -1, newHostN = -1;
+    if (!raw) return { vcc, nw, vccHost, newHost };
+    hostAudit.forEach((h) => {
+      if (!h.source || h.group === "Other") return;
+      const target = h.group === "VCC" ? vcc : nw;
+      (["cmp", "post"] as PrWinKey[]).forEach((k) => Object.entries(raw[h.source!][k][h.host] ?? {}).forEach(([path, v]) => {
+        const t = (target[path] ??= { pre: 0, post: 0 });
+        if (k === "cmp") t.pre += v; else t.post += v;
+      }));
+      const size = h.n[h.source].cmp + h.n[h.source].post;
+      if (h.group === "VCC" && size > vccHostN) { vccHostN = size; vccHost = h.host; }
+      if (h.group === "Vintage.com" && size > newHostN) { newHostN = size; newHost = h.host; }
     });
-    return st;
-  }, [mergedQueries, queryClass]);
+    return { vcc, nw, vccHost, newHost };
+  }, [raw, hostAudit]);
 
-  const allSessionsFor = useCallback((sc: PrScope, k: "cmp" | "post") => {
-    if (!data) return 0;
-    return sitesFor(sc).reduce((s, site) => s + Object.values(data[site].channels[k]).reduce((a, b) => a + b, 0), 0);
-  }, [data, sitesFor]);
-  const organicFromChannelsFor = useCallback((sc: PrScope, k: "cmp" | "post") => {
-    if (!data) return 0;
-    return sitesFor(sc).reduce((s, site) => s + (data[site].channels[k]["Organic Search"] ?? 0), 0);
-  }, [data, sitesFor]);
+  const redirectMap = useMemo(() => prParseRedirectMap(mapText), [mapText]);
 
-  const stats = useMemo(() => {
-    if (!data || !win) return null;
-    const build = (sc: PrScope) => ({
-      cmp: { t: sumWin(sc, win.cmpStart, win.cmpEnd), q: qStats(sc, "cmp"), allSessions: allSessionsFor(sc, "cmp"), organicFromChannels: organicFromChannelsFor(sc, "cmp") } as PrWinStats,
-      post: { t: sumWin(sc, win.postStart, win.postEnd), q: qStats(sc, "post"), allSessions: allSessionsFor(sc, "post"), organicFromChannels: organicFromChannelsFor(sc, "post") } as PrWinStats,
+  const rows = useMemo((): PrRow[] => {
+    const { vcc, nw } = domainPages;
+    const slugIndex = new Map<string, string[]>();
+    Object.keys(nw).forEach((p) => { const s = prSlug(p); if (s) slugIndex.set(s, [...(slugIndex.get(s) ?? []), p]); });
+    const base = Object.entries(vcc).map(([path, v]) => {
+      let dest: string | null = null, match: PrMatch = null;
+      const mapped = redirectMap.get(path);
+      if (mapped) { dest = mapped; match = "map"; }
+      else if (nw[path]) { dest = path; match = "path"; }
+      else { const c = slugIndex.get(prSlug(path)); if (path !== "/" && c && c.length === 1) { dest = c[0]; match = "slug"; } }
+      return { path, vPre: v.pre, vPost: v.post, dest, match };
     });
-    return { combined: build("combined"), vcc: build("vcc"), av: build("av") } as Record<PrScope, { cmp: PrWinStats; post: PrWinStats }>;
-  }, [data, win, sumWin, qStats, allSessionsFor, organicFromChannelsFor]);
-
-  const cmpLabel = cmpMode === "pre" ? "pre-rebrand" : "last year";
-  const scopeLabel = scope === "combined" ? "Combined" : PR_SITE_META[scope].label;
-
-  // Trend chart (stacked by site + 7-day avg)
-  const trendData = useMemo(() => {
-    if (!data || !win) return [];
-    const m = prDailyMetric(trendMetric);
-    const dates = prDates(win.trendStart, win.dataEnd);
-    return dates.map((iso, i) => {
-      const vcc = m.get(dayFor("vcc", iso));
-      const av = m.get(dayFor("av", iso));
-      const window7 = dates.slice(Math.max(0, i - 6), i + 1);
-      const avg7 = i >= 6 ? window7.reduce((s, d) => s + m.get(dayFor("combined", d)), 0) / 7 : null;
-      return { label: formatDisplayDate(iso), vcc, av, combined: vcc + av, avg7 };
+    // Share each destination's sessions across the VCC URLs that point at it (by pre-rebrand weight).
+    const destWeight = new Map<string, { n: number; w: number }>();
+    base.forEach((r) => { if (r.dest) { const x = destWeight.get(r.dest) ?? { n: 0, w: 0 }; destWeight.set(r.dest, { n: x.n + 1, w: x.w + Math.max(r.vPre, 0.0001) }); } });
+    return base.map((r) => {
+      const d = r.dest ? nw[r.dest] ?? { pre: 0, post: 0 } : { pre: 0, post: 0 };
+      const dw = r.dest ? destWeight.get(r.dest)! : { n: 0, w: 1 };
+      const share = r.dest ? Math.max(r.vPre, 0.0001) / dw.w : 0;
+      const aPre = d.pre * share, aPost = d.post * share;
+      const before = r.vPre + aPre, after = r.vPost + aPost;
+      const kept = before > 0 ? after / before : null;
+      const status: PrStatus = !r.dest ? "nomatch" : kept === null ? "held" : kept >= 0.9 ? "held" : kept >= 0.5 ? "partial" : "dropped";
+      return { ...r, sharedBy: dw.n, dPre: d.pre, dPost: d.post, aPre, aPost, kept, net: after - before, status };
     });
-  }, [data, win, trendMetric, dayFor]);
+  }, [domainPages, redirectMap]);
 
-  const alignedData = useMemo(() => {
-    if (!data || !win) return [];
-    const m = prDailyMetric(trendMetric);
-    return prDates(win.postStart, win.postEnd).map((iso, i) => {
-      const c = addDaysISO(iso, -win.shift);
-      return { label: `${prWeekday(iso)} ${formatDisplayDate(iso)}`, post: m.get(dayFor(scope, iso)), cmp: m.get(dayFor(scope, c)), cmpDate: formatDisplayDate(c), day: i + 1 };
-    });
-  }, [data, win, trendMetric, scope, dayFor]);
+  const summary = useMemo(() => {
+    const sum = (m: Record<string, { pre: number; post: number }>) => Object.values(m).reduce((a, v) => ({ pre: a.pre + v.pre, post: a.post + v.post }), { pre: 0, post: 0 });
+    const v = sum(domainPages.vcc), n = sum(domainPages.nw);
+    const matchedPre = rows.filter((r) => r.dest).reduce((a, r) => a + r.vPre, 0);
+    return { v, n, c: { pre: v.pre + n.pre, post: v.post + n.post }, coverage: v.pre ? matchedPre / v.pre : 0 };
+  }, [domainPages, rows]);
 
-  const brandSplitData = useMemo(() => {
-    if (!data || !win) return [];
-    return prDates(win.trendStart, win.dataEnd).map((iso) => {
-      const d = dayFor(scope, iso);
-      return { label: formatDisplayDate(iso), brand: d.brandClicks, nonBrand: d.clicks - d.brandClicks, nbShare: d.clicks ? Math.round(((d.clicks - d.brandClicks) / d.clicks) * 1000) / 10 : 0 };
-    });
-  }, [data, win, scope, dayFor]);
+  const destinations = useMemo(() => new Set(rows.filter((r) => r.dest).map((r) => r.dest!)), [rows]);
+  const unmatchedNew = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return Object.entries(domainPages.nw).filter(([p]) => !destinations.has(p) && (!q || p.toLowerCase().includes(q)))
+      .map(([path, v]) => ({ path, ...v })).sort((a, b) => b.post - a.post);
+  }, [domainPages, destinations, search]);
 
-  // WoW
-  const wow = useMemo(() => {
-    if (!data || !win) return null;
-    const cur = sumWin(scope, win.wowStart, win.wowEnd);
-    const prev = sumWin(scope, win.wowPrevStart, win.wowPrevEnd);
-    const perSite = PR_SITES.map((s) => ({ s, cur: sumWin(s, win.wowStart, win.wowEnd), prev: sumWin(s, win.wowPrevStart, win.wowPrevEnd) }));
-    const daysUp = (get: (d: PrDay) => number) => prDates(win.wowStart, win.wowEnd).filter((iso) => get(dayFor(scope, iso)) > get(dayFor(scope, addDaysISO(iso, -7)))).length;
-    return { cur, prev, perSite, nbUp: daysUp((d) => d.clicks - d.brandClicks), sessUp: daysUp((d) => d.sessions), leadsUp: daysUp((d) => d.leads), prevSpansRebrand: win.wowPrevStart < win.rebrand };
-  }, [data, win, scope, sumWin, dayFor]);
-
-  const weeks = useMemo(() => {
-    if (!data || !win) return [];
-    const base = sumWin(scope, win.baseStart, win.baseEnd); // 28 days
-    const rows: { name: string; start: string; end: string; days: number; cur: PrDay; prev: PrDay; base: PrDay }[] = [];
-    let i = 1;
-    for (let s = win.rebrand; s <= win.dataEnd; s = addDaysISO(s, 7), i++) {
-      const e = addDaysISO(s, 6) > win.dataEnd ? win.dataEnd : addDaysISO(s, 6);
-      const days = daysInclusive(s, e);
-      const scaled = prEmptyDay();
-      (Object.keys(scaled) as (keyof PrDay)[]).forEach((k) => { scaled[k] = (base[k] / 28) * days; });
-      rows.push({ name: `Week ${i}`, start: s, end: e, days, cur: sumWin(scope, s, e), prev: sumWin(scope, addDaysISO(s, -7), addDaysISO(e, -7)), base: scaled });
-    }
-    return rows;
-  }, [data, win, scope, sumWin]);
-  const baseWeek = useMemo(() => {
-    if (!data || !win) return null;
-    const b = sumWin(scope, win.baseStart, win.baseEnd);
-    const avg = prEmptyDay();
-    (Object.keys(avg) as (keyof PrDay)[]).forEach((k) => { avg[k] = b[k] / 4; });
-    return avg;
-  }, [data, win, scope, sumWin]);
-
-  const dailyRows = useMemo(() => {
-    if (!data || !win) return [];
-    const m = prDailyMetric(dailyMetric);
-    return prDates(win.postStart, win.postEnd).reverse().map((iso) => {
-      // Pre-rebrand baseline for this weekday: the 4 most recent same-weekday dates before the rebrand.
-      let k = 1; while (addDaysISO(iso, -7 * k) >= win.rebrand) k++;
-      const baseVals = [0, 1, 2, 3].map((j) => m.get(dayFor(scope, addDaysISO(iso, -7 * (k + j)))));
-      return {
-        iso, wd: prWeekday(iso),
-        vcc: m.get(dayFor("vcc", iso)), av: m.get(dayFor("av", iso)), scoped: m.get(dayFor(scope, iso)),
-        lastWeek: m.get(dayFor(scope, addDaysISO(iso, -7))),
-        baseline: baseVals.reduce((a, b) => a + b, 0) / 4,
-      };
-    });
-  }, [data, win, dailyMetric, scope, dayFor]);
-
-  // Query tables
-  const buildQueryRows = useCallback((kind: "nonBrand" | "brand") => {
-    const cmp = mergedQueries(scope, "cmp");
-    const post = mergedQueries(scope, "post");
-    const keys = new Set([...Object.keys(cmp), ...Object.keys(post)]);
-    const rows: { q: string; type: "nonBrand" | "old" | "new"; sites: string; cC: number; cP: number; iC: number; iP: number; pC: number; pP: number }[] = [];
-    keys.forEach((q) => {
-      const t = queryClass.get(q) ?? "nonBrand";
-      if (kind === "nonBrand" ? t !== "nonBrand" : t === "nonBrand") return;
-      const a = cmp[q], b = post[q];
-      const sites = new Set<PrSite>([...(a?.sites ?? []), ...(b?.sites ?? [])]);
-      rows.push({
-        q, type: t,
-        sites: sites.size === 2 ? "Both" : sites.has("vcc") ? "VCC" : "Vintage.com",
-        cC: a?.clicks ?? 0, cP: b?.clicks ?? 0, iC: a?.impressions ?? 0, iP: b?.impressions ?? 0,
-        pC: a && a.impressions ? a.posSum / a.impressions : 0, pP: b && b.impressions ? b.posSum / b.impressions : 0,
-      });
-    });
-    return rows;
-  }, [mergedQueries, scope, queryClass]);
-
-  const nbRowsAll = useMemo(() => (data ? buildQueryRows("nonBrand") : []), [data, buildQueryRows]);
-  const nbRows = useMemo(() => {
-    const s = nbSearch.trim().toLowerCase();
-    let r = s ? nbRowsAll.filter((x) => x.q.includes(s)) : nbRowsAll;
-    if (nbTab === "winners") r = r.filter((x) => x.cP > x.cC).sort((a, b) => (b.cP - b.cC) - (a.cP - a.cC) || b.iP - a.iP);
-    else if (nbTab === "losers") r = r.filter((x) => x.cP < x.cC).sort((a, b) => (a.cP - a.cC) - (b.cP - b.cC));
-    else if (nbTab === "new") r = r.filter((x) => x.iC === 0 && x.iP > 0).sort((a, b) => b.cP - a.cP || b.iP - a.iP);
-    else if (nbTab === "lost") r = r.filter((x) => x.iC > 0 && x.iP === 0).sort((a, b) => b.cC - a.cC || b.iC - a.iC);
-    else r = [...r].sort((a, b) => b.cP - a.cP || b.iP - a.iP);
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let r = rows.filter((x) => (x.vPre >= minPre || (tab === "all" && x.vPost >= minPre)) && (!q || x.path.toLowerCase().includes(q) || (x.dest ?? "").toLowerCase().includes(q)));
+    if (tab === "drops") r = r.filter((x) => x.net < 0).sort((a, b) => a.net - b.net);
+    else if (tab === "held") r = r.filter((x) => x.status === "held").sort((a, b) => b.vPre - a.vPre);
+    else if (tab === "nomatch") r = r.filter((x) => x.status === "nomatch").sort((a, b) => b.vPre - a.vPre);
+    else r = [...r].sort((a, b) => b.vPre - a.vPre);
     return r;
-  }, [nbRowsAll, nbTab, nbSearch]);
-  const nbCounts = useMemo(() => ({
-    winners: nbRowsAll.filter((x) => x.cP > x.cC).length,
-    losers: nbRowsAll.filter((x) => x.cP < x.cC).length,
-    new: nbRowsAll.filter((x) => x.iC === 0 && x.iP > 0).length,
-    lost: nbRowsAll.filter((x) => x.iC > 0 && x.iP === 0).length,
-    all: nbRowsAll.length,
-  }), [nbRowsAll]);
+  }, [rows, tab, search, minPre]);
+  const counts = useMemo(() => {
+    const base = rows.filter((x) => x.vPre >= minPre);
+    return { drops: base.filter((x) => x.net < 0).length, held: base.filter((x) => x.status === "held").length, nomatch: base.filter((x) => x.status === "nomatch").length, all: base.length };
+  }, [rows, minPre]);
 
-  const posBuckets = useMemo(() => {
-    const B = [{ name: "1–3", lo: 0, hi: 3 }, { name: "4–10", lo: 3, hi: 10 }, { name: "11–20", lo: 10, hi: 20 }, { name: "21–50", lo: 20, hi: 50 }, { name: "51+", lo: 50, hi: Infinity }];
-    return B.map((b) => ({
-      name: b.name,
-      comparison: nbRowsAll.filter((x) => x.iC > 0 && x.pC > b.lo && x.pC <= b.hi).length,
-      post: nbRowsAll.filter((x) => x.iP > 0 && x.pP > b.lo && x.pP <= b.hi).length,
-    }));
-  }, [nbRowsAll]);
-
-  const brRowsAll = useMemo(() => (data ? buildQueryRows("brand") : []), [data, buildQueryRows]);
-  const brRows = useMemo(() => (brTab === "all" ? brRowsAll : brRowsAll.filter((x) => x.type === brTab)).slice().sort((a, b) => b.cP - a.cP || b.cC - a.cC), [brRowsAll, brTab]);
-  const brandTransition = useMemo(() => {
-    const sum = (t: "old" | "new", f: "cC" | "cP" | "iC" | "iP") => brRowsAll.filter((x) => x.type === t).reduce((s, x) => s + x[f], 0);
-    const o = { cC: sum("old", "cC"), cP: sum("old", "cP"), iC: sum("old", "iC"), iP: sum("old", "iP") };
-    const n = { cC: sum("new", "cC"), cP: sum("new", "cP"), iC: sum("new", "iC"), iP: sum("new", "iP") };
-    return { o, n, shareC: prDiv(n.cC, o.cC + n.cC), shareP: prDiv(n.cP, o.cP + n.cP) };
-  }, [brRowsAll]);
-
-  // Landing pages
-  const lpRowsAll = useMemo(() => {
-    if (!data) return [];
-    const rows: { site: PrSite; path: string; url: string; c: PrPageAgg; p: PrPageAgg }[] = [];
-    const empty = (): PrPageAgg => ({ clicks: 0, impressions: 0, posSum: 0, sessions: 0, engaged: 0, leads: 0 });
-    sitesFor(scope).forEach((s) => {
-      const keys = new Set([...Object.keys(data[s].pages.cmp), ...Object.keys(data[s].pages.post)]);
-      keys.forEach((path) => {
-        if (path === "(not set)") return;
-        rows.push({ site: s, path, url: `https://${data[s].host}${path === "/" ? "/" : path}`, c: data[s].pages.cmp[path] ?? empty(), p: data[s].pages.post[path] ?? empty() });
-      });
-    });
-    return rows;
-  }, [data, scope, sitesFor]);
-  const lpRows = useMemo(() => {
-    const key = lpRank === "sessions" ? "sessions" : "clicks";
-    const s = lpSearch.trim().toLowerCase();
-    let r = lpRowsAll.filter((x) => (x.c[key] > 0 || x.p[key] > 0) && (!s || x.path.toLowerCase().includes(s)));
-    if (lpTab === "winners") r = r.filter((x) => x.p[key] > x.c[key]).sort((a, b) => (b.p[key] - b.c[key]) - (a.p[key] - a.c[key]));
-    else if (lpTab === "losers") r = r.filter((x) => x.p[key] < x.c[key]).sort((a, b) => (a.p[key] - a.c[key]) - (b.p[key] - b.c[key]));
-    else r = [...r].sort((a, b) => b.p[key] - a.p[key]);
-    return r;
-  }, [lpRowsAll, lpTab, lpRank, lpSearch]);
-
-  const mapRows = useCallback((pick: (d: PrSiteData) => { cmp: PrNumMap; post: PrNumMap }) => {
-    if (!data) return [];
-    const m: Record<string, { c: number; p: number }> = {};
-    sitesFor(scope).forEach((s) => {
-      const x = pick(data[s]);
-      Object.entries(x.cmp).forEach(([k, v]) => { (m[k] ??= { c: 0, p: 0 }).c += v; });
-      Object.entries(x.post).forEach(([k, v]) => { (m[k] ??= { c: 0, p: 0 }).p += v; });
-    });
-    return Object.entries(m).map(([name, v]) => ({ name, ...v })).sort((a, b) => b.p + b.c - (a.p + a.c));
-  }, [data, scope, sitesFor]);
-  const deviceRows = useMemo(() => mapRows((d) => d.devices), [mapRows]);
-  const sourceRows = useMemo(() => mapRows((d) => d.sources).slice(0, 12), [mapRows]);
-  const channelRows = useMemo(() => mapRows((d) => d.channels), [mapRows]);
-
-  const buildSlack = useCallback(() => {
-    if (!wow || !win) return "";
-    const pct = (c: number, p: number) => (p ? `${c >= p ? "+" : ""}${(((c - p) / p) * 100).toFixed(1)}%` : "n/a");
-    const nb = (d: PrDay) => d.clicks - d.brandClicks;
-    const lines = [
-      `*Post-rebrand WoW check — ${scopeLabel}*`,
-      `_${prRange(win.wowStart, win.wowEnd)} vs ${prRange(win.wowPrevStart, win.wowPrevEnd)} (same weekdays)_`,
-      `• Non-brand clicks: ${prInt(nb(wow.cur))} (${pct(nb(wow.cur), nb(wow.prev))} WoW) — up on ${wow.nbUp}/7 days`,
-      `• Total clicks: ${prInt(wow.cur.clicks)} (${pct(wow.cur.clicks, wow.prev.clicks)})`,
-      `• Impressions: ${prInt(wow.cur.impressions)} (${pct(wow.cur.impressions, wow.prev.impressions)})`,
-      `• Avg position: ${prPos(prDiv(wow.cur.posSum, wow.cur.impressions))} (was ${prPos(prDiv(wow.prev.posSum, wow.prev.impressions))})`,
-      `• Organic sessions: ${prInt(wow.cur.sessions)} (${pct(wow.cur.sessions, wow.prev.sessions)}) — up on ${wow.sessUp}/7 days`,
-      `• Organic leads: ${prInt(wow.cur.leads)} (${pct(wow.cur.leads, wow.prev.leads)})`,
-    ];
-    if (stats) {
-      const s = stats[scope];
-      const nbP = s.post.t.clicks - s.post.t.brandClicks, nbC = s.cmp.t.clicks - s.cmp.t.brandClicks;
-      lines.push(`\n*Since rebrand (${prRange(win.postStart, win.postEnd)}) vs ${cmpLabel}:* non-brand clicks ${pct(nbP, nbC)}, organic sessions ${pct(s.post.t.sessions, s.cmp.t.sessions)}, leads ${pct(s.post.t.leads, s.cmp.t.leads)}`);
-    }
-    return lines.join("\n");
-  }, [wow, win, stats, scope, scopeLabel, cmpLabel]);
-
-  // ── Render helpers ──
+  const sharedHosts = hostAudit.filter((h) => h.shared);
+  const cmpWord = cmpMode === "pre" ? "Pre" : "LY";
   const th = "px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap";
   const td = "px-3 py-2 text-xs text-gray-700 whitespace-nowrap";
-  const sitePill = (s: string) => (
-    <span className={`inline-block text-[10px] font-bold px-1.5 py-0.5 rounded ${s === "VCC" ? "bg-purple-100 text-purple-700" : s === "Both" ? "bg-gray-100 text-gray-600" : "bg-teal-50 text-teal-700"}`}>{s}</span>
-  );
-  const rebrandLabel = formatDisplayDate(rebrandDate);
-  const chartMetricOpts = PR_DAILY_METRICS.map((m) => ({ value: m.key, label: m.label }));
-  const ROW_CAP = 300;
-
-  const JUMP = [
-    ["pr-kpis", "Headline KPIs"], ["pr-split", "Property breakdown"], ["pr-trends", "Trends"], ["pr-wow", "WoW check"],
-    ["pr-nb", "Non-brand queries"], ["pr-brand", "Branded queries"], ["pr-lp", "Landing pages"], ["pr-mix", "Devices & channels"],
-  ];
-
-  const propPicker = (k: PrPropKey, label: string, opts: { value: string; label: string }[]) => (
-    <div>
-      <label className="block text-[11px] font-semibold text-gray-500 mb-1">{label}</label>
-      <Select value={props[k]} onChange={(v) => setProps((p) => ({ ...p, [k]: v }))} options={opts} placeholder="— none —" disabled={opts.length === 0} />
-    </div>
-  );
+  const ROW_CAP = 500;
+  const vccUrl = (p: string) => `https://${domainPages.vccHost}${p}`;
+  const newUrl = (p: string) => `https://${domainPages.newHost}${p}`;
 
   return (
-    <div className="space-y-8">
-      {/* ── Control header ── */}
+    <div className="space-y-6">
+      {/* Header + controls */}
       <div className="rounded-2xl p-6 text-white shadow-sm" style={{ background: "linear-gradient(135deg,#4c1d95 0%,#7e22ce 55%,#0d9488 100%)" }}>
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="max-w-2xl">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-white/70">Organic search · GSC + GA4 · both properties</p>
+            <p className="text-[11px] font-bold uppercase tracking-widest text-white/70">GA4 · Organic Search sessions · by landing page</p>
             <h2 className="text-2xl font-bold mt-1">Post Rebrand Analysis</h2>
-            <p className="text-sm text-white/80 mt-1.5">
-              Vintage Cash Cow + Vintage.com blended into one organic view. Everything since the rebrand on <strong>{rebrandLabel}</strong> is compared with a weekday-matched {cmpMode === "pre" ? "pre-rebrand period" : "period last year"}, with a separate week-on-week check underneath.
-            </p>
+            <p className="text-sm text-white/80 mt-1.5">Every old Vintage Cash Cow URL — organic sessions before vs after the rebrand on <strong>{formatDisplayDate(rebrandDate)}</strong>, and the vintage.com URL those sessions moved to.</p>
           </div>
           <div className="flex flex-col items-end gap-2">
             <button type="button" onClick={() => void run()} disabled={loading}
               className="inline-flex items-center gap-2 bg-white text-purple-800 hover:bg-purple-50 disabled:opacity-60 px-4 py-2 rounded-xl text-sm font-bold shadow-sm transition-colors">
-              <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> {loading ? "Loading…" : data ? "Reload" : "Load analysis"}
+              <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> {loading ? "Loading…" : raw ? "Reload" : "Load"}
             </button>
             {loadedAt && <span className="text-[11px] text-white/70">Loaded {loadedAt.toLocaleTimeString()}</span>}
           </div>
         </div>
-
         <div className="mt-5 flex flex-wrap items-end gap-x-6 gap-y-3">
           <div>
             <label className="block text-[11px] font-semibold text-white/70 mb-1">Rebrand date</label>
@@ -7342,588 +6864,209 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
               className="bg-white/10 border border-white/25 rounded-xl px-3 py-1.5 text-sm text-white [color-scheme:dark] focus:outline-none focus:border-white/60" />
           </div>
           <div>
-            <label className="block text-[11px] font-semibold text-white/70 mb-1">Compare post-rebrand with</label>
+            <label className="block text-[11px] font-semibold text-white/70 mb-1">Compare with</label>
             <div className="inline-flex bg-white/10 rounded-xl p-0.5">
-              {([["pre", "Pre-rebrand (weekday-matched)"], ["yoy", "Same period last year"]] as [PrCmpMode, string][]).map(([v, l]) => (
+              {([["pre", "Pre-rebrand (weekday-matched)"], ["yoy", "Same days last year"]] as [PrCmpMode, string][]).map(([v, l]) => (
                 <button key={v} type="button" onClick={() => setCmpMode(v)}
                   className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${cmpMode === v ? "bg-white text-purple-800" : "text-white/80 hover:text-white"}`}>{l}</button>
               ))}
             </div>
           </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-white/70 mb-1">View</label>
-            <div className="inline-flex bg-white/10 rounded-xl p-0.5">
-              {([["combined", "Combined"], ["vcc", "Vintage Cash Cow"], ["av", "Vintage.com"]] as [PrScope, string][]).map(([v, l]) => (
-                <button key={v} type="button" onClick={() => setScope(v)}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${scope === v ? "bg-white text-purple-800" : "text-white/80 hover:text-white"}`}>{l}</button>
-              ))}
-            </div>
-          </div>
-          <button type="button" onClick={() => setShowProps((v) => !v)} className="text-xs font-semibold text-white/80 hover:text-white underline underline-offset-2">
-            Properties {showProps ? "▾" : "▸"}
+          <button type="button" onClick={() => setShowSettings((v) => !v)} className="text-xs font-semibold text-white/80 hover:text-white underline underline-offset-2">
+            Settings & redirect map {showSettings ? "▾" : "▸"}
           </button>
         </div>
-
-        {showProps && (
-          <div className="mt-4 bg-white rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-gray-800">
-            {propPicker("vccGsc", "Vintage Cash Cow — GSC", gscProperties)}
-            {propPicker("vccGa4", "Vintage Cash Cow — GA4", ga4Properties)}
-            {propPicker("avGsc", "Vintage.com — GSC", gscProperties)}
-            {propPicker("avGa4", "Vintage.com — GA4", ga4Properties)}
+        {showSettings && (
+          <div className="mt-4 bg-white rounded-xl p-4 text-gray-800 grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="space-y-3">
+              {(["vcc", "av"] as PrProp[]).map((p) => (
+                <div key={p}>
+                  <label className="block text-[11px] font-semibold text-gray-500 mb-1">{p === "vcc" ? "Vintage Cash Cow GA4 property" : "Vintage.com GA4 property"}</label>
+                  <Select value={props[p]} onChange={(v) => setProps((x) => ({ ...x, [p]: v }))} options={ga4Properties} placeholder="— none —" disabled={ga4Properties.length === 0} />
+                </div>
+              ))}
+              <p className="text-[11px] text-gray-400">Changes to properties apply on Reload.</p>
+            </div>
+            <div className="lg:col-span-2">
+              <label className="block text-[11px] font-semibold text-gray-500 mb-1">Redirect map (optional) — one per line: old URL, new URL</label>
+              <textarea value={mapText} onChange={(e) => setMapText(e.target.value)} rows={6} spellCheck={false}
+                placeholder={"/sell-watches, /sell/watches\nhttps://www.vintagecashcow.co.uk/blog/old-post, https://www.vintage.com/journal/new-post"}
+                className="w-full font-mono text-xs bg-white border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:border-purple-400" />
+              <p className="text-[11px] text-gray-400 mt-1">{redirectMap.size} mapping{redirectMap.size === 1 ? "" : "s"} loaded. Paste straight from the redirect sheet (comma or tab separated). URLs not in the map fall back to the same path, then the same final slug, on vintage.com.</p>
+            </div>
           </div>
         )}
       </div>
 
       {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">{error}</div>}
       {warnings.length > 0 && (
-        <details className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-900">
-          <summary className="cursor-pointer font-semibold">{warnings.length} data warning{warnings.length > 1 ? "s" : ""} — some figures may be incomplete</summary>
-          <ul className="mt-2 space-y-1 list-disc pl-4">{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
-        </details>
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-900 space-y-1">{warnings.map((w, i) => <p key={i}>{w}</p>)}</div>
       )}
-      {loading && !data && <Spinner />}
+      {props.vcc && props.vcc === props.av && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-900">Both slots point at the same GA4 property — that's fine if one property now tracks both domains, but check Settings if that's not expected.</div>
+      )}
+      {loading && !raw && <Spinner />}
 
-      {data && win && stats && (
-        <div className={`space-y-10 transition-opacity ${loading ? "opacity-50 pointer-events-none" : ""}`}>
-          {/* Window banner + jump links */}
-          <div className="sticky top-[64px] z-10 bg-gray-50/95 backdrop-blur py-2 -my-2 space-y-2">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs bg-white border border-purple-100 rounded-xl px-3 py-2">
-              <span className="font-semibold text-purple-700">Post:</span>
-              <span className="text-gray-700">{prRange(win.postStart, win.postEnd)} ({win.postDays} days)</span>
-              <span className="text-gray-300">vs</span>
-              <span className="font-semibold text-gray-500">{cmpMode === "pre" ? "Pre-rebrand" : "Last year"}:</span>
-              <span className="text-gray-700">{prRange(win.cmpStart, win.cmpEnd)}</span>
-              <span className="text-gray-400">· weekday-matched · data to {formatDisplayDate(win.dataEnd)} (GSC lag)</span>
-              <span className="ml-auto font-semibold text-gray-600">{scopeLabel}</span>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {JUMP.map(([id, l]) => (
-                <a key={id} href={`#${id}`} className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-white border border-gray-200 text-gray-600 hover:border-purple-300 hover:text-purple-700">{l}</a>
-              ))}
+      {raw && win && (
+        <div className={`space-y-6 transition-opacity ${loading ? "opacity-50 pointer-events-none" : ""}`}>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs bg-white border border-purple-100 rounded-xl px-3 py-2">
+            <span className="font-semibold text-purple-700">Post:</span><span className="text-gray-700">{prRange(win.postStart, win.postEnd)} ({win.postDays} days)</span>
+            <span className="text-gray-300">vs</span>
+            <span className="font-semibold text-gray-500">{cmpMode === "pre" ? "Pre-rebrand" : "Last year"}:</span><span className="text-gray-700">{prRange(win.cmpStart, win.cmpEnd)}</span>
+            <span className="text-gray-400">· same length, weekday-matched · Organic Search sessions only</span>
+          </div>
+
+          {/* Summary strip */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {[
+              { l: "Old VCC URLs", pre: summary.v.pre, post: summary.v.post, c: "#7e22ce" },
+              { l: "Vintage.com URLs", pre: summary.n.pre, post: summary.n.post, c: "#0d9488" },
+              { l: "Both together", pre: summary.c.pre, post: summary.c.post, c: "#0f172a" },
+            ].map((x) => (
+              <div key={x.l} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-[11px] font-semibold" style={{ color: x.c }}>{x.l}</p>
+                  <PrDelta cur={x.post} prev={x.pre} />
+                </div>
+                <p className="text-xl font-bold text-gray-900 mt-2 leading-none">{prInt(x.post)}</p>
+                <p className="text-[10px] text-gray-400 mt-1">organic sessions · was {prInt(x.pre)}</p>
+              </div>
+            ))}
+            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+              <p className="text-[11px] font-semibold text-gray-500">VCC traffic with a vintage.com match</p>
+              <p className="text-xl font-bold text-gray-900 mt-2 leading-none">{(summary.coverage * 100).toFixed(0)}%</p>
+              <p className="text-[10px] text-gray-400 mt-1">of pre-rebrand VCC organic sessions</p>
             </div>
           </div>
 
-          {/* 1 — Headline KPIs */}
-          <section>
-            <PrSectionHead id="pr-kpis" title="Headline KPIs" sub={`${scopeLabel} · ${prRange(win.postStart, win.postEnd)} vs ${cmpLabel} (${prRange(win.cmpStart, win.cmpEnd)}). Starred tiles are the ones that tell you whether the rebrand is working.`} />
-            {(["GSC", "GA4"] as const).map((src) => (
-              <div key={src} className="mb-5">
-                <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-2">{src === "GSC" ? "Search Console" : "GA4 · Organic Search"}</p>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                  {PR_KPIS.filter((k) => k.src === src).map((k) => {
-                    const cur = k.get(stats[scope].post), prev = k.get(stats[scope].cmp);
-                    return (
-                      <HoverTooltip key={k.key} tip={k.tip}>
-                        <div className={`bg-white rounded-2xl p-4 shadow-sm border h-full ${k.star ? "border-purple-300 ring-1 ring-purple-100" : "border-gray-100"}`}>
-                          <div className="flex items-start justify-between gap-2">
-                            <p className="text-[11px] font-semibold text-gray-500 leading-tight">{k.star && <span className="text-purple-600">★ </span>}{k.label}</p>
-                            <PrDelta cur={cur} prev={prev} kind={k.kind} lowerBetter={k.lowerBetter} />
-                          </div>
-                          <p className="text-xl font-bold text-gray-900 mt-2 leading-none">{k.fmt(cur)}</p>
-                          <p className="text-[10px] text-gray-400 mt-1">vs {k.fmt(prev)} {cmpLabel}</p>
-                        </div>
-                      </HoverTooltip>
-                    );
-                  })}
-                </div>
+          {/* THE table */}
+          <section className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+            <div className="flex items-end justify-between gap-3 flex-wrap mb-4">
+              <div>
+                <h2 className="text-base font-bold text-gray-900">VCC URLs → where their organic sessions went</h2>
+                <p className="text-xs text-gray-500 mt-0.5 max-w-3xl">Left: each old Vintage Cash Cow landing page. Right: the vintage.com page it maps to. <strong>Kept</strong> = (VCC + vintage.com sessions after) ÷ (VCC + vintage.com sessions before). Held up ≥ 90%, partly lost 50–90%, dropped &lt; 50%.</p>
               </div>
-            ))}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+              <div className="inline-flex bg-gray-100 rounded-xl p-0.5 flex-wrap">
+                {([
+                  ["drops", `Biggest drops (${counts.drops})`], ["held", `Held up (${counts.held})`], ["nomatch", `No vintage.com match (${counts.nomatch})`],
+                  ["all", `All VCC URLs (${counts.all})`], ["unmatchedNew", `Other vintage.com pages (${unmatchedNew.length})`],
+                ] as [typeof tab, string][]).map(([v, l]) => (
+                  <button key={v} type="button" onClick={() => setTab(v)}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${tab === v ? "bg-white text-purple-700 shadow-sm" : "text-gray-500 hover:text-gray-800"}`}>{l}</button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                {tab !== "unmatchedNew" && (
+                  <label className="text-[11px] text-gray-500 flex items-center gap-1.5">Min. {cmpWord.toLowerCase()} sessions
+                    <input type="number" min={0} value={minPre} onChange={(e) => setMinPre(Math.max(0, parseInt(e.target.value || "0", 10)))}
+                      className="w-16 bg-white border border-gray-200 rounded-lg px-2 py-1 text-xs" />
+                  </label>
+                )}
+                <div className="w-60"><TextInput value={search} onChange={setSearch} placeholder="Filter URLs…" /></div>
+              </div>
+            </div>
+
+            {tab === "unmatchedNew" ? (
+              <>
+                <p className="text-[11px] text-gray-500 mb-2">Vintage.com landing pages that no VCC URL maps to — if a big one is here, add it to the redirect map so its sessions are credited to the right VCC URL.</p>
+                <ScrollTable maxH="36rem">
+                  <table className="w-full text-left">
+                    <thead className="sticky top-0 bg-gray-50"><tr>
+                      <th className={th}>Vintage.com URL</th><th className={`${th} text-right`}>{cmpWord}</th><th className={`${th} text-right`}>Post</th><th className={`${th} text-right`}>Δ</th>
+                    </tr></thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {unmatchedNew.slice(0, ROW_CAP).map((r) => (
+                        <tr key={r.path} className="hover:bg-teal-50/40">
+                          <td className={`${td} max-w-[520px]`}><UrlLink url={newUrl(r.path)} slug={r.path} /></td>
+                          <td className={`${td} text-right text-gray-500`}>{prInt(r.pre)}</td>
+                          <td className={`${td} text-right font-semibold`}>{prInt(r.post)}</td>
+                          <td className={`${td} text-right`}><PrDelta cur={r.post} prev={r.pre} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </ScrollTable>
+              </>
+            ) : (
+              <ScrollTable maxH="40rem">
+                <table className="w-full text-left">
+                  <thead className="sticky top-0 bg-gray-50 z-[1]">
+                    <tr>
+                      <th colSpan={4} className={`${th} text-purple-700 bg-purple-50/70`}>Old Vintage Cash Cow URL · organic sessions</th>
+                      <th colSpan={3} className={`${th} text-teal-700 bg-teal-50/70 border-l border-gray-200`}>→ Where they went: vintage.com URL</th>
+                      <th colSpan={3} className={`${th} text-gray-700 border-l border-gray-200`}>Overall</th>
+                    </tr>
+                    <tr>
+                      <th className={th}>VCC URL</th><th className={`${th} text-right`}>{cmpWord}</th><th className={`${th} text-right`}>Post</th><th className={`${th} text-right`}>Δ</th>
+                      <th className={`${th} border-l border-gray-200`}>Vintage.com URL</th><th className={`${th} text-right`}>{cmpWord}</th><th className={`${th} text-right`}>Post</th>
+                      <th className={`${th} text-right border-l border-gray-200`}>Kept</th><th className={`${th} text-right`}>Net change</th><th className={th}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {visible.slice(0, ROW_CAP).map((r) => (
+                      <tr key={r.path} className="hover:bg-purple-50/30">
+                        <td className={`${td} max-w-[300px]`}><UrlLink url={vccUrl(r.path)} slug={r.path} /></td>
+                        <td className={`${td} text-right text-gray-500`}>{prInt(r.vPre)}</td>
+                        <td className={`${td} text-right font-semibold`}>{prInt(r.vPost)}</td>
+                        <td className={`${td} text-right`}><PrDelta cur={r.vPost} prev={r.vPre} /></td>
+                        <td className={`${td} max-w-[300px] border-l border-gray-100`}>
+                          {r.dest ? (
+                            <div className="flex flex-col gap-0.5 min-w-0">
+                              <UrlLink url={newUrl(r.dest)} slug={r.dest} />
+                              <span className="text-[10px] text-gray-400">{PR_MATCH_LABEL[r.match!]}{r.sharedBy > 1 ? ` · shared by ${r.sharedBy} VCC URLs` : ""}</span>
+                            </div>
+                          ) : <span className="text-gray-400 italic">no match found</span>}
+                        </td>
+                        <td className={`${td} text-right text-gray-500`}>{r.dest ? prInt(r.dPre) : "—"}</td>
+                        <td className={`${td} text-right font-semibold`}>{r.dest ? prInt(r.dPost) : "—"}</td>
+                        <td className={`${td} text-right border-l border-gray-100 font-semibold ${r.kept === null ? "text-gray-400" : r.kept >= 0.9 ? "text-emerald-600" : r.kept >= 0.5 ? "text-amber-600" : "text-red-500"}`}>{r.kept === null ? "—" : `${Math.round(r.kept * 100)}%`}</td>
+                        <td className={`${td} text-right ${r.net < 0 ? "text-red-500" : r.net > 0 ? "text-emerald-600" : "text-gray-400"}`}>{r.net > 0 ? "+" : ""}{prInt(r.net)}</td>
+                        <td className={td}><span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full border ${PR_STATUS_META[r.status].cls}`}>{PR_STATUS_META[r.status].label}</span></td>
+                      </tr>
+                    ))}
+                    {visible.length === 0 && <tr><td colSpan={10} className="px-3 py-8 text-center text-xs text-gray-400">No URLs in this view.</td></tr>}
+                  </tbody>
+                </table>
+              </ScrollTable>
+            )}
+            {(tab === "unmatchedNew" ? unmatchedNew.length : visible.length) > ROW_CAP && <p className="text-[11px] text-gray-400 mt-2">Showing the first {ROW_CAP} — use the filter to narrow down.</p>}
           </section>
 
-          {/* 2 — Property breakdown */}
-          <section>
-            <PrSectionHead id="pr-split" title="Property breakdown" sub="Every KPI for each site and both together — shows whether gains on Vintage.com are offsetting losses on Vintage Cash Cow (the expected pattern while redirects consolidate)." />
-            <ScrollTable maxH="38rem" className="bg-white">
+          {/* Data check */}
+          <details open={sharedHosts.length > 0} className={`rounded-2xl p-5 text-xs shadow-sm border ${sharedHosts.length ? "bg-amber-50/60 border-amber-200" : "bg-white border-gray-100"}`}>
+            <summary className="cursor-pointer font-semibold text-gray-800">
+              GA4 data check — organic sessions by hostname{sharedHosts.length > 0 && <span className="text-amber-800"> · {sharedHosts.length} hostname{sharedHosts.length > 1 ? "s" : ""} recorded by both properties (de-duplicated)</span>}
+            </summary>
+            {sharedHosts.length > 0 && (
+              <p className="mt-3 text-amber-900 leading-relaxed">
+                {sharedHosts.map((h) => h.host).join(", ")} {sharedHosts.length > 1 ? "were" : "was"} tracked by <strong>both</strong> GA4 properties, so the same visits were being counted twice when the two properties were added together. Each hostname below is now counted from one property only (the larger one).
+              </p>
+            )}
+            <div className="mt-3 overflow-x-auto">
               <table className="w-full text-left">
-                <thead className="sticky top-0 bg-gray-50 z-[1]">
-                  <tr>
-                    <th className={th}>Metric</th>
-                    {(["vcc", "av", "combined"] as PrScope[]).map((s) => (
-                      <th key={s} colSpan={3} className={`${th} text-center border-l border-gray-200`} style={{ color: s === "combined" ? "#0f172a" : PR_SITE_META[s as PrSite].color }}>
-                        {s === "combined" ? "Combined" : PR_SITE_META[s as PrSite].label}
-                      </th>
-                    ))}
-                  </tr>
-                  <tr>
-                    <th className={th}></th>
-                    {[0, 1, 2].map((i) => (
-                      <Fragment key={i}>
-                        <th className={`${th} text-right border-l border-gray-200`}>{cmpMode === "pre" ? "Pre" : "LY"}</th>
-                        <th className={`${th} text-right`}>Post</th>
-                        <th className={`${th} text-right`}>Δ</th>
-                      </Fragment>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {PR_KPIS.map((k) => (
-                    <tr key={k.key} className={k.star ? "bg-purple-50/40" : ""}>
-                      <td className={`${td} font-semibold`}><span className="text-[9px] font-bold text-gray-400 mr-1.5">{k.src}</span>{k.label}</td>
-                      {(["vcc", "av", "combined"] as PrScope[]).map((s) => {
-                        const c = k.get(stats[s].cmp), p = k.get(stats[s].post);
-                        return (
-                          <Fragment key={s}>
-                            <td className={`${td} text-right text-gray-400 border-l border-gray-100`}>{k.fmt(c)}</td>
-                            <td className={`${td} text-right font-semibold`}>{k.fmt(p)}</td>
-                            <td className={`${td} text-right`}><PrDelta cur={p} prev={c} kind={k.kind} lowerBetter={k.lowerBetter} /></td>
-                          </Fragment>
-                        );
-                      })}
+                <thead><tr className="bg-gray-50">
+                  <th className={th}>Hostname</th><th className={th}>Counted as</th>
+                  <th className={`${th} text-right`}>VCC GA4 {cmpWord}</th><th className={`${th} text-right`}>VCC GA4 post</th>
+                  <th className={`${th} text-right`}>V.com GA4 {cmpWord}</th><th className={`${th} text-right`}>V.com GA4 post</th><th className={th}>Using</th>
+                </tr></thead>
+                <tbody className="divide-y divide-gray-100">
+                  {hostAudit.map((h) => (
+                    <tr key={h.host}>
+                      <td className={`${td} font-medium`}>{h.host}</td>
+                      <td className={td}>{h.group === "Other" ? <span className="text-gray-400">Other (excluded)</span> : h.group}</td>
+                      <td className={`${td} text-right ${h.source === "vcc" ? "font-semibold" : "text-gray-400"}`}>{prInt(h.n.vcc.cmp)}</td>
+                      <td className={`${td} text-right ${h.source === "vcc" ? "font-semibold" : "text-gray-400"}`}>{prInt(h.n.vcc.post)}</td>
+                      <td className={`${td} text-right ${h.source === "av" ? "font-semibold" : "text-gray-400"}`}>{prInt(h.n.av.cmp)}</td>
+                      <td className={`${td} text-right ${h.source === "av" ? "font-semibold" : "text-gray-400"}`}>{prInt(h.n.av.post)}</td>
+                      <td className={td}>{h.source ? PR_PROP_LABEL[h.source] : "—"}{h.shared && <span className="ml-1.5 text-[10px] font-bold text-amber-700">both tagged</span>}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </ScrollTable>
-          </section>
-
-          {/* 3 — Trends */}
-          <section>
-            <PrSectionHead id="pr-trends" title="Trends"
-              sub={`Daily from ${formatDisplayDate(win.trendStart)}, stacked by site, with the rebrand marked. The dashed line is the 7-day average of both sites combined.`}
-              right={<div className="w-56"><Select value={trendMetric} onChange={setTrendMetric} options={chartMetricOpts} /></div>} />
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <ChartCard title={`${prDailyMetric(trendMetric).label} — daily by site`} className="lg:col-span-2">
-                <ResponsiveContainer width="100%" height={280}>
-                  <ComposedChart data={trendData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f3e8ff" />
-                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={24} />
-                    <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={44} />
-                    <Tooltip {...chartTooltipStyle} />
-                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} iconType="circle" iconSize={7} />
-                    <Area type="monotone" dataKey="vcc" name="Vintage Cash Cow" stackId="s" stroke={PR_SITE_META.vcc.color} fill={PR_SITE_META.vcc.color} fillOpacity={0.25} strokeWidth={1.5} />
-                    <Area type="monotone" dataKey="av" name="Vintage.com" stackId="s" stroke={PR_SITE_META.av.color} fill={PR_SITE_META.av.color} fillOpacity={0.25} strokeWidth={1.5} />
-                    <Line type="monotone" dataKey="avg7" name="7-day avg (combined)" stroke="#0f172a" strokeWidth={2} strokeDasharray="5 3" dot={false} connectNulls />
-                    <ReferenceLine x={rebrandLabel} stroke="#f59e0b" strokeWidth={2} label={{ value: "Rebrand", position: "insideTopLeft", fill: "#b45309", fontSize: 11, fontWeight: 700 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </ChartCard>
-              <ChartCard title={`Post vs ${cmpLabel}, day by day (${scopeLabel})`} tip="Each post-rebrand day is lined up against the same weekday in the comparison window, so a Monday is always compared with a Monday.">
-                <ResponsiveContainer width="100%" height={240}>
-                  <LineChart data={alignedData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f3e8ff" />
-                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={30} />
-                    <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={44} />
-                    <Tooltip {...chartTooltipStyle} />
-                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} iconType="circle" iconSize={7} />
-                    <Line type="monotone" dataKey="post" name="Post-rebrand" stroke="#7e22ce" strokeWidth={2.2} dot={false} />
-                    <Line type="monotone" dataKey="cmp" name={cmpMode === "pre" ? "Pre-rebrand" : "Last year"} stroke="#9ca3af" strokeWidth={1.6} strokeDasharray="5 3" dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </ChartCard>
-              <ChartCard title={`Brand vs non-brand clicks (${scopeLabel})`} tip="Daily GSC clicks split by the brand classifier. A healthy rebrand keeps the non-brand band steady or growing while brand demand shifts to the new name.">
-                <ResponsiveContainer width="100%" height={240}>
-                  <ComposedChart data={brandSplitData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f3e8ff" />
-                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={24} />
-                    <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={44} />
-                    <Tooltip {...chartTooltipStyle} />
-                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} iconType="circle" iconSize={7} />
-                    <Area type="monotone" dataKey="nonBrand" name="Non-brand" stackId="b" stroke="#7e22ce" fill="#7e22ce" fillOpacity={0.3} />
-                    <Area type="monotone" dataKey="brand" name="Brand" stackId="b" stroke="#c4b5fd" fill="#c4b5fd" fillOpacity={0.35} />
-                    <ReferenceLine x={rebrandLabel} stroke="#f59e0b" strokeWidth={2} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </ChartCard>
             </div>
-          </section>
-
-          {/* 4 — WoW sanity check */}
-          {wow && (
-            <section>
-              <PrSectionHead id="pr-wow" title="Week-on-week sanity check"
-                sub={`Last 7 days (${prRange(win.wowStart, win.wowEnd)}) vs the 7 before (${prRange(win.wowPrevStart, win.wowPrevEnd)}) — identical weekdays, so no weekend skew. ${scopeLabel}.`}
-                right={<SlackCopyButton buildMessage={buildSlack} />} />
-              {wow.prevSpansRebrand && (
-                <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-3">Heads-up: the previous week still includes pre-rebrand days, so this WoW is partly a before/after comparison until {formatDisplayDate(addDaysISO(win.rebrand, 13))}.</p>
-              )}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
-                {[
-                  { l: "Non-brand clicks up WoW", n: wow.nbUp },
-                  { l: "Organic sessions up WoW", n: wow.sessUp },
-                  { l: "Organic leads up WoW", n: wow.leadsUp },
-                ].map((x) => (
-                  <div key={x.l} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm flex items-center gap-4">
-                    <div className="flex gap-1">
-                      {Array.from({ length: 7 }).map((_, i) => (
-                        <span key={i} className={`w-2.5 h-7 rounded-full ${i < x.n ? "bg-emerald-500" : "bg-gray-200"}`} />
-                      ))}
-                    </div>
-                    <div>
-                      <p className="text-lg font-bold text-gray-900 leading-none">{x.n} of 7 days</p>
-                      <p className="text-[11px] text-gray-500 mt-1">{x.l} (vs same weekday)</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-                {[
-                  { l: "Non-brand clicks", g: (d: PrDay) => d.clicks - d.brandClicks, f: prInt, k: "pct" as PrDeltaKind },
-                  { l: "Non-brand impressions", g: (d: PrDay) => d.impressions - d.brandImpressions, f: prInt, k: "pct" as PrDeltaKind },
-                  { l: "Total clicks", g: (d: PrDay) => d.clicks, f: prInt, k: "pct" as PrDeltaKind },
-                  { l: "Avg position", g: (d: PrDay) => prDiv(d.posSum, d.impressions), f: prPos, k: "pos" as PrDeltaKind },
-                  { l: "CTR", g: (d: PrDay) => prDiv(d.clicks, d.impressions), f: prPct, k: "pp" as PrDeltaKind },
-                  { l: "Organic sessions", g: (d: PrDay) => d.sessions, f: prInt, k: "pct" as PrDeltaKind },
-                  { l: "Engagement rate", g: (d: PrDay) => prDiv(d.engaged, d.sessions), f: prPct, k: "pp" as PrDeltaKind },
-                  { l: "Organic leads", g: (d: PrDay) => d.leads, f: prInt, k: "pct" as PrDeltaKind },
-                ].map((x) => (
-                  <div key={x.l} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-[11px] font-semibold text-gray-500">{x.l}</p>
-                      <PrDelta cur={x.g(wow.cur)} prev={x.g(wow.prev)} kind={x.k} lowerBetter={x.k === "pos"} />
-                    </div>
-                    <p className="text-xl font-bold text-gray-900 mt-2 leading-none">{x.f(x.g(wow.cur))}</p>
-                    <p className="text-[10px] text-gray-400 mt-1">prev wk {x.f(x.g(wow.prev))}</p>
-                    {scope === "combined" && (
-                      <div className="mt-2 pt-2 border-t border-gray-50 space-y-0.5">
-                        {wow.perSite.map((ps) => (
-                          <div key={ps.s} className="flex items-center justify-between text-[10px]">
-                            <span className="font-semibold" style={{ color: PR_SITE_META[ps.s].color }}>{PR_SITE_META[ps.s].short}</span>
-                            <span className="text-gray-600">{x.f(x.g(ps.cur))} <PrDelta cur={x.g(ps.cur)} prev={x.g(ps.prev)} kind={x.k} lowerBetter={x.k === "pos"} className="ml-1" /></span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              <ChartCard title="Weekly roll-up since the rebrand" className="mb-4" tip="7-day blocks starting on the rebrand date. WoW compares each block with the 7 days before it; 'vs baseline' compares with the average week across the 4 weeks before the rebrand (pro-rated for a partial week).">
-                <ScrollTable maxH="24rem">
-                  <table className="w-full text-left">
-                    <thead className="sticky top-0 bg-gray-50">
-                      <tr>
-                        <th className={th}>Week</th><th className={th}>Dates</th>
-                        <th className={`${th} text-right`}>Non-brand clicks</th><th className={`${th} text-right`}>WoW</th><th className={`${th} text-right`}>vs baseline</th>
-                        <th className={`${th} text-right`}>Total clicks</th><th className={`${th} text-right`}>WoW</th>
-                        <th className={`${th} text-right`}>Org. sessions</th><th className={`${th} text-right`}>WoW</th><th className={`${th} text-right`}>vs baseline</th>
-                        <th className={`${th} text-right`}>Leads</th><th className={`${th} text-right`}>WoW</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50">
-                      {baseWeek && (
-                        <tr className="bg-gray-50/70">
-                          <td className={`${td} font-semibold text-gray-500`}>Baseline</td>
-                          <td className={`${td} text-gray-400`}>avg wk, {prRange(win.baseStart, win.baseEnd)}</td>
-                          <td className={`${td} text-right text-gray-500`}>{prInt(baseWeek.clicks - baseWeek.brandClicks)}</td><td /><td />
-                          <td className={`${td} text-right text-gray-500`}>{prInt(baseWeek.clicks)}</td><td />
-                          <td className={`${td} text-right text-gray-500`}>{prInt(baseWeek.sessions)}</td><td /><td />
-                          <td className={`${td} text-right text-gray-500`}>{prInt(baseWeek.leads)}</td><td />
-                        </tr>
-                      )}
-                      {weeks.map((wk) => (
-                        <tr key={wk.start}>
-                          <td className={`${td} font-semibold`}>{wk.name}{wk.days < 7 && <span className="ml-1 text-[10px] text-amber-600">({wk.days}d)</span>}</td>
-                          <td className={`${td} text-gray-500`}>{prRange(wk.start, wk.end)}</td>
-                          <td className={`${td} text-right font-semibold`}>{prInt(wk.cur.clicks - wk.cur.brandClicks)}</td>
-                          <td className={`${td} text-right`}><PrDelta cur={wk.cur.clicks - wk.cur.brandClicks} prev={wk.prev.clicks - wk.prev.brandClicks} /></td>
-                          <td className={`${td} text-right`}><PrDelta cur={wk.cur.clicks - wk.cur.brandClicks} prev={wk.base.clicks - wk.base.brandClicks} /></td>
-                          <td className={`${td} text-right`}>{prInt(wk.cur.clicks)}</td>
-                          <td className={`${td} text-right`}><PrDelta cur={wk.cur.clicks} prev={wk.prev.clicks} /></td>
-                          <td className={`${td} text-right font-semibold`}>{prInt(wk.cur.sessions)}</td>
-                          <td className={`${td} text-right`}><PrDelta cur={wk.cur.sessions} prev={wk.prev.sessions} /></td>
-                          <td className={`${td} text-right`}><PrDelta cur={wk.cur.sessions} prev={wk.base.sessions} /></td>
-                          <td className={`${td} text-right`}>{prInt(wk.cur.leads)}</td>
-                          <td className={`${td} text-right`}><PrDelta cur={wk.cur.leads} prev={wk.prev.leads} /></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </ScrollTable>
-              </ChartCard>
-
-              <ChartCard title="Day by day since the rebrand">
-                <div className="flex items-center justify-between gap-3 flex-wrap -mt-2 mb-3">
-                  <p className="text-[11px] text-gray-500 max-w-xl">Each day vs the same weekday a week earlier, and vs the average of that weekday over the 4 weeks before the rebrand. Deltas use the <strong>{scopeLabel}</strong> view.</p>
-                  <div className="w-52"><Select value={dailyMetric} onChange={setDailyMetric} options={chartMetricOpts} /></div>
-                </div>
-                <ScrollTable maxH="26rem">
-                  <table className="w-full text-left">
-                    <thead className="sticky top-0 bg-gray-50">
-                      <tr>
-                        <th className={th}>Date</th><th className={th}>Day</th>
-                        <th className={`${th} text-right`} style={{ color: PR_SITE_META.vcc.color }}>VCC</th>
-                        <th className={`${th} text-right`} style={{ color: PR_SITE_META.av.color }}>Vintage.com</th>
-                        <th className={`${th} text-right`}>{scopeLabel}</th>
-                        <th className={`${th} text-right`}>Same day last wk</th><th className={`${th} text-right`}>WoW</th>
-                        <th className={`${th} text-right`}>Pre-rebrand avg (same day)</th><th className={`${th} text-right`}>vs baseline</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50">
-                      {dailyRows.map((r) => (
-                        <tr key={r.iso} className={r.wd === "Sat" || r.wd === "Sun" ? "bg-gray-50/50" : ""}>
-                          <td className={`${td} font-semibold`}>{formatDisplayDate(r.iso)}</td>
-                          <td className={`${td} text-gray-500`}>{r.wd}</td>
-                          <td className={`${td} text-right`}>{prInt(r.vcc)}</td>
-                          <td className={`${td} text-right`}>{prInt(r.av)}</td>
-                          <td className={`${td} text-right font-semibold`}>{prInt(r.scoped)}</td>
-                          <td className={`${td} text-right text-gray-500`}>{prInt(r.lastWeek)}</td>
-                          <td className={`${td} text-right`}><PrDelta cur={r.scoped} prev={r.lastWeek} /></td>
-                          <td className={`${td} text-right text-gray-500`}>{prInt(r.baseline)}</td>
-                          <td className={`${td} text-right`}><PrDelta cur={r.scoped} prev={r.baseline} /></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </ScrollTable>
-              </ChartCard>
-            </section>
-          )}
-
-          {/* 5 — Non-brand queries */}
-          <section>
-            <PrSectionHead id="pr-nb" title="Non-brand queries — before vs after"
-              sub={`Named non-brand queries (${scopeLabel}), ${cmpLabel} vs post-rebrand. Equal-length, weekday-matched windows, so raw totals are directly comparable.`} />
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-              <ChartCard title="Non-brand queries by ranking position" tip="Count of distinct non-brand queries by average position in each window. Growth in the 1–3 and 4–10 buckets is the clearest sign non-brand visibility is improving.">
-                <ResponsiveContainer width="100%" height={220}>
-                  <BarChart data={posBuckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f3e8ff" vertical={false} />
-                    <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#6b7280" }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={44} />
-                    <Tooltip {...chartTooltipStyle} />
-                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} iconType="circle" iconSize={7} />
-                    <Bar dataKey="comparison" name={cmpMode === "pre" ? "Pre-rebrand" : "Last year"} fill="#d8b4fe" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="post" name="Post-rebrand" fill="#7e22ce" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </ChartCard>
-              <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-3 gap-3 content-start">
-                {[
-                  { l: "Queries gaining clicks", n: nbCounts.winners, c: "text-emerald-600" },
-                  { l: "Queries losing clicks", n: nbCounts.losers, c: "text-red-500" },
-                  { l: "New queries (no impressions before)", n: nbCounts.new, c: "text-purple-700" },
-                  { l: "Lost queries (no impressions after)", n: nbCounts.lost, c: "text-amber-600" },
-                  { l: "Non-brand queries in top 10", n: stats[scope].post.q.nbTop10, prev: stats[scope].cmp.q.nbTop10, c: "text-gray-900" },
-                  { l: "Non-brand ranking queries", n: stats[scope].post.q.nbCount, prev: stats[scope].cmp.q.nbCount, c: "text-gray-900" },
-                ].map((x) => (
-                  <div key={x.l} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className={`text-2xl font-bold leading-none ${x.c}`}>{prInt(x.n)}</p>
-                      {x.prev !== undefined && <PrDelta cur={x.n} prev={x.prev} />}
-                    </div>
-                    <p className="text-[11px] text-gray-500 mt-1.5">{x.l}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-                <PrSegmented value={nbTab} onChange={setNbTab} options={[
-                  { value: "winners", label: `Winners (${nbCounts.winners})` }, { value: "losers", label: `Losers (${nbCounts.losers})` },
-                  { value: "new", label: `New (${nbCounts.new})` }, { value: "lost", label: `Lost (${nbCounts.lost})` }, { value: "all", label: `All (${nbCounts.all})` },
-                ]} />
-                <div className="w-64"><TextInput value={nbSearch} onChange={setNbSearch} placeholder="Filter queries…" /></div>
-              </div>
-              <ScrollTable maxH="30rem">
-                <table className="w-full text-left">
-                  <thead className="sticky top-0 bg-gray-50">
-                    <tr>
-                      <th className={th}>Query</th>{scope === "combined" && <th className={th}>Site</th>}
-                      <th className={`${th} text-right`}>Clicks {cmpMode === "pre" ? "pre" : "LY"}</th><th className={`${th} text-right`}>Clicks post</th><th className={`${th} text-right`}>Δ</th>
-                      <th className={`${th} text-right`}>Impr. {cmpMode === "pre" ? "pre" : "LY"}</th><th className={`${th} text-right`}>Impr. post</th>
-                      <th className={`${th} text-right`}>Pos. {cmpMode === "pre" ? "pre" : "LY"}</th><th className={`${th} text-right`}>Pos. post</th><th className={`${th} text-right`}>CTR post</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {nbRows.slice(0, ROW_CAP).map((r) => (
-                      <tr key={r.q} className="hover:bg-purple-50/40">
-                        <td className={`${td} max-w-[320px] truncate font-medium`} title={r.q}>{r.q}</td>
-                        {scope === "combined" && <td className={td}>{sitePill(r.sites)}</td>}
-                        <td className={`${td} text-right text-gray-500`}>{prInt(r.cC)}</td>
-                        <td className={`${td} text-right font-semibold`}>{prInt(r.cP)}</td>
-                        <td className={`${td} text-right ${r.cP - r.cC > 0 ? "text-emerald-600" : r.cP - r.cC < 0 ? "text-red-500" : "text-gray-400"} font-semibold`}>{r.cP - r.cC > 0 ? "+" : ""}{prInt(r.cP - r.cC)}</td>
-                        <td className={`${td} text-right text-gray-500`}>{prInt(r.iC)}</td>
-                        <td className={`${td} text-right`}>{prInt(r.iP)}</td>
-                        <td className={`${td} text-right text-gray-500`}>{prPos(r.pC)}</td>
-                        <td className={`${td} text-right`}>{r.pP > 0 ? <PosBadge pos={r.pP} /> : "—"}</td>
-                        <td className={`${td} text-right`}>{r.iP ? prPct(r.cP / r.iP) : "—"}</td>
-                      </tr>
-                    ))}
-                    {nbRows.length === 0 && <tr><td colSpan={10} className="px-3 py-8 text-center text-xs text-gray-400">No queries in this view.</td></tr>}
-                  </tbody>
-                </table>
-              </ScrollTable>
-              {nbRows.length > ROW_CAP && <p className="text-[11px] text-gray-400 mt-2">Showing top {ROW_CAP} of {prInt(nbRows.length)} — use the filter to narrow down.</p>}
-            </div>
-          </section>
-
-          {/* 6 — Branded queries */}
-          <section>
-            <PrSectionHead id="pr-brand" title="Branded queries & brand transition"
-              sub="Brand searches split into the OLD brand (cash cow family) and the NEW brand (vintage.com / arcavindi / bare 'vintage'). You want new-brand demand rising as old-brand demand fades — without total brand clicks collapsing." />
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-              <div className="grid grid-cols-1 gap-3 content-start">
-                {[
-                  { l: "Old-brand clicks", c: brandTransition.o.cC, p: brandTransition.o.cP, f: prInt, k: "pct" as PrDeltaKind },
-                  { l: "New-brand clicks", c: brandTransition.n.cC, p: brandTransition.n.cP, f: prInt, k: "pct" as PrDeltaKind },
-                  { l: "New brand's share of brand clicks", c: brandTransition.shareC, p: brandTransition.shareP, f: prPct, k: "pp" as PrDeltaKind },
-                ].map((x) => (
-                  <div key={x.l} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                    <div className="flex items-start justify-between gap-2"><p className="text-[11px] font-semibold text-gray-500">{x.l}</p><PrDelta cur={x.p} prev={x.c} kind={x.k} /></div>
-                    <p className="text-xl font-bold text-gray-900 mt-2 leading-none">{x.f(x.p)}</p>
-                    <p className="text-[10px] text-gray-400 mt-1">vs {x.f(x.c)} {cmpLabel}</p>
-                  </div>
-                ))}
-              </div>
-              <ChartCard title="Brand demand: old vs new brand" className="lg:col-span-2">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {([
-                    ["Clicks", [{ name: "Old brand", comparison: brandTransition.o.cC, post: brandTransition.o.cP }, { name: "New brand", comparison: brandTransition.n.cC, post: brandTransition.n.cP }]],
-                    ["Impressions", [{ name: "Old brand", comparison: brandTransition.o.iC, post: brandTransition.o.iP }, { name: "New brand", comparison: brandTransition.n.iC, post: brandTransition.n.iP }]],
-                  ] as [string, { name: string; comparison: number; post: number }[]][]).map(([ttl, rows]) => (
-                    <div key={ttl}>
-                      <p className="text-[11px] font-semibold text-gray-500 mb-1">{ttl}</p>
-                      <ResponsiveContainer width="100%" height={220}>
-                        <BarChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#f3e8ff" vertical={false} />
-                          <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#6b7280" }} axisLine={false} tickLine={false} />
-                          <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={50} />
-                          <Tooltip {...chartTooltipStyle} />
-                          <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} iconType="circle" iconSize={7} />
-                          <Bar dataKey="comparison" name={cmpMode === "pre" ? "Pre-rebrand" : "Last year"} fill="#d8b4fe" radius={[4, 4, 0, 0]} />
-                          <Bar dataKey="post" name="Post-rebrand" fill="#0d9488" radius={[4, 4, 0, 0]} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  ))}
-                </div>
-              </ChartCard>
-            </div>
-            <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
-              <div className="mb-3">
-                <PrSegmented value={brTab} onChange={setBrTab} options={[
-                  { value: "all", label: `All brand (${brRowsAll.length})` },
-                  { value: "old", label: `Old brand (${brRowsAll.filter((x) => x.type === "old").length})` },
-                  { value: "new", label: `New brand (${brRowsAll.filter((x) => x.type === "new").length})` },
-                ]} />
-              </div>
-              <ScrollTable maxH="26rem">
-                <table className="w-full text-left">
-                  <thead className="sticky top-0 bg-gray-50">
-                    <tr>
-                      <th className={th}>Query</th><th className={th}>Type</th>{scope === "combined" && <th className={th}>Site</th>}
-                      <th className={`${th} text-right`}>Clicks {cmpMode === "pre" ? "pre" : "LY"}</th><th className={`${th} text-right`}>Clicks post</th><th className={`${th} text-right`}>Δ</th>
-                      <th className={`${th} text-right`}>Impr. {cmpMode === "pre" ? "pre" : "LY"}</th><th className={`${th} text-right`}>Impr. post</th><th className={`${th} text-right`}>Pos. post</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {brRows.slice(0, ROW_CAP).map((r) => (
-                      <tr key={r.q}>
-                        <td className={`${td} max-w-[320px] truncate font-medium`} title={r.q}>{r.q}</td>
-                        <td className={td}><span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${r.type === "new" ? "bg-teal-50 text-teal-700" : "bg-purple-50 text-purple-700"}`}>{r.type === "new" ? "New" : "Old"}</span></td>
-                        {scope === "combined" && <td className={td}>{sitePill(r.sites)}</td>}
-                        <td className={`${td} text-right text-gray-500`}>{prInt(r.cC)}</td>
-                        <td className={`${td} text-right font-semibold`}>{prInt(r.cP)}</td>
-                        <td className={`${td} text-right`}><PrDelta cur={r.cP} prev={r.cC} /></td>
-                        <td className={`${td} text-right text-gray-500`}>{prInt(r.iC)}</td>
-                        <td className={`${td} text-right`}>{prInt(r.iP)}</td>
-                        <td className={`${td} text-right`}>{r.pP > 0 ? <PosBadge pos={r.pP} /> : "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </ScrollTable>
-            </div>
-          </section>
-
-          {/* 7 — Landing pages */}
-          <section>
-            <PrSectionHead id="pr-lp" title="Landing pages"
-              sub="GA4 organic landing-page sessions, leads and engagement joined to GSC clicks and position for the same URL. Pages are matched within each site (paths aren't merged across domains)."
-              right={<PrSegmented value={lpRank} onChange={setLpRank} options={[{ value: "sessions", label: "Rank by organic sessions" }, { value: "clicks", label: "Rank by GSC clicks" }]} />} />
-            <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-                <PrSegmented value={lpTab} onChange={setLpTab} options={[{ value: "winners", label: "Winners" }, { value: "losers", label: "Losers" }, { value: "all", label: "Top pages" }]} />
-                <div className="w-64"><TextInput value={lpSearch} onChange={setLpSearch} placeholder="Filter pages…" /></div>
-              </div>
-              <ScrollTable maxH="32rem">
-                <table className="w-full text-left">
-                  <thead className="sticky top-0 bg-gray-50">
-                    <tr>
-                      {scope === "combined" && <th className={th}>Site</th>}<th className={th}>Page</th>
-                      <th className={`${th} text-right`}>Sessions {cmpMode === "pre" ? "pre" : "LY"}</th><th className={`${th} text-right`}>Sessions post</th><th className={`${th} text-right`}>Δ</th>
-                      <th className={`${th} text-right`}>Eng. rate</th><th className={`${th} text-right`}>Leads {cmpMode === "pre" ? "pre" : "LY"}</th><th className={`${th} text-right`}>Leads post</th>
-                      <th className={`${th} text-right`}>Clicks {cmpMode === "pre" ? "pre" : "LY"}</th><th className={`${th} text-right`}>Clicks post</th><th className={`${th} text-right`}>Δ</th><th className={`${th} text-right`}>Pos. post</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {lpRows.slice(0, ROW_CAP).map((r) => (
-                      <tr key={r.site + r.path} className="hover:bg-purple-50/40">
-                        {scope === "combined" && <td className={td}>{sitePill(PR_SITE_META[r.site].short)}</td>}
-                        <td className={`${td} max-w-[300px]`}><UrlLink url={r.url} slug={r.path} /></td>
-                        <td className={`${td} text-right text-gray-500`}>{prInt(r.c.sessions)}</td>
-                        <td className={`${td} text-right font-semibold`}>{prInt(r.p.sessions)}</td>
-                        <td className={`${td} text-right`}><PrDelta cur={r.p.sessions} prev={r.c.sessions} /></td>
-                        <td className={`${td} text-right`}>{r.p.sessions ? prPct(r.p.engaged / r.p.sessions) : "—"}</td>
-                        <td className={`${td} text-right text-gray-500`}>{prInt(r.c.leads)}</td>
-                        <td className={`${td} text-right`}>{prInt(r.p.leads)}</td>
-                        <td className={`${td} text-right text-gray-500`}>{prInt(r.c.clicks)}</td>
-                        <td className={`${td} text-right font-semibold`}>{prInt(r.p.clicks)}</td>
-                        <td className={`${td} text-right`}><PrDelta cur={r.p.clicks} prev={r.c.clicks} /></td>
-                        <td className={`${td} text-right`}>{r.p.impressions ? <PosBadge pos={r.p.posSum / r.p.impressions} /> : "—"}</td>
-                      </tr>
-                    ))}
-                    {lpRows.length === 0 && <tr><td colSpan={12} className="px-3 py-8 text-center text-xs text-gray-400">No pages in this view.</td></tr>}
-                  </tbody>
-                </table>
-              </ScrollTable>
-              {lpRows.length > ROW_CAP && <p className="text-[11px] text-gray-400 mt-2">Showing top {ROW_CAP} of {prInt(lpRows.length)}.</p>}
-            </div>
-          </section>
-
-          {/* 8 — Devices, engines, channels */}
-          <section>
-            <PrSectionHead id="pr-mix" title="Devices, search engines & channel mix"
-              sub="Where organic traffic comes from. Watch the channel mix for traffic shifting from Organic into Direct/Referral after the domain change (a sign of redirect or tagging gaps rather than real ranking loss)." />
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              {[
-                { t: "GSC clicks by device", rows: deviceRows },
-                { t: "Organic sessions by search engine (GA4)", rows: sourceRows },
-                { t: "All sessions by channel (GA4)", rows: channelRows },
-              ].map((blk) => {
-                const totC = blk.rows.reduce((s, r) => s + r.c, 0), totP = blk.rows.reduce((s, r) => s + r.p, 0);
-                return (
-                  <ChartCard key={blk.t} title={blk.t}>
-                    <ScrollTable maxH="20rem">
-                      <table className="w-full text-left">
-                        <thead className="sticky top-0 bg-gray-50">
-                          <tr><th className={th}>Name</th><th className={`${th} text-right`}>{cmpMode === "pre" ? "Pre" : "LY"}</th><th className={`${th} text-right`}>Post</th><th className={`${th} text-right`}>Δ</th><th className={`${th} text-right`}>Share</th></tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-50">
-                          {blk.rows.map((r) => (
-                            <tr key={r.name} className={r.name === "Organic Search" ? "bg-purple-50/50" : ""}>
-                              <td className={`${td} font-medium max-w-[150px] truncate`} title={r.name}>{r.name}</td>
-                              <td className={`${td} text-right text-gray-500`}>{prInt(r.c)}</td>
-                              <td className={`${td} text-right font-semibold`}>{prInt(r.p)}</td>
-                              <td className={`${td} text-right`}><PrDelta cur={r.p} prev={r.c} /></td>
-                              <td className={`${td} text-right text-gray-500`}>{totP ? prPct(r.p / totP) : "—"}</td>
-                            </tr>
-                          ))}
-                          {blk.rows.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-center text-xs text-gray-400">No data.</td></tr>}
-                        </tbody>
-                      </table>
-                    </ScrollTable>
-                    {blk.rows.length > 0 && <p className="text-[10px] text-gray-400 mt-2">Total {prInt(totP)} vs {prInt(totC)} <PrDelta cur={totP} prev={totC} className="ml-1" /></p>}
-                  </ChartCard>
-                );
-              })}
-            </div>
-          </section>
-
-          {/* Methodology */}
-          <details className="bg-white border border-gray-100 rounded-2xl p-5 text-xs text-gray-600 shadow-sm">
-            <summary className="cursor-pointer font-semibold text-gray-800">How this is calculated</summary>
-            <ul className="mt-3 space-y-1.5 list-disc pl-5 leading-relaxed">
-              <li><strong>Data end</strong> is the latest day Search Console has data for on every connected site ({formatDisplayDate(win.dataEnd)}). GA4 is cut to the same day so both sources cover identical dates.</li>
-              <li><strong>Comparison window</strong>: {cmpMode === "pre"
-                ? `the same ${win.postDays} days shifted back ${win.shift / 7} whole week${win.shift > 7 ? "s" : ""}, so weekdays line up exactly. Switch to "Same period last year" to remove seasonality.`
-                : "the same days 364 days earlier (52 weeks), so weekdays line up and seasonality is removed."}</li>
-              <li><strong>Brand / non-brand</strong>: the Non-Brand SEO brand list (editable there) plus {PR_EXTRA_BRAND_TERMS.map((t) => `"${t}"`).join(", ")}. Daily brand clicks come from a GSC regex filter built from that list; non-brand = total − brand, so Google's anonymised long-tail queries count as non-brand. Query-level tables only include named queries, so they total slightly less.</li>
-              <li><strong>New vs old brand</strong>: brand queries matching {PR_NEW_BRAND_TERMS.map((t) => `"${t}"`).join(", ")} are "new brand"; all other brand queries are "old brand".</li>
-              <li><strong>GA4</strong> metrics are Organic Search sessions only (default channel group). Leads = <code>generate_lead</code> key events in organic sessions, the same definition used elsewhere in the dashboard.</li>
-              <li><strong>Combined</strong> = VCC + Vintage.com summed. Rates are recalculated from the summed totals; positions are impression-weighted.</li>
-              {(data.vcc.queriesCapped || data.av.queriesCapped) && <li className="text-amber-700">One site returned GSC's 25,000-row query cap for a window — query counts for that site are a floor, not exact.</li>}
-            </ul>
+            <p className="mt-3 text-gray-500">Properties: VCC = {ga4Properties.find((p) => p.value === props.vcc)?.label ?? (props.vcc || "none")} · Vintage.com = {ga4Properties.find((p) => p.value === props.av)?.label ?? (props.av || "none")}. Hostnames that aren't vintagecashcow.co.uk or vintage.com (e.g. translation proxies, staging) are excluded from the table above.</p>
           </details>
         </div>
       )}
@@ -8520,10 +7663,8 @@ export default function App() {
   // Default properties for the Post Rebrand Analysis view (each slot stays editable inside the view).
   const postRebrandDefaults = useMemo(() => ({
     vccGa4: ga4Properties.find((p) => p.label === VCC_GA4_LABEL)?.value ?? "",
-    vccGsc: gscProperties.find((p) => p.value.toLowerCase().includes("vintagecashcow"))?.value ?? "",
     avGa4: avGA4Id,
-    avGsc: avGscId,
-  }), [ga4Properties, gscProperties, avGA4Id, avGscId]);
+  }), [ga4Properties, avGA4Id]);
 
   // ── Persist selected properties across refreshes ─────────────────────────
   useEffect(() => { if (selectedGA4) localStorage.setItem(LS_SELECTED_GA4, selectedGA4); else localStorage.removeItem(LS_SELECTED_GA4); }, [selectedGA4]);
@@ -11673,7 +10814,7 @@ export default function App() {
     crm: "CRM — HubSpot contacts, companies, deals and pipeline overview.",
     watchWizard: "Watch Wizard — answer 5 quick questions to identify your watch",
     migrationHelp: "Migration Help — track outstanding domain-migration tasks and see what's changed in GSC since the arcavindi → vintage.com rebrand.",
-    postRebrand: "Post Rebrand Analysis — GSC + GA4 organic dashboard for VCC + Vintage.com since 1 Oct: non-brand before vs after, brand transition, landing pages and a weekday-matched WoW check.",
+    postRebrand: "Post Rebrand Analysis — every old Vintage Cash Cow URL's organic sessions before vs after the rebrand, and the vintage.com URL they moved to.",
   };
 
   // ─── Mega Nav grouping ──────────────────────────────────────────────────────
@@ -15869,9 +15010,7 @@ ${combinedHtml}
                 <PostRebrandView
                   accessToken={accessToken}
                   ga4Properties={ga4Properties}
-                  gscProperties={gscProperties}
                   defaults={postRebrandDefaults}
-                  brandTerms={nbsBrandTerms}
                 />
               </>
             )}
