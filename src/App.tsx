@@ -6590,7 +6590,8 @@ type PrProp = "vcc" | "av";
 type PrWinKey = "cmp" | "post";
 /** prop → window → hostname → landing-page path → organic sessions */
 type PrRaw = Record<PrProp, Record<PrWinKey, Record<string, Record<string, number>>>>;
-interface PrWindows { postStart: string; postEnd: string; postDays: number; cmpStart: string; cmpEnd: string; shift: number }
+interface PrWindows { postStart: string; postEnd: string; postDays: number; cmpStart: string; cmpEnd: string; shift: number; wowPrevStart: string; wowPrevEnd: string }
+interface PrGscAgg { clicks: number; impressions: number; posSum: number }
 type PrMatch = "pasted" | "list" | "path" | null;
 type PrStatus = "held" | "partial" | "dropped" | "home" | "nomatch" | "notRedirected";
 
@@ -6600,15 +6601,17 @@ function prTodayLocal(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
-/** "Before" = the 7 days immediately before the migration. "After" = the most recent complete 7 days
- *  (ending yesterday or earlier) that start on the same weekday, so Thu–Wed is compared with Thu–Wed. */
-function prComputeWindows(rebrand: string, yesterday: string): PrWindows {
+/** "Before" = the 7 days immediately before the migration. "Last 7 days" = the 7 days ending 2 days ago
+ *  (Search Console lag). Any 7 full days contain each weekday exactly once, so weekdays always match.
+ *  Week-on-week = those last 7 days vs the 7 days immediately before them. */
+function prComputeWindows(rebrand: string, today: string): PrWindows {
   const cmpStart = addDaysISO(rebrand, -7), cmpEnd = addDaysISO(rebrand, -1);
-  const wd = (iso: string) => new Date(iso + "T12:00:00").getDay();
-  let postEnd = yesterday;
-  for (let i = 0; i < 7 && wd(postEnd) !== wd(cmpEnd); i++) postEnd = addDaysISO(postEnd, -1);
+  const postEnd = addDaysISO(today, -2);
   const postStart = addDaysISO(postEnd, -6);
-  return { postStart, postEnd, postDays: 7, cmpStart, cmpEnd, shift: daysInclusive(cmpStart, postStart) - 1 };
+  return {
+    postStart, postEnd, postDays: 7, cmpStart, cmpEnd, shift: daysInclusive(cmpStart, postStart) - 1,
+    wowPrevStart: addDaysISO(postStart, -7), wowPrevEnd: addDaysISO(postStart, -1),
+  };
 }
 const prRange = (s: string, e: string) => `${formatDisplayDate(s)} – ${formatDisplayDate(e)}`;
 const prWeekdayRange = (s: string, e: string) => {
@@ -6714,6 +6717,9 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults }
   const [minPre, setMinPre] = useState(5);
   const [fetchStats, setFetchStats] = useState<Record<string, { rows: number; sessions: number }>>({});
   /** Result of scanning every accessible GA4 property for vintagecashcow.co.uk traffic (only runs when the chosen VCC property has none). */
+  const [wow, setWow] = useState<{ last: Record<string, PrGscAgg>; prev: Record<string, PrGscAgg> } | null>(null);
+  const [wowTab, setWowTab] = useState<"falling" | "rising" | "all">("falling");
+  const [wowSearch, setWowSearch] = useState("");
   const [detect, setDetect] = useState<{ ran: boolean; picked: string | null; previous: string; results: { id: string; label: string; vccOrganic: number; vccAll: number; topHost: string }[] } | null>(null);
 
   useEffect(() => { try { localStorage.setItem(LS_POST_REBRAND_DATE, rebrandDate); } catch { /* ignore */ } }, [rebrandDate]);
@@ -6746,7 +6752,7 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults }
     const myReq = ++reqId.current;
     setLoading(true); setError(null);
     const warns: string[] = [];
-    const w = prComputeWindows(rebrandDate, addDaysISO(prTodayLocal(), -1));
+    const w = prComputeWindows(rebrandDate, prTodayLocal());
     if (w.postStart < rebrandDate) { setError(`Need 7 full days after the migration (${formatDisplayDate(rebrandDate)}) before this comparison works.`); setLoading(false); return; }
     const out: PrRaw = { vcc: { cmp: {}, post: {} }, av: { cmp: {}, post: {} } };
     const body = (k: PrWinKey) => ({
@@ -6811,14 +6817,42 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults }
         warns.push(`${prPropLabel("gsc", p)} (${k === "cmp" ? "week before" : "last 7 days"}): ${e instanceof Error ? e.message : String(e)}`);
       }
     }));
+    // ── Week-on-week Search Console data for vintage.com pages (always GSC, whichever metric the main table uses) ──
+    const wowOut: { last: Record<string, PrGscAgg>; prev: Record<string, PrGscAgg> } = { last: {}, prev: {} };
+    const wowTask = gscProps.av ? Promise.all(([["last", w.postStart, w.postEnd], ["prev", w.wowPrevStart, w.wowPrevEnd]] as ["last" | "prev", string, string][]).map(async ([key, sd, ed]) => {
+      try {
+        for (let startRow = 0; startRow < 100000; startRow += 25000) {
+          const r = await fetch(`https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(gscProps.av)}/searchAnalytics/query`, {
+            method: "POST", headers, body: JSON.stringify({ startDate: sd, endDate: ed, dimensions: ["page"], rowLimit: 25000, startRow, dataState: "all" }),
+          });
+          const j = await r.json();
+          if (!r.ok || j.error) throw new Error(j.error?.message || `HTTP ${r.status}`);
+          const rows = (j.rows ?? []) as GSCApiRow[];
+          rows.forEach((row) => {
+            let host = "";
+            try { host = new URL(row.keys[0]).host; } catch { /* ignore */ }
+            if (host && !prIsNewHost(host)) return;
+            const t = (wowOut[key][prKey(row.keys[0])] ??= { clicks: 0, impressions: 0, posSum: 0 });
+            t.clicks += row.clicks; t.impressions += row.impressions; t.posSum += row.position * row.impressions;
+          });
+          if (rows.length < 25000) break;
+        }
+      } catch (e) {
+        warns.push(`Vintage.com GSC week-on-week (${key === "last" ? "last 7 days" : "previous 7 days"}): ${e instanceof Error ? e.message : String(e)}`);
+      }
+    })).then(() => undefined) : Promise.resolve();
+    const finishWow = async () => { await wowTask; if (myReq === reqId.current) setWow(gscProps.av ? wowOut : null); };
+
     if (source === "gsc") {
       await Promise.all((["vcc", "av"] as PrProp[]).filter((p) => gscProps[p]).map((p) => loadGscSlot(p, gscProps[p])));
+      await finishWow();
       if (myReq !== reqId.current) return;
       setDetect(null);
       setRaw(out); setWin(w); setWarnings(warns); setFetchStats(stats); setLoadedAt(new Date()); setLoading(false);
       return;
     }
     await Promise.all((["vcc", "av"] as PrProp[]).filter((p) => props[p]).map((p) => loadSlot(p, props[p])));
+    await finishWow();
 
     // If the chosen "VCC" property recorded (almost) no vintagecashcow.co.uk organic sessions before the
     // rebrand, scan every GA4 property this login can see and switch to the one that did.
@@ -6965,6 +6999,34 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults }
   }, [rows, minPre]);
 
   const sharedHosts = hostAudit.filter((h) => h.shared);
+
+  // ── Week-on-week rows: every vintage.com page that at least one old VCC URL redirects to ──
+  const wowRows = useMemo(() => {
+    if (!wow) return [];
+    const sources = new Map<string, number>();
+    rows.forEach((r) => { if (r.dest) sources.set(r.dest, (sources.get(r.dest) ?? 0) + 1); });
+    return Array.from(sources.entries()).map(([path, n]) => {
+      const a = wow.prev[path] ?? { clicks: 0, impressions: 0, posSum: 0 };
+      const b = wow.last[path] ?? { clicks: 0, impressions: 0, posSum: 0 };
+      return {
+        path, vccSources: n,
+        cPrev: a.clicks, cLast: b.clicks, iPrev: a.impressions, iLast: b.impressions,
+        pPrev: a.impressions ? a.posSum / a.impressions : 0, pLast: b.impressions ? b.posSum / b.impressions : 0,
+      };
+    }).filter((r) => r.cPrev + r.cLast + r.iPrev + r.iLast > 0);
+  }, [wow, rows]);
+  const wowVisible = useMemo(() => {
+    const q = wowSearch.trim().toLowerCase();
+    let r = wowRows.filter((x) => !q || x.path.includes(q));
+    if (wowTab === "falling") r = r.filter((x) => x.cLast < x.cPrev).sort((a, b) => (a.cLast - a.cPrev) - (b.cLast - b.cPrev));
+    else if (wowTab === "rising") r = r.filter((x) => x.cLast > x.cPrev).sort((a, b) => (b.cLast - b.cPrev) - (a.cLast - a.cPrev));
+    else r = [...r].sort((a, b) => b.cLast - a.cLast);
+    return r;
+  }, [wowRows, wowTab, wowSearch]);
+  const wowTotals = useMemo(() => wowRows.reduce((t, r) => ({
+    cPrev: t.cPrev + r.cPrev, cLast: t.cLast + r.cLast, iPrev: t.iPrev + r.iPrev, iLast: t.iLast + r.iLast,
+    up: t.up + (r.cLast > r.cPrev ? 1 : 0), down: t.down + (r.cLast < r.cPrev ? 1 : 0),
+  }), { cPrev: 0, cLast: 0, iPrev: 0, iLast: 0, up: 0, down: 0 }), [wowRows]);
   const th = "px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap";
   const td = "px-3 py-2 text-xs text-gray-700 whitespace-nowrap";
   const ROW_CAP = 500;
@@ -7057,7 +7119,7 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults }
             <span className="font-semibold text-purple-700">VCC, week before migration:</span><span className="text-gray-700">{prWeekdayRange(win.cmpStart, win.cmpEnd)}</span>
             <span className="text-gray-300">vs</span>
             <span className="font-semibold text-teal-700">vintage.com, last 7 days:</span><span className="text-gray-700">{prWeekdayRange(win.postStart, win.postEnd)}</span>
-            <span className="text-gray-400">· same weekdays · Organic Search sessions only</span>
+            <span className="text-gray-400">· same weekdays · last 7 days end 2 days ago (Search Console lag)</span>
           </div>
           <p className="text-[11px] text-gray-500 -mt-3 px-1">
             Loaded: {(["vcc", "av"] as PrProp[]).map((p) => (["cmp", "post"] as PrWinKey[]).map((k) => {
@@ -7208,6 +7270,91 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults }
               </ScrollTable>
             )}
             {(tab === "unmatchedNew" ? unmatchedNew.length : visible.length) > ROW_CAP && <p className="text-[11px] text-gray-400 mt-2">Showing the first {ROW_CAP} — use the filter to narrow down.</p>}
+          </section>
+
+          {/* Week-on-week for the vintage.com destination pages */}
+          <section className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+            <div className="mb-4">
+              <h2 className="text-base font-bold text-gray-900">Vintage.com redirect targets — week on week (Search Console)</h2>
+              <p className="text-xs text-gray-500 mt-0.5 max-w-3xl">
+                The same vintage.com pages the old VCC URLs redirect to: GSC clicks, impressions and average position for <strong>{prWeekdayRange(win.postStart, win.postEnd)}</strong> vs <strong>{prWeekdayRange(win.wowPrevStart, win.wowPrevEnd)}</strong> — same weekdays, ending 2 days ago to allow for the Search Console lag.
+              </p>
+            </div>
+            {!wow ? (
+              <p className="text-xs text-gray-400">Choose the Vintage.com Search Console property in Settings to load this.</p>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                  <div className="bg-gray-50 rounded-xl p-3">
+                    <div className="flex items-start justify-between gap-2"><p className="text-[11px] font-semibold text-gray-500">Clicks · these pages</p><PrDelta cur={wowTotals.cLast} prev={wowTotals.cPrev} /></div>
+                    <p className="text-lg font-bold text-gray-900 mt-1 leading-none">{prInt(wowTotals.cLast)}</p>
+                    <p className="text-[10px] text-gray-400 mt-1">was {prInt(wowTotals.cPrev)} the week before</p>
+                  </div>
+                  <div className="bg-gray-50 rounded-xl p-3">
+                    <div className="flex items-start justify-between gap-2"><p className="text-[11px] font-semibold text-gray-500">Impressions · these pages</p><PrDelta cur={wowTotals.iLast} prev={wowTotals.iPrev} /></div>
+                    <p className="text-lg font-bold text-gray-900 mt-1 leading-none">{prInt(wowTotals.iLast)}</p>
+                    <p className="text-[10px] text-gray-400 mt-1">was {prInt(wowTotals.iPrev)} the week before</p>
+                  </div>
+                  <div className="bg-emerald-50 rounded-xl p-3">
+                    <p className="text-[11px] font-semibold text-emerald-700">Pages with more clicks WoW</p>
+                    <p className="text-lg font-bold text-emerald-700 mt-1 leading-none">{prInt(wowTotals.up)}</p>
+                    <p className="text-[10px] text-emerald-600/70 mt-1">of {prInt(wowRows.length)} pages with data</p>
+                  </div>
+                  <div className="bg-red-50 rounded-xl p-3">
+                    <p className="text-[11px] font-semibold text-red-600">Pages with fewer clicks WoW</p>
+                    <p className="text-lg font-bold text-red-600 mt-1 leading-none">{prInt(wowTotals.down)}</p>
+                    <p className="text-[10px] text-red-500/70 mt-1">of {prInt(wowRows.length)} pages with data</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                  <div className="inline-flex bg-gray-100 rounded-xl p-0.5 flex-wrap">
+                    {([["falling", `Falling (${wowTotals.down})`], ["rising", `Rising (${wowTotals.up})`], ["all", `All (${wowRows.length})`]] as [typeof wowTab, string][]).map(([val, l]) => (
+                      <button key={val} type="button" onClick={() => setWowTab(val)}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${wowTab === val ? "bg-white text-purple-700 shadow-sm" : "text-gray-500 hover:text-gray-800"}`}>{l}</button>
+                    ))}
+                  </div>
+                  <div className="w-60"><TextInput value={wowSearch} onChange={setWowSearch} placeholder="Filter URLs…" /></div>
+                </div>
+                <ScrollTable maxH="36rem">
+                  <table className="w-full text-left">
+                    <thead className="sticky top-0 bg-gray-50 z-[1]">
+                      <tr>
+                        <th className={th}>Vintage.com URL</th>
+                        <th className={`${th} text-right`}>VCC URLs → here</th>
+                        <th className={`${th} text-right border-l border-gray-200`}>Clicks<br /><span className="normal-case font-normal text-gray-400">{prRange(win.wowPrevStart, win.wowPrevEnd)}</span></th>
+                        <th className={`${th} text-right`}>Clicks<br /><span className="normal-case font-normal text-gray-400">{prRange(win.postStart, win.postEnd)}</span></th>
+                        <th className={`${th} text-right`}>Δ clicks</th><th className={`${th} text-right`}>WoW %</th>
+                        <th className={`${th} text-right border-l border-gray-200`}>Impr. prev</th><th className={`${th} text-right`}>Impr. last</th><th className={`${th} text-right`}>WoW %</th>
+                        <th className={`${th} text-right border-l border-gray-200`}>Pos. prev</th><th className={`${th} text-right`}>Pos. last</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {wowVisible.slice(0, ROW_CAP).map((r) => {
+                        const d = r.cLast - r.cPrev;
+                        const posBetter = r.pPrev > 0 && r.pLast > 0 ? r.pPrev - r.pLast : 0;
+                        return (
+                          <tr key={r.path} className="hover:bg-teal-50/30">
+                            <td className={`${td} max-w-[360px]`}><UrlLink url={newUrl(r.path)} slug={r.path} /></td>
+                            <td className={`${td} text-right text-gray-500`}>{r.vccSources}</td>
+                            <td className={`${td} text-right text-gray-500 border-l border-gray-100`}>{prInt(r.cPrev)}</td>
+                            <td className={`${td} text-right font-semibold`}>{prInt(r.cLast)}</td>
+                            <td className={`${td} text-right font-semibold ${d < 0 ? "text-red-500" : d > 0 ? "text-emerald-600" : "text-gray-400"}`}>{d > 0 ? "+" : ""}{prInt(d)}</td>
+                            <td className={`${td} text-right`}><PrDelta cur={r.cLast} prev={r.cPrev} /></td>
+                            <td className={`${td} text-right text-gray-500 border-l border-gray-100`}>{prInt(r.iPrev)}</td>
+                            <td className={`${td} text-right`}>{prInt(r.iLast)}</td>
+                            <td className={`${td} text-right`}><PrDelta cur={r.iLast} prev={r.iPrev} /></td>
+                            <td className={`${td} text-right text-gray-500 border-l border-gray-100`}>{r.pPrev ? r.pPrev.toFixed(1) : "—"}</td>
+                            <td className={`${td} text-right font-semibold ${posBetter > 0.05 ? "text-emerald-600" : posBetter < -0.05 ? "text-red-500" : ""}`}>{r.pLast ? r.pLast.toFixed(1) : "—"}</td>
+                          </tr>
+                        );
+                      })}
+                      {wowVisible.length === 0 && <tr><td colSpan={11} className="px-3 py-8 text-center text-xs text-gray-400">No pages in this view.</td></tr>}
+                    </tbody>
+                  </table>
+                </ScrollTable>
+                {wowVisible.length > ROW_CAP && <p className="text-[11px] text-gray-400 mt-2">Showing the first {ROW_CAP} — use the filter to narrow down.</p>}
+              </>
+            )}
           </section>
 
           {/* Data check */}
