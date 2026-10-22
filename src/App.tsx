@@ -40,6 +40,7 @@ import {
   Clock,
   ExternalLink,
   Rocket,
+  FileSearch,
 } from "lucide-react";
 import {
   LineChart,
@@ -240,7 +241,7 @@ const SERIES_COLORS = ["#7e22ce", "#a855f7", "#0f172a", "#c084fc", "#581c87", "#
 const CHART_COLORS  = ["#7e22ce", "#a855f7", "#c084fc", "#581c87", "#d8b4fe", "#4c1d95"];
 const DEVICE_COLORS = ["#7e22ce", "#a855f7", "#c084fc", "#d8b4fe"];
 
-type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "dailyObservation" | "crm" | "watchWizard" | "googleAds" | "seoActions" | "newPageSeo" | "migrationHelp" | "postRebrand";
+type ActiveView = "ga4" | "gsc" | "blend" | "intl" | "opportunities" | "gscOpportunities" | "productCategories" | "brandVsNonBrand" | "nbSeo" | "nbSignUps" | "conversions" | "seoIssues" | "performance" | "dailySnapshot" | "dailyStandup" | "dailyObservation" | "crm" | "watchWizard" | "googleAds" | "seoActions" | "newPageSeo" | "migrationHelp" | "postRebrand" | "contentCheck";
 type OppSortCol = "impressions" | "clicks" | "ctr" | "position" | "query";
 
 /** GSC “low clicks, high impressions” opportunity heuristics (CTR is 0–1 from the API). */
@@ -1703,12 +1704,14 @@ interface GscOppProps {
 type OppQuerySortKey = "query" | "impressions" | "clicks" | "ctr" | "position";
 type OppPageSortKey  = "page" | "impressions" | "clicks" | "ctr" | "position" | "queries";
 
-// "vin" = any query containing "vin" anywhere (vintage, vinted, vintage.com, arcavindi…) is brand.
-const BRAND_TERMS_GLOBAL = ["vin", "vintage cash cow", "vintagecashcow", "vcc"];
+const BRAND_TERMS_GLOBAL = ["vintage cash cow", "vintagecashcow", "vcc"];
+/** Any word starting with "vin" is brand (vintage, vinted, vinyl, vintage.com…). Word-start only, so
+ *  "engraving", "moving", "saving", "carving", "driving" stay non-brand. */
+const VIN_BRAND_RE = /\bvin/i;
 
 function isBrandQuery(q: string) {
   const ql = q.toLowerCase();
-  return BRAND_TERMS_GLOBAL.some((b) => ql.includes(b));
+  return VIN_BRAND_RE.test(ql) || BRAND_TERMS_GLOBAL.some((b) => ql.includes(b));
 }
 
 /**
@@ -1728,7 +1731,7 @@ function isBrandQuery(q: string) {
  *     "vintage cash cow" and "vintage things for cash").
  *
  * Plus built-in rules: any query containing 7+ consecutive digits (phone numbers) is brand, and any
- * query containing "vin" anywhere (vintage, vinted, vintage.com, arcavindi…) is brand.
+ * query with a word starting "vin" (vintage, vinted, vinyl, vintage.com…) is brand.
  */
 const NBSEO_DEFAULT_BRAND_TERMS = [
   // ── Broad rules — these three alone catch the vast majority of brand traffic ─────────
@@ -1838,8 +1841,8 @@ function nbSeoClassify(query: string, terms: string[]): "brand" | "nonBrand" {
   const ql = query.toLowerCase().trim();
   if (!ql) return "nonBrand";
   if (looksLikePhoneNumber(ql)) return "brand";
-  // Built-in rule: any query containing "vin" anywhere is brand (vintage, vinted, vintage.com, arcavindi…).
-  if (ql.includes("vin")) return "brand";
+  // Built-in rule: any word starting with "vin" is brand (vintage, vinted, vinyl, vintage.com…).
+  if (VIN_BRAND_RE.test(ql)) return "brand";
   for (const raw of terms) {
     const t = raw.toLowerCase().trim();
     if (!t) continue;
@@ -6683,14 +6686,17 @@ interface PrRow {
   path: string; vPre: number; vPost: number;
   dest: string | null; match: PrMatch; sharedBy: number; code: string; toHome: boolean;
   dPre: number; dPost: number;          // destination URL's full sessions
-  aPre: number; aPost: number;          // destination sessions allocated to this VCC URL
+  aPre: number; aPost: number;          // destination figure allocated to this VCC URL
+  before: number; after: number;        // before = VCC URL + its vintage.com page's existing traffic; after = vintage.com page + clicks still on the old URL
   kept: number | null; net: number; status: PrStatus;
 }
 
 /** RE2 regex matching a page path on any host of a Search Console property (case-insensitive, optional trailing slash / query string). */
 function prPageRegex(path: string): string {
   const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const p = path === "/" ? "" : esc(path);
+  let enc = path;
+  try { enc = encodeURI(path); } catch { /* keep */ }
+  const p = path === "/" ? "" : esc(enc);
   return `(?i)^https?://[^/]+${p}/?([?#].*)?$`;
 }
 type PrQMap = Record<string, { c: number; i: number; ps: number }>;
@@ -6791,12 +6797,11 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
   const [search, setSearch] = useState("");
   const [minPre, setMinPre] = useState(5);
   const [fetchStats, setFetchStats] = useState<Record<string, { rows: number; sessions: number }>>({});
-  /** Result of scanning every accessible GA4 property for vintagecashcow.co.uk traffic (only runs when the chosen VCC property has none). */
-  const [wow, setWow] = useState<{ last: Record<string, PrGscAgg>; prev: Record<string, PrGscAgg> } | null>(null);
+  const [wow, setWow] = useState<{ last: Record<string, PrGscAgg>; prev: Record<string, PrGscAgg>; vccLast: Record<string, number>; vccPrev: Record<string, number> } | null>(null);
   const [qDetail, setQDetail] = useState<Record<string, PrQDetail>>({});
   const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
   const [wowTab, setWowTab] = useState<"falling" | "rising" | "all">("falling");
-  const [qWow, setQWow] = useState<{ last: Record<string, PrGscAgg>; prev: Record<string, PrGscAgg>; capped: boolean } | null>(null);
+  const [qWow, setQWow] = useState<{ last: Record<string, PrGscAgg>; prev: Record<string, PrGscAgg>; vccLast: Record<string, PrGscAgg>; capped: boolean } | null>(null);
   const [qTab, setQTab] = useState<"falling" | "rising" | "new" | "lost" | "all">("falling");
   const [qBrand, setQBrand] = useState<"all" | "nonBrand" | "brand">("nonBrand");
   const [qRank, setQRank] = useState<"clicks" | "impressions">("clicks");
@@ -6807,6 +6812,7 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
   const [q4Rank, setQ4Rank] = useState<"clicks" | "impressions">("clicks");
   const [q4Search, setQ4Search] = useState("");
   const [wowSearch, setWowSearch] = useState("");
+  /** Result of scanning every accessible GA4 property for vintagecashcow.co.uk traffic (only runs when the chosen VCC property has none). */
   const [detect, setDetect] = useState<{ ran: boolean; picked: string | null; previous: string; results: { id: string; label: string; vccOrganic: number; vccAll: number; topHost: string }[] } | null>(null);
 
   useEffect(() => { try { localStorage.setItem(LS_POST_REBRAND_DATE, rebrandDate); } catch { /* ignore */ } }, [rebrandDate]);
@@ -6905,23 +6911,51 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
       }
     }));
     // ── Week-on-week Search Console data for vintage.com pages (always GSC, whichever metric the main table uses) ──
-    const wowOut: { last: Record<string, PrGscAgg>; prev: Record<string, PrGscAgg> } = { last: {}, prev: {} };
-    const qOut: { last: Record<string, PrGscAgg>; prev: Record<string, PrGscAgg>; capped: boolean } = { last: {}, prev: {}, capped: false };
-    const qTask = gscProps.av ? Promise.all(([["last", w.postStart, w.postEnd], ["prev", w.wowPrevStart, w.wowPrevEnd]] as ["last" | "prev", string, string][]).map(async ([key, sd, ed]) => {
+    const wowOut: { last: Record<string, PrGscAgg>; prev: Record<string, PrGscAgg>; vccLast: Record<string, number>; vccPrev: Record<string, number> } = { last: {}, prev: {}, vccLast: {}, vccPrev: {} };
+    // Clicks still attributed to old VCC URLs in each WoW week (keyed by old path; mapped to their vintage.com page later).
+    const wowVccTask = gscProps.vcc && gscProps.vcc !== gscProps.av ? Promise.all(([["vccLast", w.postStart, w.postEnd], ["vccPrev", w.wowPrevStart, w.wowPrevEnd]] as ["vccLast" | "vccPrev", string, string][]).map(async ([key, sd, ed]) => {
       try {
         for (let startRow = 0; startRow < 100000; startRow += 25000) {
-          const r = await fetch(`https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(gscProps.av)}/searchAnalytics/query`, {
+          const r = await fetch(`https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(gscProps.vcc)}/searchAnalytics/query`, {
+            method: "POST", headers, body: JSON.stringify({ startDate: sd, endDate: ed, dimensions: ["page"], rowLimit: 25000, startRow, dataState: "all" }),
+          });
+          const j = await r.json();
+          if (!r.ok || j.error) throw new Error(j.error?.message || `HTTP ${r.status}`);
+          const rows = (j.rows ?? []) as GSCApiRow[];
+          rows.forEach((row) => {
+            let host = "";
+            try { host = new URL(row.keys[0]).host; } catch { /* ignore */ }
+            if (host && !prIsVccHost(host)) return;
+            const k = prKey(row.keys[0]); wowOut[key][k] = (wowOut[key][k] ?? 0) + row.clicks;
+          });
+          if (rows.length < 25000) break;
+        }
+      } catch (e) {
+        warns.push(`VCC GSC old-URL clicks (${key === "vccLast" ? "last 7 days" : "previous 7 days"}): ${e instanceof Error ? e.message : String(e)}`);
+      }
+    })).then(() => undefined) : Promise.resolve();
+    // Query week-on-week: vintage.com + clicks Google still attributes to old VCC URLs (both weeks), so queries
+    // moving from old to new URLs don't look like gains.
+    const qOut: { last: Record<string, PrGscAgg>; prev: Record<string, PrGscAgg>; vccLast: Record<string, PrGscAgg>; capped: boolean } = { last: {}, prev: {}, vccLast: {}, capped: false };
+    const addQ = (m: Record<string, PrGscAgg>, q: string, row: GSCApiRow) => { const t = (m[q] ??= { clicks: 0, impressions: 0, posSum: 0 }); t.clicks += row.clicks; t.impressions += row.impressions; t.posSum += row.position * row.impressions; };
+    const qJobs = ([["last", w.postStart, w.postEnd, gscProps.av], ["prev", w.wowPrevStart, w.wowPrevEnd, gscProps.av], ["last", w.postStart, w.postEnd, gscProps.vcc], ["prev", w.wowPrevStart, w.wowPrevEnd, gscProps.vcc]] as ["last" | "prev", string, string, string][])
+      .filter((j, i) => j[3] && !(i >= 2 && gscProps.vcc === gscProps.av)); // same property picked twice → don't double count
+    const qTask = gscProps.av ? Promise.all(qJobs.map(async ([key, sd, ed, site]) => {
+      const isVcc = site === gscProps.vcc && site !== gscProps.av;
+      try {
+        for (let startRow = 0; startRow < 100000; startRow += 25000) {
+          const r = await fetch(`https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(site)}/searchAnalytics/query`, {
             method: "POST", headers, body: JSON.stringify({ startDate: sd, endDate: ed, dimensions: ["query"], rowLimit: 25000, startRow, dataState: "all" }),
           });
           const j = await r.json();
           if (!r.ok || j.error) throw new Error(j.error?.message || `HTTP ${r.status}`);
           const rows = (j.rows ?? []) as GSCApiRow[];
-          rows.forEach((row) => { qOut[key][row.keys[0]] = { clicks: row.clicks, impressions: row.impressions, posSum: row.position * row.impressions }; });
+          rows.forEach((row) => { addQ(qOut[key], row.keys[0], row); if (isVcc && key === "last") addQ(qOut.vccLast, row.keys[0], row); });
           if (rows.length < 25000) break;
           if (startRow + 25000 >= 100000) qOut.capped = true;
         }
       } catch (e) {
-        warns.push(`Vintage.com GSC queries (${key === "last" ? "last 7 days" : "previous 7 days"}): ${e instanceof Error ? e.message : String(e)}`);
+        warns.push(`${isVcc ? "VCC" : "Vintage.com"} GSC queries (${key === "last" ? "last 7 days" : "previous 7 days"}): ${e instanceof Error ? e.message : String(e)}`);
       }
     })).then(() => undefined) : Promise.resolve();
     const wowTask = gscProps.av ? Promise.all(([["last", w.postStart, w.postEnd], ["prev", w.wowPrevStart, w.wowPrevEnd]] as ["last" | "prev", string, string][]).map(async ([key, sd, ed]) => {
@@ -6966,7 +7000,7 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
       }
     })).then(() => undefined);
     const finishWow = async () => {
-      await Promise.all([wowTask, qTask, q4Task]);
+      await Promise.all([wowTask, wowVccTask, qTask, q4Task]);
       if (myReq === reqId.current) {
         setWow(gscProps.av ? wowOut : null); setQWow(gscProps.av ? qOut : null);
         setQ4(gscProps.vcc || gscProps.av ? q4Out : null);
@@ -7046,14 +7080,20 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
     return m;
   }, [accessToken]);
   type PrQSpec = { site: string; start: string; end: string; path: string } | null;
-  const toggleRow = useCallback((key: string, before: PrQSpec, after: PrQSpec) => {
+  const toggleRow = useCallback((key: string, beforeSpecs: PrQSpec[], afterSpecs: PrQSpec[]) => {
     setOpenRows((o) => ({ ...o, [key]: !o[key] }));
     if (qDetail[key] && !qDetail[key].error) return;
-    if (!before?.site && !after?.site) { setQDetail((d) => ({ ...d, [key]: { loading: false, error: "Choose the Search Console properties in Settings to see queries." } })); return; }
+    const bs = beforeSpecs.filter((x): x is NonNullable<PrQSpec> => !!x?.site), as = afterSpecs.filter((x): x is NonNullable<PrQSpec> => !!x?.site);
+    if (!bs.length && !as.length) { setQDetail((d) => ({ ...d, [key]: { loading: false, error: "Choose the Search Console properties in Settings to see queries." } })); return; }
     setQDetail((d) => ({ ...d, [key]: { loading: true } }));
+    const merge = (maps: PrQMap[]) => {
+      const m: PrQMap = {};
+      maps.forEach((x) => Object.entries(x).forEach(([q, v]) => { const t = (m[q] ??= { c: 0, i: 0, ps: 0 }); t.c += v.c; t.i += v.i; t.ps += v.ps; }));
+      return m;
+    };
     Promise.all([
-      before?.site ? fetchPageQueries(before.site, before.start, before.end, before.path) : Promise.resolve({} as PrQMap),
-      after?.site ? fetchPageQueries(after.site, after.start, after.end, after.path) : Promise.resolve({} as PrQMap),
+      Promise.all(bs.map((x) => fetchPageQueries(x.site, x.start, x.end, x.path))).then(merge),
+      Promise.all(as.map((x) => fetchPageQueries(x.site, x.start, x.end, x.path))).then(merge),
     ]).then(([b, a]) => setQDetail((d) => ({ ...d, [key]: { loading: false, before: b, after: a } })))
       .catch((e) => setQDetail((d) => ({ ...d, [key]: { loading: false, error: e instanceof Error ? e.message : String(e) } })));
   }, [qDetail, fetchPageQueries]);
@@ -7070,9 +7110,9 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
       const n = { vcc: { cmp: tot("vcc", "cmp", host), post: tot("vcc", "post", host) }, av: { cmp: tot("av", "cmp", host), post: tot("av", "post", host) } };
       const seen = (["vcc", "av"] as PrProp[]).filter((p) => n[p].cmp + n[p].post > 0);
       // Both properties saw it → same visits tagged twice; use the property with the larger count.
-      const source: PrProp | null = seen.length === 0 ? null : seen.length === 1 ? seen[0] : (n.vcc.cmp + n.vcc.post >= n.av.cmp + n.av.post ? "vcc" : "av");
+      const pick: PrProp | null = seen.length === 0 ? null : seen.length === 1 ? seen[0] : (n.vcc.cmp + n.vcc.post >= n.av.cmp + n.av.post ? "vcc" : "av");
       const group = prIsVccHost(host) ? "VCC" : prIsNewHost(host) ? "Vintage.com" : "Other";
-      return { host, n, source, shared: seen.length === 2, group };
+      return { host, n, source: pick, shared: seen.length === 2, group };
     }).sort((a, b) => (b.n.vcc.cmp + b.n.vcc.post + b.n.av.cmp + b.n.av.post) - (a.n.vcc.cmp + a.n.vcc.post + a.n.av.cmp + a.n.av.post));
   }, [raw]);
 
@@ -7119,10 +7159,13 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
       const dw = r.dest && !r.toHome ? destWeight.get(r.dest)! : { n: 0, w: 1 };
       const share = r.dest && !r.toHome ? Math.max(r.vPre, 0.0001) / dw.w : 0;
       const aPre = d.pre * share, aPost = d.post * share;
-      const before = r.vPre, after = r.toHome ? 0 : aPost;
+      // Like-for-like: before = the VCC URL + whatever its vintage.com page already got the week before (vintage.com
+      // was live pre-migration); after = the vintage.com page + clicks Google still sends to the old URL (it 301s).
+      // Homepage redirects aren't credited with homepage traffic, so they're judged on the old URL alone.
+      const before = r.vPre + aPre, after = r.vPost + aPost;
       const kept = before > 0 ? after / before : null;
       const status: PrStatus = !r.dest ? (r.code === "404" || r.code === "410" ? "notRedirected" : "nomatch") : r.toHome ? "home" : kept === null ? "held" : kept >= 0.9 ? "held" : kept >= 0.5 ? "partial" : "dropped";
-      return { ...r, sharedBy: dw.n, dPre: d.pre, dPost: d.post, aPre, aPost, kept, net: after - before, status };
+      return { ...r, sharedBy: dw.n, dPre: d.pre, dPost: d.post, aPre, aPost, before, after, kept, net: after - before, status };
     });
   }, [domainPages, redirectMap]);
 
@@ -7130,8 +7173,9 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
     const sum = (m: Record<string, { pre: number; post: number }>) => Object.values(m).reduce((a, v) => ({ pre: a.pre + v.pre, post: a.post + v.post }), { pre: 0, post: 0 });
     const v = sum(domainPages.vcc), n = sum(domainPages.nw);
     const matchedPre = rows.filter((r) => r.dest).reduce((a, r) => a + r.vPre, 0);
-    const matchedAfter = rows.reduce((a, r) => a + (r.dest && !r.toHome ? r.aPost : 0), 0);
-    return { v, n, matchedAfter, coverage: v.pre ? matchedPre / v.pre : 0 };
+    const before = rows.reduce((a, r) => a + r.before, 0), after = rows.reduce((a, r) => a + r.after, 0);
+    const destPre = rows.reduce((a, r) => a + r.aPre, 0), destPost = rows.reduce((a, r) => a + r.aPost, 0), oldPost = rows.reduce((a, r) => a + r.vPost, 0);
+    return { v, n, before, after, destPre, destPost, oldPost, coverage: v.pre ? matchedPre / v.pre : 0 };
   }, [domainPages, rows]);
 
   const destinations = useMemo(() => new Set(rows.filter((r) => r.dest).map((r) => r.dest!)), [rows]);
@@ -7161,14 +7205,15 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
   // ── Week-on-week rows: every vintage.com page that at least one old VCC URL redirects to ──
   const wowRows = useMemo(() => {
     if (!wow) return [];
-    const sources = new Map<string, number>();
-    rows.forEach((r) => { if (r.dest) sources.set(r.dest, (sources.get(r.dest) ?? 0) + 1); });
-    return Array.from(sources.entries()).map(([path, n]) => {
+    const sources = new Map<string, string[]>();
+    rows.forEach((r) => { if (r.dest) sources.set(r.dest, [...(sources.get(r.dest) ?? []), r.path]); });
+    return Array.from(sources.entries()).map(([path, olds]) => {
       const a = wow.prev[path] ?? { clicks: 0, impressions: 0, posSum: 0 };
       const b = wow.last[path] ?? { clicks: 0, impressions: 0, posSum: 0 };
+      const oPrev = olds.reduce((t, o) => t + (wow.vccPrev[o] ?? 0), 0), oLast = olds.reduce((t, o) => t + (wow.vccLast[o] ?? 0), 0);
       return {
-        path, vccSources: n,
-        cPrev: a.clicks, cLast: b.clicks, iPrev: a.impressions, iLast: b.impressions,
+        path, vccSources: olds.length, oPrev, oLast,
+        cPrev: a.clicks + oPrev, cLast: b.clicks + oLast, iPrev: a.impressions, iLast: b.impressions,
         pPrev: a.impressions ? a.posSum / a.impressions : 0, pLast: b.impressions ? b.posSum / b.impressions : 0,
       };
     }).filter((r) => r.cPrev + r.cLast + r.iPrev + r.iLast > 0);
@@ -7231,7 +7276,7 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
       const iB = v.impressions + a.impressions;
       return {
         q, brand: nbSeoClassify(q, qTerms) === "brand",
-        cV: v.clicks, cA: a.clicks, cB: v.clicks + a.clicks, cN: n.clicks,
+        cV: v.clicks, cA: a.clicks, cB: v.clicks + a.clicks, cN: n.clicks, cOld: (qWow?.vccLast[q]?.clicks ?? 0),
         iB, iN: n.impressions,
         pB: iB ? (v.posSum + a.posSum) / iB : 0, pN: n.impressions ? n.posSum / n.impressions : 0,
       };
@@ -7399,24 +7444,24 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
           {/* Summary strip */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-              <p className="text-[11px] font-semibold text-purple-700">VCC URLs · week before migration</p>
-              <p className="text-xl font-bold text-gray-900 mt-2 leading-none">{prInt(summary.v.pre)}</p>
-              <p className="text-[10px] text-gray-400 mt-1">{M} · {prRange(win.cmpStart, win.cmpEnd)}</p>
+              <p className="text-[11px] font-semibold text-purple-700">Before · {prRange(win.cmpStart, win.cmpEnd)}</p>
+              <p className="text-xl font-bold text-gray-900 mt-2 leading-none">{prInt(summary.before)}</p>
+              <p className="text-[10px] text-gray-400 mt-1">{M}: VCC URLs {prInt(summary.v.pre)}{summary.destPre >= 0.5 ? ` + ${prInt(summary.destPre)} their vintage.com pages already had` : ""}</p>
             </div>
             <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-              <p className="text-[11px] font-semibold text-teal-700">Vintage.com URLs they redirect to · last 7 days</p>
-              <p className="text-xl font-bold text-gray-900 mt-2 leading-none">{prInt(summary.matchedAfter)}</p>
-              <p className="text-[10px] text-gray-400 mt-1">{M} · {prRange(win.postStart, win.postEnd)} · not counting URLs sent to the homepage</p>
+              <p className="text-[11px] font-semibold text-teal-700">After · {prRange(win.postStart, win.postEnd)}</p>
+              <p className="text-xl font-bold text-gray-900 mt-2 leading-none">{prInt(summary.after)}</p>
+              <p className="text-[10px] text-gray-400 mt-1">{M}: vintage.com pages {prInt(summary.destPost)}{summary.oldPost >= 0.5 ? ` + ${prInt(summary.oldPost)} still on old VCC URLs` : ""} · homepage redirects not credited</p>
             </div>
             <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-              <div className="flex items-start justify-between gap-2"><p className="text-[11px] font-semibold text-gray-700">Difference</p><PrDelta cur={summary.matchedAfter} prev={summary.v.pre} /></div>
-              <p className={`text-xl font-bold mt-2 leading-none ${summary.matchedAfter - summary.v.pre < 0 ? "text-red-600" : "text-emerald-600"}`}>{summary.matchedAfter - summary.v.pre > 0 ? "+" : ""}{prInt(summary.matchedAfter - summary.v.pre)}</p>
+              <div className="flex items-start justify-between gap-2"><p className="text-[11px] font-semibold text-gray-700">Difference</p><PrDelta cur={summary.after} prev={summary.before} /></div>
+              <p className={`text-xl font-bold mt-2 leading-none ${summary.after - summary.before < 0 ? "text-red-600" : "text-emerald-600"}`}>{summary.after - summary.before > 0 ? "+" : ""}{prInt(summary.after - summary.before)}</p>
               <p className="text-[10px] text-gray-400 mt-1">{M} per week</p>
             </div>
             <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
               <p className="text-[11px] font-semibold text-gray-500">All vintage.com {M} · last 7 days</p>
               <p className="text-xl font-bold text-gray-900 mt-2 leading-none">{prInt(summary.n.post)}</p>
-              <p className="text-[10px] text-gray-400 mt-1">every page incl. homepage · was {prInt(summary.n.pre)} the week before</p>
+              <p className="text-[10px] text-gray-400 mt-1">every page incl. homepage · was {prInt(summary.n.pre)} the week before the migration</p>
             </div>
           </div>
 
@@ -7425,7 +7470,7 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
             <div className="flex items-end justify-between gap-3 flex-wrap mb-4">
               <div>
                 <h2 className="text-base font-bold text-gray-900">VCC URLs (week before migration) → vintage.com URLs (last 7 days)</h2>
-                <p className="text-xs text-gray-500 mt-0.5 max-w-3xl">Left: {M} each old VCC URL got in the 7 days before the migration. Right: the vintage.com URL it 301s to (from the redirect list) and its {M} over the last 7 days (same weekdays). Held up ≥ 90% of the old figure, partly lost 50–90%, dropped &lt; 50%. Homepage redirects aren't credited with homepage traffic. Where several VCC URLs redirect to one page, that page's figure is split between them by their old traffic.</p>
+                <p className="text-xs text-gray-500 mt-0.5 max-w-3xl">Left: {M} each old VCC URL got in the 7 days before the migration. Right: the vintage.com URL it 301s to (from the redirect list) and its {M} over the last 7 days (same weekdays). The difference is like-for-like: before also counts what the vintage.com page already got the week before (it was live pre-migration), and after also counts clicks Google still sends to the old URL. Held up ≥ 90%, partly lost 50–90%, dropped &lt; 50%. Homepage redirects aren't credited with homepage traffic. Where several VCC URLs redirect to one page, that page's figures are split between them by their old traffic.</p>
               </div>
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
@@ -7491,8 +7536,14 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
                       <tr className={`hover:bg-purple-50/30 ${openRows[`t1|${r.path}`] ? "bg-purple-50/40" : ""}`}>
                         <td className={`${td} max-w-[300px]`}>
                           <Expander open={!!openRows[`t1|${r.path}`]} label={r.path} onClick={() => toggleRow(`t1|${r.path}`,
-                            gscProps.vcc ? { site: gscProps.vcc, start: win.cmpStart, end: win.cmpEnd, path: r.path } : null,
-                            r.dest && gscProps.av ? { site: gscProps.av, start: win.postStart, end: win.postEnd, path: r.dest } : null)} />
+                            [
+                              { site: gscProps.vcc, start: win.cmpStart, end: win.cmpEnd, path: r.path },
+                              r.dest && !r.toHome ? { site: gscProps.av, start: win.cmpStart, end: win.cmpEnd, path: r.dest } : null,
+                            ],
+                            [
+                              r.dest ? { site: gscProps.av, start: win.postStart, end: win.postEnd, path: r.dest } : null,
+                              { site: gscProps.vcc, start: win.postStart, end: win.postEnd, path: r.path },
+                            ])} />
                         </td>
                         <td className={`${td} text-right font-semibold`}>{prInt(r.vPre)}</td>
                         <td className={`${td} max-w-[300px] border-l border-gray-100`}>
@@ -7508,16 +7559,22 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
                           {!r.dest ? "—" : r.toHome ? <span className="text-gray-400" title="Homepage traffic isn't credited to individual redirected URLs">{prInt(r.dPost)}*</span>
                             : r.sharedBy > 1 ? <span title={`Page total ${prInt(r.dPost)}, split across ${r.sharedBy} VCC URLs`}>{prInt(r.aPost)}<span className="text-gray-400 font-normal"> / {prInt(r.dPost)}</span></span>
                             : prInt(r.aPost)}
+                          {(r.vPost >= 0.5 || r.aPre >= 0.5) && (
+                            <div className="text-[10px] font-normal text-gray-400 leading-tight mt-0.5">
+                              {r.vPost >= 0.5 && <div>+{prInt(r.vPost)} still on old URL</div>}
+                              {r.aPre >= 0.5 && <div>page had {prInt(r.aPre)} before</div>}
+                            </div>
+                          )}
                         </td>
                         <td className={`${td} text-right border-l border-gray-100 font-semibold ${r.net < 0 ? "text-red-500" : r.net > 0 ? "text-emerald-600" : "text-gray-400"}`}>{r.net > 0 ? "+" : ""}{prInt(r.net)}</td>
-                        <td className={`${td} text-right`}><PrDelta cur={r.vPre + r.net} prev={r.vPre} /></td>
+                        <td className={`${td} text-right`}><PrDelta cur={r.after} prev={r.before} /></td>
                         <td className={td}><span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full border ${PR_STATUS_META[r.status].cls}`}>{PR_STATUS_META[r.status].label}</span></td>
                       </tr>
                       {openRows[`t1|${r.path}`] && (
                         <tr className="bg-purple-50/20"><td colSpan={7} className="px-6 py-2 border-l-4 border-purple-300">
                           <PrQueryPanel detail={qDetail[`t1|${r.path}`]}
-                            beforeLabel={`VCC ${r.path} · ${prRange(win.cmpStart, win.cmpEnd)}`}
-                            afterLabel={r.dest ? `vintage.com ${r.dest} · ${prRange(win.postStart, win.postEnd)}` : "no redirect target"}
+                            beforeLabel={`VCC ${r.path}${r.dest && !r.toHome ? ` + vintage.com ${r.dest}` : ""} · ${prRange(win.cmpStart, win.cmpEnd)}`}
+                            afterLabel={`${r.dest ? `vintage.com ${r.dest} + ` : ""}old URL · ${prRange(win.postStart, win.postEnd)}`}
                             links={[{ label: "Open VCC URL", url: vccUrl(r.path) }, ...(r.dest ? [{ label: "Open vintage.com URL", url: newUrl(r.dest) }] : [])]}
                             hideGained={r.toHome}
                             note={r.toHome ? "Redirected to the homepage — showing which of this URL's queries the homepage now picks up (gained list hidden: it'd just be homepage/brand queries)." : !r.dest ? "No redirect target, so every query this URL ranked for is lost." : undefined} />
@@ -7538,7 +7595,7 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
             <div className="mb-4">
               <h2 className="text-base font-bold text-gray-900">Vintage.com redirect targets — week on week (Search Console)</h2>
               <p className="text-xs text-gray-500 mt-0.5 max-w-3xl">
-                The same vintage.com pages the old VCC URLs redirect to: GSC clicks, impressions and average position for <strong>{prWeekdayRange(win.postStart, win.postEnd)}</strong> vs <strong>{prWeekdayRange(win.wowPrevStart, win.wowPrevEnd)}</strong> — same weekdays, ending 2 days ago to allow for the Search Console lag.
+                The same vintage.com pages the old VCC URLs redirect to. Clicks include any Google still sends to the old VCC URLs that 301 to each page, so URLs swapping over in Google don't look like growth. Impressions and position are for the vintage.com page. Comparing <strong>{prWeekdayRange(win.postStart, win.postEnd)}</strong> vs <strong>{prWeekdayRange(win.wowPrevStart, win.wowPrevEnd)}</strong> — same weekdays, ending 2 days ago to allow for the Search Console lag.
               </p>
             </div>
             {!wow ? (
@@ -7598,12 +7655,12 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
                           <tr className={`hover:bg-teal-50/30 ${openRows[`t2|${r.path}`] ? "bg-teal-50/40" : ""}`}>
                             <td className={`${td} max-w-[360px]`}>
                               <Expander open={!!openRows[`t2|${r.path}`]} label={r.path} onClick={() => toggleRow(`t2|${r.path}`,
-                                gscProps.av ? { site: gscProps.av, start: win.wowPrevStart, end: win.wowPrevEnd, path: r.path } : null,
-                                gscProps.av ? { site: gscProps.av, start: win.postStart, end: win.postEnd, path: r.path } : null)} />
+                                [{ site: gscProps.av, start: win.wowPrevStart, end: win.wowPrevEnd, path: r.path }],
+                                [{ site: gscProps.av, start: win.postStart, end: win.postEnd, path: r.path }])} />
                             </td>
                             <td className={`${td} text-right text-gray-500`}>{r.vccSources}</td>
-                            <td className={`${td} text-right text-gray-500 border-l border-gray-100`}>{prInt(r.cPrev)}</td>
-                            <td className={`${td} text-right font-semibold`}>{prInt(r.cLast)}</td>
+                            <td className={`${td} text-right text-gray-500 border-l border-gray-100`}>{prInt(r.cPrev)}{r.oPrev >= 1 && <div className="text-[10px] text-gray-400">incl. {prInt(r.oPrev)} old URLs</div>}</td>
+                            <td className={`${td} text-right font-semibold`}>{prInt(r.cLast)}{r.oLast >= 1 && <div className="text-[10px] font-normal text-gray-400">incl. {prInt(r.oLast)} old URLs</div>}</td>
                             <td className={`${td} text-right font-semibold ${d < 0 ? "text-red-500" : d > 0 ? "text-emerald-600" : "text-gray-400"}`}>{d > 0 ? "+" : ""}{prInt(d)}</td>
                             <td className={`${td} text-right`}><PrDelta cur={r.cLast} prev={r.cPrev} /></td>
                             <td className={`${td} text-right text-gray-500 border-l border-gray-100`}>{prInt(r.iPrev)}</td>
@@ -7615,7 +7672,7 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
                           {openRows[`t2|${r.path}`] && (
                             <tr className="bg-teal-50/20"><td colSpan={11} className="px-6 py-2 border-l-4 border-teal-300">
                               <PrQueryPanel detail={qDetail[`t2|${r.path}`]}
-                                beforeLabel={prRange(win.wowPrevStart, win.wowPrevEnd)} afterLabel={prRange(win.postStart, win.postEnd)}
+                                beforeLabel={`vintage.com page only · ${prRange(win.wowPrevStart, win.wowPrevEnd)}`} afterLabel={prRange(win.postStart, win.postEnd)}
                                 links={[{ label: "Open vintage.com URL", url: newUrl(r.path) }]} />
                             </td></tr>
                           )}
@@ -7636,8 +7693,8 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
             <div className="mb-4">
               <h2 className="text-base font-bold text-gray-900">Vintage.com search queries — rising & falling week on week</h2>
               <p className="text-xs text-gray-500 mt-0.5 max-w-3xl">
-                Every query in the vintage.com Search Console property: <strong>{prWeekdayRange(win.postStart, win.postEnd)}</strong> vs <strong>{prWeekdayRange(win.wowPrevStart, win.wowPrevEnd)}</strong> (same weekdays, ending 2 days ago).
-                Brand = any query containing “vin”, plus the brand list from the Non-Brand SEO view. Google hides rare queries, so these totals are a bit lower than page-level clicks.
+                Every query on vintage.com — plus clicks Google still sends to old VCC URLs, so queries simply moving from old to new URLs don't show as gains: <strong>{prWeekdayRange(win.postStart, win.postEnd)}</strong> vs <strong>{prWeekdayRange(win.wowPrevStart, win.wowPrevEnd)}</strong> (same weekdays, ending 2 days ago).
+                Brand = any word starting “vin” (vintage, vinted…), plus the brand list from the Non-Brand SEO view. Google hides rare queries, so these totals are a bit lower than page-level clicks.
               </p>
             </div>
             {!qWow ? (
@@ -7737,7 +7794,7 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
               <h2 className="text-base font-bold text-gray-900">Search queries — before vs after the rebrand</h2>
               <p className="text-xs text-gray-500 mt-0.5 max-w-3xl">
                 <strong>Before</strong> = GSC clicks for each query across both sites in the week before the migration ({prWeekdayRange(win.cmpStart, win.cmpEnd)}): Vintage Cash Cow + vintage.com.
-                <strong> After</strong> = the same query on vintage.com over the last 7 days ({prWeekdayRange(win.postStart, win.postEnd)}). Same weekdays. Brand = any query containing “vin”, plus the Non-Brand SEO brand list.
+                <strong> After</strong> = the same query over the last 7 days ({prWeekdayRange(win.postStart, win.postEnd)}) on vintage.com, plus any clicks Google still sends to old VCC URLs (they 301 to vintage.com). Same weekdays. Brand = any word starting “vin” (vintage, vinted…), plus the Non-Brand SEO brand list.
               </p>
             </div>
             {!q4 ? (
@@ -7795,7 +7852,7 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
                       <tr>
                         <th colSpan={q4Brand === "all" ? 2 : 1} className={th}></th>
                         <th colSpan={3} className={`${th} text-purple-700 bg-purple-50/70 border-l border-gray-200`}>Before · {prRange(win.cmpStart, win.cmpEnd)}</th>
-                        <th colSpan={2} className={`${th} text-teal-700 bg-teal-50/70 border-l border-gray-200`}>After · vintage.com · {prRange(win.postStart, win.postEnd)}</th>
+                        <th colSpan={2} className={`${th} text-teal-700 bg-teal-50/70 border-l border-gray-200`}>After · {prRange(win.postStart, win.postEnd)}</th>
                         <th colSpan={3} className={`${th} border-l border-gray-200`}>Difference</th>
                         <th colSpan={2} className={`${th} border-l border-gray-200`}>Avg position</th>
                       </tr>
@@ -7819,7 +7876,7 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
                             <td className={`${td} text-right border-l border-gray-100`}>{prInt(r.cV)}</td>
                             <td className={`${td} text-right text-gray-500`}>{prInt(r.cA)}</td>
                             <td className={`${td} text-right text-gray-500`}>{prInt(r.iB)}</td>
-                            <td className={`${td} text-right font-semibold border-l border-gray-100`}>{prInt(r.cN)}</td>
+                            <td className={`${td} text-right font-semibold border-l border-gray-100`}>{prInt(r.cN)}{r.cOld >= 1 && <div className="text-[10px] font-normal text-gray-400" title="Clicks Google still attributes to old vintagecashcow.co.uk URLs (they 301 to vintage.com)">incl. {prInt(r.cOld)} old URLs</div>}</td>
                             <td className={`${td} text-right text-gray-500`}>{prInt(r.iN)}</td>
                             <td className={`${td} text-right font-semibold border-l border-gray-100 ${d < 0 ? "text-red-500" : d > 0 ? "text-emerald-600" : "text-gray-400"}`}>{d > 0 ? "+" : ""}{prInt(d)}</td>
                             <td className={`${td} text-right`}><PrDelta cur={r.cN} prev={r.cB} /></td>
@@ -7873,6 +7930,721 @@ function PostRebrandView({ accessToken, ga4Properties, gscProperties, defaults, 
             </div>
             <p className="mt-3 text-gray-500">Properties: VCC = {ga4Properties.find((p) => p.value === props.vcc)?.label ?? (props.vcc || "none")} · Vintage.com = {ga4Properties.find((p) => p.value === props.av)?.label ?? (props.av || "none")}. Hostnames that aren't vintagecashcow.co.uk or vintage.com (e.g. translation proxies, staging) are excluded from the table above.</p>
           </details>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Page Content Check ───────────────────────────────────────────────────────
+//
+// Enter a vintage.com URL (or an old vintagecashcow.co.uk URL). The redirect list finds the matching old
+// VCC URL; the old page's HTML comes from the Wayback Machine (last snapshot before the migration date) or
+// the old Webflow staging site, the new page's from the live site (or paste either). Site chrome (nav,
+// header, footer, cookie banners, modals) is stripped so only page-specific content is compared.
+//
+// Output: per-section list of content that existed on the VCC page but is missing / reworded on
+// vintage.com (text, headings, images, internal links, embeds, tables, forms), VCC-only items that were
+// probably meant to go (phone numbers, "cash cow" copy…), meta/indexing differences, references to the
+// old domain left on the new page, and a schema / structured-data comparison.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const LS_PC_STATE = "vcc_page_content_check_v1";
+const PC_STAGING_HOST = "vintage-cash-cow.webflow.io";
+
+type PcKind = "text" | "heading" | "image" | "link" | "embed" | "table" | "form";
+interface PcItem { kind: PcKind; text: string; section: number; href?: string; alt?: string; src?: string; level?: number; cta?: boolean; tag?: string }
+interface PcSection { heading: string; level: number }
+interface PcSchemaNode { type: string; props: string[] }
+interface PcPage {
+  url: string;
+  meta: { title: string; description: string; canonical: string; robots: string; lang: string; ogTitle: string; ogDescription: string; ogImage: string; ogUrl: string; hreflang: string[]; h1: string[] };
+  sections: PcSection[];
+  items: PcItem[];
+  schema: PcSchemaNode[];
+  schemaRaw: string[];
+  schemaErrors: string[];
+  microdata: string[];
+  words: number;
+  oldDomainRefs: string[];
+}
+type PcStatus = "found" | "reworded" | "missing" | "vccOnly";
+interface PcMatch { item: PcItem; status: PcStatus; best?: string; score: number }
+
+const PC_CHROME_TOKENS = new Set(["nav", "navbar", "w-nav", "navigation", "nav-menu", "mega-menu", "site-header", "site-footer", "footer", "cookie", "cookies", "cookie-banner", "consent", "popup", "modal", "breadcrumb", "breadcrumbs", "skip-link", "announcement-bar", "w-nav-overlay"]);
+const PC_BLOCK_TAGS = new Set(["P", "LI", "BLOCKQUOTE", "DD", "DT", "FIGCAPTION", "SUMMARY", "LABEL", "PRE", "CAPTION"]);
+const PC_LEAF_TAGS = new Set(["DIV", "SPAN", "STRONG", "EM", "B", "I", "SMALL"]);
+const PC_CONTAINER_SEL = "p,div,ul,ol,h1,h2,h3,h4,h5,h6,table,section,article,blockquote,figure,form,li,img";
+/** Copy that's specific to the old brand and wouldn't be expected to carry across. */
+const PC_VCC_ONLY_RE = /cash\s*cow|vintagecashcow|\bvcc\b|(\+44\s?|\b0)\d{3,4}[\s-]?\d{3}[\s-]?\d{3,4}\b|company\s+(no|number|reg)|registered\s+in\s+england|vat\s+(no|number|reg)|©|all rights reserved/i;
+const PC_BRAND_RE = /vintage\s*cash\s*cow|vintagecashcow|cash\s*cow|\bvcc\b|vintage\.com|vintage\s+com\b|arcavindi/gi;
+
+const pcClean = (t: string | null | undefined) => (t ?? "").replace(/\s+/g, " ").trim();
+const pcNorm = (t: string) => t.toLowerCase().replace(PC_BRAND_RE, " brand ").replace(/[^a-z0-9£$%&\s]/g, " ").replace(/\s+/g, " ").trim();
+const PC_STOP = new Set("the a an and or of to in on for with is are was be we you your our us do does it its at by as from that this these those can how what why when where which who will not no yes if into about than then so but all any".split(" "));
+/** Meaningful words only (filler words ignored) — used for similarity. */
+const pcStem = (w: string) => (w.length > 4 && w.endsWith("ies") ? `${w.slice(0, -3)}y` : w.length > 3 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w);
+const pcTokens = (t: string) => new Set(pcNorm(t).split(" ").filter((w) => w.length > 1 && !PC_STOP.has(w)).map(pcStem));
+function pcContainment(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0) return 0;
+  let n = 0; a.forEach((w) => { if (b.has(w)) n++; });
+  return n / a.size;
+}
+function pcImgStem(src: string): string {
+  let seg = src.split("?")[0].split("#")[0].split("/").pop() ?? "";
+  try { seg = decodeURIComponent(seg); } catch { /* keep */ }
+  return seg.toLowerCase().replace(/\.[a-z0-9]{2,5}$/, "").replace(/^[0-9a-f]{20,}_/, "").replace(/-p-\d+$/, "").replace(/-\d+x\d+$/, "").replace(/[^a-z0-9]/g, "");
+}
+function pcIsChrome(el: Element): boolean {
+  const tag = el.tagName.toUpperCase();
+  if (tag === "NAV" || tag === "FOOTER" || tag === "DIALOG") return true;
+  if (tag === "HEADER" && !el.parentElement?.closest("main, article")) return true;
+  const role = el.getAttribute("role");
+  if (role === "navigation" || role === "banner" || role === "contentinfo" || role === "dialog") return true;
+  if (el.getAttribute("aria-modal") === "true") return true;
+  const tokens = `${el.getAttribute("class") ?? ""} ${el.id ?? ""}`.toLowerCase().split(/\s+/).filter(Boolean);
+  return tokens.some((t) => PC_CHROME_TOKENS.has(t) || /^(navbar|footer|cookie|nav-|mega-menu|site-header|site-footer)/.test(t));
+}
+
+/** Parse a page's HTML into meta, schema and an ordered list of content items grouped under headings. */
+function pcExtract(html: string, pageUrl: string): PcPage {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const metaC = (sel: string) => pcClean(doc.querySelector(sel)?.getAttribute("content"));
+  const abs = (u: string) => { try { return new URL(u, pageUrl).toString(); } catch { return u; } };
+
+  // ── Structured data (whole document) ──
+  const schema: PcSchemaNode[] = []; const schemaRaw: string[] = []; const schemaErrors: string[] = [];
+  const visit = (o: unknown) => {
+    if (Array.isArray(o)) { o.forEach(visit); return; }
+    if (!o || typeof o !== "object") return;
+    const obj = o as Record<string, unknown>;
+    const t = obj["@type"];
+    if (t) schema.push({ type: (Array.isArray(t) ? t.map(String) : [String(t)]).join(", "), props: Object.keys(obj).filter((k) => !k.startsWith("@")).sort() });
+    Object.values(obj).forEach((v) => { if (v && typeof v === "object") visit(v); });
+  };
+  doc.querySelectorAll('script[type="application/ld+json"]').forEach((s, i) => {
+    const txt = s.textContent ?? "";
+    schemaRaw.push(txt.trim());
+    try { visit(JSON.parse(txt)); } catch (e) { schemaErrors.push(`JSON-LD block ${i + 1} doesn't parse: ${e instanceof Error ? e.message : String(e)}`); }
+  });
+  const microdata = Array.from(new Set(Array.from(doc.querySelectorAll("[itemtype]")).map((e) => (e.getAttribute("itemtype") ?? "").replace(/^https?:\/\/schema\.org\//i, ""))));
+
+  // ── References to the old domain anywhere in the page (incl. nav/footer/schema) ──
+  const oldDomainRefs: string[] = [];
+  const addRef = (where: string, val: string) => { if (/vintagecashcow\.co\.uk/i.test(val) && oldDomainRefs.length < 60) oldDomainRefs.push(`${where}: ${val}`); };
+  doc.querySelectorAll("a[href]").forEach((a) => addRef(pcIsChrome(a.closest("nav,footer,header,[role=navigation],[role=contentinfo],[role=banner]") ?? a) ? "Nav/footer link" : "Link", a.getAttribute("href") ?? ""));
+  doc.querySelectorAll("img[src]").forEach((im) => addRef("Image", im.getAttribute("src") ?? ""));
+  doc.querySelectorAll('link[rel="canonical"],link[rel="alternate"]').forEach((l) => addRef(`<link rel="${l.getAttribute("rel")}">`, l.getAttribute("href") ?? ""));
+  doc.querySelectorAll("meta[content]").forEach((m) => addRef(`<meta ${m.getAttribute("property") ?? m.getAttribute("name") ?? ""}>`, m.getAttribute("content") ?? ""));
+  schemaRaw.forEach((r) => { const m = r.match(/https?:\/\/(www\.)?vintagecashcow\.co\.uk[^"\s]*/gi); m?.slice(0, 10).forEach((u) => addRef("Schema", u)); });
+
+  // ── Content walk (main content only) ──
+  doc.querySelectorAll("script,style,noscript,template").forEach((e) => e.remove());
+  const root = doc.querySelector("main") ?? doc.querySelector('[role="main"]') ?? doc.body;
+  const sections: PcSection[] = [{ heading: "(top of page — before the first heading)", level: 0 }];
+  const items: PcItem[] = [];
+  let cur = 0;
+  const seen = new Set<string>();
+  const push = (it: PcItem) => {
+    const k = `${it.kind}|${it.text}|${it.href ?? ""}|${it.src ?? ""}`;
+    if (seen.has(k)) return; seen.add(k); items.push(it);
+  };
+  const pushLink = (a: Element) => {
+    const href = a.getAttribute("href") ?? "";
+    if (!href || href.startsWith("#") || /^javascript:/i.test(href)) return;
+    const cls = (a.getAttribute("class") ?? "").toLowerCase();
+    push({ kind: "link", text: pcClean(a.textContent) || pcClean(a.getAttribute("aria-label")) || pcClean(a.querySelector("img")?.getAttribute("alt")) || href, href: /^(mailto|tel):/i.test(href) ? href : abs(href), section: cur, cta: /button|btn|cta/.test(cls) });
+  };
+  const pushImg = (im: Element) => {
+    const src = im.getAttribute("src") ?? im.getAttribute("data-src") ?? "";
+    if (!src || src.startsWith("data:")) return;
+    push({ kind: "image", text: pcClean(im.getAttribute("alt")) || pcImgStem(src), alt: pcClean(im.getAttribute("alt")), src: abs(src), section: cur });
+  };
+  const inline = (el: Element) => { el.querySelectorAll("a[href]").forEach(pushLink); el.querySelectorAll("img").forEach(pushImg); };
+  const walk = (el: Element) => {
+    Array.from(el.children).forEach((c) => {
+      if (pcIsChrome(c)) return;
+      const tag = c.tagName.toUpperCase();
+      if (tag === "SVG") return;
+      if (/^H[1-6]$/.test(tag)) {
+        const t = pcClean(c.textContent);
+        if (t) { sections.push({ heading: t, level: +tag[1] }); cur = sections.length - 1; push({ kind: "heading", text: t, level: +tag[1], section: cur }); }
+        inline(c); return;
+      }
+      if (tag === "IMG") { pushImg(c); return; }
+      if (tag === "IFRAME" || tag === "VIDEO") {
+        const src = c.getAttribute("src") ?? c.querySelector("source")?.getAttribute("src") ?? "";
+        if (src) push({ kind: "embed", text: abs(src), src: abs(src), section: cur });
+        return;
+      }
+      if (tag === "TABLE") {
+        const head = pcClean(c.querySelector("tr")?.textContent);
+        push({ kind: "table", text: head || "table", section: cur });
+        c.querySelectorAll("tr").forEach((tr) => { const t = pcClean(tr.textContent); if (t.length >= 3) push({ kind: "text", text: t, section: cur, tag: "TR" }); });
+        inline(c); return;
+      }
+      if (tag === "FORM") {
+        const fields = Array.from(c.querySelectorAll("input,select,textarea")).filter((f) => (f.getAttribute("type") ?? "") !== "hidden")
+          .map((f) => f.getAttribute("name") || f.getAttribute("placeholder") || f.getAttribute("type") || f.tagName.toLowerCase());
+        push({ kind: "form", text: `Form (${fields.length} field${fields.length === 1 ? "" : "s"}: ${fields.slice(0, 8).join(", ")})`, section: cur });
+        walk(c); return;
+      }
+      if (tag === "BUTTON") { const t = pcClean(c.textContent); if (t) push({ kind: "link", text: t, href: "(button)", section: cur, cta: true }); return; }
+      const isLeaf = PC_LEAF_TAGS.has(tag) && !c.querySelector(PC_CONTAINER_SEL);
+      if (PC_BLOCK_TAGS.has(tag) || isLeaf) {
+        const t = pcClean(c.textContent);
+        const min = tag === "LI" || tag === "DT" || tag === "DD" ? 2 : 15;
+        if (t.length >= min) push({ kind: "text", text: t, section: cur, tag });
+        inline(c); return;
+      }
+      if (tag === "A") { pushLink(c); if (c.querySelector(PC_CONTAINER_SEL)) walk(c); return; }
+      walk(c);
+    });
+  };
+  walk(root);
+
+  const words = items.filter((i) => i.kind === "text" || i.kind === "heading").reduce((t, i) => t + i.text.split(/\s+/).filter(Boolean).length, 0);
+  return {
+    url: pageUrl,
+    meta: {
+      title: pcClean(doc.querySelector("title")?.textContent), description: metaC('meta[name="description"]'),
+      canonical: pcClean(doc.querySelector('link[rel="canonical"]')?.getAttribute("href")), robots: metaC('meta[name="robots"]'),
+      lang: pcClean(doc.documentElement.getAttribute("lang")),
+      ogTitle: metaC('meta[property="og:title"]'), ogDescription: metaC('meta[property="og:description"]'), ogImage: metaC('meta[property="og:image"]'), ogUrl: metaC('meta[property="og:url"]'),
+      hreflang: Array.from(doc.querySelectorAll('link[rel="alternate"][hreflang]')).map((l) => `${l.getAttribute("hreflang")} → ${l.getAttribute("href")}`),
+      h1: items.filter((i) => i.kind === "heading" && i.level === 1).map((i) => i.text),
+    },
+    sections, items, schema, schemaRaw, schemaErrors, microdata, words, oldDomainRefs,
+  };
+}
+
+/** Compare every old-page item against the new page. */
+function pcCompare(oldP: PcPage, newP: PcPage): PcMatch[] {
+  const builtIn = prBuiltInRedirects();
+  const newTextItems = newP.items.filter((i) => i.kind === "text" || i.kind === "heading");
+  const newTok = newTextItems.map((i) => ({ i, t: pcTokens(i.text) }));
+  const newFull = ` ${newTextItems.map((i) => pcNorm(i.text)).join(" | ")} `;
+  const newImgs = newP.items.filter((i) => i.kind === "image");
+  const newImgStems = new Set(newImgs.map((i) => pcImgStem(i.src ?? "")).filter(Boolean));
+  const newImgAlts = newImgs.map((i) => pcTokens(i.alt ?? "")).filter((s) => s.size > 0);
+  const newLinkKeys = new Set<string>();
+  newP.items.filter((i) => i.kind === "link" && i.href).forEach((i) => {
+    try { const u = new URL(i.href!); newLinkKeys.add(prIsVccHost(u.host) || prIsNewHost(u.host) ? `int:${prKey(u.pathname)}` : `ext:${prNormHost(u.host)}${u.pathname.replace(/\/$/, "")}`); }
+    catch { newLinkKeys.add(i.href!); }
+  });
+  const newCtaText = newP.items.filter((i) => i.kind === "link").map((i) => pcNorm(i.text));
+  const newEmbeds = new Set(newP.items.filter((i) => i.kind === "embed").map((i) => (i.src ?? "").replace(/^https?:\/\/(www\.)?/, "").split("?")[0]));
+  const newTables = newP.items.filter((i) => i.kind === "table").map((i) => pcTokens(i.text));
+  const newForms = newP.items.filter((i) => i.kind === "form").length;
+  let formsSeen = 0;
+
+  return oldP.items.map((item): PcMatch => {
+    const vccOnly = PC_VCC_ONLY_RE.test(item.text) || /^tel:/i.test(item.href ?? "");
+    const finish = (status: PcStatus, score: number, best?: string): PcMatch => ({ item, status: status === "missing" && vccOnly ? "vccOnly" : status, score, best });
+    if (item.kind === "text" || item.kind === "heading") {
+      const norm = pcNorm(item.text);
+      if (norm.length > 0 && newFull.includes(` ${norm} `)) return finish("found", 1);
+      if (norm.length >= 12 && newFull.includes(norm)) return finish("found", 1);
+      const tok = pcTokens(item.text);
+      let best = 0, bestText = "";
+      // Headings are only compared with headings; short items need near-identical wording to count as "reworded".
+      newTok.forEach(({ i, t }) => {
+        if (item.kind === "heading" && i.kind !== "heading") return;
+        const c = pcContainment(tok, t); if (c > best) { best = c; bestText = i.text; }
+      });
+      const short = item.kind === "heading" || tok.size < 4;
+      const foundAt = short ? 0.95 : 0.85, rewordAt = short ? 0.8 : 0.5;
+      return finish(best >= foundAt ? "found" : best >= rewordAt ? "reworded" : "missing", best, bestText);
+    }
+    if (item.kind === "image") {
+      const stem = pcImgStem(item.src ?? "");
+      if (stem && newImgStems.has(stem)) return finish("found", 1);
+      const at = pcTokens(item.alt ?? "");
+      if (at.size > 0 && newImgAlts.some((s) => pcContainment(at, s) >= 0.8)) return finish("found", 0.9);
+      return finish("missing", 0);
+    }
+    if (item.kind === "link") {
+      if (item.href === "(button)" || item.cta) {
+        const n = pcNorm(item.text);
+        return finish(n && newCtaText.includes(n) ? "found" : "missing", 0);
+      }
+      if (/^mailto:/i.test(item.href ?? "")) return finish(newP.items.some((i) => i.href?.toLowerCase() === item.href?.toLowerCase()) ? "found" : "missing", 0);
+      if (/^tel:/i.test(item.href ?? "")) return finish(newP.items.some((i) => i.href?.replace(/\D/g, "") === item.href?.replace(/\D/g, "")) ? "found" : "missing", 0);
+      try {
+        const u = new URL(item.href!);
+        if (prIsVccHost(u.host) || prIsNewHost(u.host) || u.host === PC_STAGING_HOST || u.host === "web.archive.org") {
+          // Wayback rewrites links to /web/<ts>/<original>; recover the original path.
+          let path = u.pathname;
+          const wb = path.match(/^\/web\/\d+[a-z_]*\/(https?:\/\/[^/]+)?(\/.*)?$/i);
+          if (u.host === "web.archive.org" && wb) path = wb[2] ?? "/";
+          const k = prKey(path);
+          const expected = builtIn.get(k)?.to || k;
+          const ok = newLinkKeys.has(`int:${expected}`) || newLinkKeys.has(`int:${k}`);
+          return finish(ok ? "found" : "missing", 0, `expected → ${expected}`);
+        }
+        return finish(newLinkKeys.has(`ext:${prNormHost(u.host)}${u.pathname.replace(/\/$/, "")}`) ? "found" : "missing", 0);
+      } catch { return finish("missing", 0); }
+    }
+    if (item.kind === "embed") return finish(newEmbeds.has((item.src ?? "").replace(/^https?:\/\/(www\.)?/, "").split("?")[0]) ? "found" : "missing", 0);
+    if (item.kind === "table") { const t = pcTokens(item.text); return finish(newTables.some((n) => pcContainment(t, n) >= 0.6) ? "found" : "missing", 0); }
+    if (item.kind === "form") { formsSeen++; return finish(formsSeen <= newForms ? "found" : "missing", 0); }
+    return finish("found", 1);
+  });
+}
+
+/** Fetch a URL's text, trying direct (CORS) first and then the allorigins proxy the dashboard already uses. */
+async function pcFetchText(url: string): Promise<{ text: string; via: string }> {
+  const attempt = async (u: string, json = false) => {
+    const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 25000);
+    try {
+      const r = await fetch(u, { signal: ctl.signal });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (json) { const j = await r.json() as { contents?: string; status?: { http_code?: number } }; if (!j.contents) throw new Error(`empty (HTTP ${j.status?.http_code ?? "?"})`); return j.contents; }
+      return await r.text();
+    } finally { clearTimeout(to); }
+  };
+  const errors: string[] = [];
+  for (const [label, u, json] of [
+    ["direct", url, false], ["allorigins", `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, false], ["allorigins", `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, true],
+  ] as [string, string, boolean][]) {
+    try { const text = await attempt(u, json); if (text && text.length > 50) return { text, via: label }; errors.push(`${label}: empty`); }
+    catch (e) { errors.push(`${label}: ${e instanceof Error ? e.message : String(e)}`); }
+  }
+  throw new Error(`Couldn't fetch ${url} (${errors.join("; ")})`);
+}
+
+type PcOldSource = "auto" | "wayback" | "staging" | "paste";
+type PcNewSource = "live" | "paste";
+
+const PC_KIND_LABEL: Record<PcKind, string> = { text: "Text", heading: "Heading", image: "Image", link: "Link", embed: "Video / embed", table: "Table", form: "Form" };
+const PC_KIND_CLS: Record<PcKind, string> = {
+  text: "bg-gray-100 text-gray-700", heading: "bg-purple-100 text-purple-700", image: "bg-sky-100 text-sky-700", link: "bg-amber-100 text-amber-800",
+  embed: "bg-pink-100 text-pink-700", table: "bg-indigo-100 text-indigo-700", form: "bg-emerald-100 text-emerald-700",
+};
+
+function PageContentCheckView() {
+  const saved = (() => { try { return JSON.parse(localStorage.getItem(LS_PC_STATE) ?? "{}") as Record<string, string>; } catch { return {}; } })();
+  const migrationDate = (() => { try { return localStorage.getItem(LS_POST_REBRAND_DATE) || POST_REBRAND_DEFAULT_DATE; } catch { return POST_REBRAND_DEFAULT_DATE; } })();
+  const [newUrl, setNewUrl] = useState(saved.newUrl ?? "");
+  const [oldUrl, setOldUrl] = useState(saved.oldUrl ?? "");
+  const [oldSource, setOldSource] = useState<PcOldSource>((saved.oldSource as PcOldSource) || "auto");
+  const [newSource, setNewSource] = useState<PcNewSource>((saved.newSource as PcNewSource) || "live");
+  const [oldPaste, setOldPaste] = useState("");
+  const [newPaste, setNewPaste] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notes, setNotes] = useState<string[]>([]);
+  const [result, setResult] = useState<{ oldP: PcPage; newP: PcPage; matches: PcMatch[]; oldVia: string; newVia: string } | null>(null);
+  const [onlyMissing, setOnlyMissing] = useState(true);
+  const [showReworded, setShowReworded] = useState(true);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => { try { localStorage.setItem(LS_PC_STATE, JSON.stringify({ newUrl, oldUrl, oldSource, newSource })); } catch { /* ignore */ } }, [newUrl, oldUrl, oldSource, newSource]);
+
+  // Redirect list → reverse index (vintage.com path → old VCC paths) + autocomplete list.
+  const { reverse, targets } = useMemo(() => {
+    const rev = new Map<string, string[]>();
+    prBuiltInRedirects().forEach((v, from) => { if (v.to) rev.set(v.to, [...(rev.get(v.to) ?? []), from]); });
+    return { reverse: rev, targets: Array.from(rev.keys()).sort() };
+  }, []);
+
+  const parsedNew = useMemo(() => {
+    const raw = newUrl.trim();
+    if (!raw) return null;
+    let u: URL;
+    try { u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://www.vintage.com${raw.startsWith("/") ? "" : "/"}${raw}`); } catch { return null; }
+    return { host: u.host, key: prKey(u.pathname), isOld: prIsVccHost(u.host) };
+  }, [newUrl]);
+  // If an old VCC URL was typed, map it forward; otherwise list the old URLs that redirect here.
+  const candidates = useMemo(() => {
+    if (!parsedNew) return [] as string[];
+    if (parsedNew.isOld) return [parsedNew.key];
+    const list = reverse.get(parsedNew.key) ?? [];
+    const slug = parsedNew.key.split("/").filter(Boolean).pop() ?? "";
+    return [...list].sort((a, b) => {
+      const score = (x: string) => (x === parsedNew.key ? 0 : (x.split("/").filter(Boolean).pop() ?? "") === slug ? 1 : 2);
+      return score(a) - score(b) || a.length - b.length;
+    });
+  }, [parsedNew, reverse]);
+  const newPathResolved = useMemo(() => {
+    if (!parsedNew) return "";
+    if (!parsedNew.isOld) return parsedNew.key;
+    return prBuiltInRedirects().get(parsedNew.key)?.to || parsedNew.key;
+  }, [parsedNew]);
+  useEffect(() => { if (candidates.length && !candidates.includes(oldUrl)) setOldUrl(candidates[0]); }, [candidates]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const run = useCallback(async () => {
+    setError(null); setNotes([]); setResult(null);
+    if (!parsedNew && newSource === "live") { setError("Enter a vintage.com URL (or an old vintagecashcow.co.uk URL)."); return; }
+    const oldPath = oldUrl.trim() ? prKey(oldUrl.trim().replace(/^https?:\/\/[^/]+/i, "")) : "";
+    if (!oldPath && oldSource !== "paste") { setError("No old VCC URL found in the redirect list for that page — type the old URL in."); return; }
+    setLoading(true);
+    const n: string[] = [];
+    try {
+      const newFull = `https://www.vintage.com${newPathResolved === "/" ? "/" : newPathResolved}`;
+      const oldFull = `https://www.vintagecashcow.co.uk${oldPath === "/" ? "/" : oldPath}`;
+      // New page
+      let newHtml = "", newVia = "";
+      if (newSource === "paste") { newHtml = newPaste; newVia = "pasted HTML"; }
+      else { const r = await pcFetchText(newFull); newHtml = r.text; newVia = `live page (${r.via})`; }
+      if (!newHtml.trim()) throw new Error("The new page's HTML is empty.");
+      // Old page
+      let oldHtml = "", oldVia = "", oldBase = oldFull;
+      if (oldSource === "paste") { oldHtml = oldPaste; oldVia = "pasted HTML"; }
+      else {
+        const tryWayback = async () => {
+          const to = migrationDate.replace(/-/g, "");
+          const cdx = await pcFetchText(`https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(oldFull.replace(/^https?:\/\//, ""))}&to=${to}&filter=statuscode:200&output=json&limit=-1`);
+          const rows = JSON.parse(cdx.text) as string[][];
+          const last = rows.length > 1 ? rows[rows.length - 1] : null;
+          if (!last) throw new Error("no Wayback snapshot before the migration");
+          const [, ts, original] = last;
+          const r = await pcFetchText(`https://web.archive.org/web/${ts}id_/${original}`);
+          oldBase = original;
+          return { text: r.text, via: `Wayback Machine snapshot ${ts.slice(6, 8)}/${ts.slice(4, 6)}/${ts.slice(0, 4)}` };
+        };
+        const tryStaging = async () => {
+          const r = await pcFetchText(`https://${PC_STAGING_HOST}${oldPath === "/" ? "/" : oldPath}`);
+          return { text: r.text, via: `old Webflow staging site (${PC_STAGING_HOST})` };
+        };
+        const order = oldSource === "wayback" ? [tryWayback] : oldSource === "staging" ? [tryStaging] : [tryWayback, tryStaging];
+        for (const f of order) {
+          try { const r = await f(); oldHtml = r.text; oldVia = r.via; break; }
+          catch (e) { n.push(`Old page via ${f === tryWayback ? "Wayback" : "staging"} failed: ${e instanceof Error ? e.message : String(e)}`); }
+        }
+        if (!oldHtml) throw new Error("Couldn't get the old VCC page's HTML. Choose “Paste HTML” for the old page and paste it in (e.g. from a saved copy or the Wayback Machine).");
+      }
+      const oldP = pcExtract(oldHtml, oldBase);
+      const newP = pcExtract(newHtml, newFull);
+      if (/vintage\.com/i.test(oldP.meta.canonical) && !/vintagecashcow/i.test(oldP.meta.canonical)) n.push(`Heads-up: the "old" HTML has a vintage.com canonical (${oldP.meta.canonical}) — it may already be the new page (e.g. the staging site was updated). Check the source.`);
+      setResult({ oldP, newP, matches: pcCompare(oldP, newP), oldVia, newVia });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setNotes(n); setLoading(false);
+    }
+  }, [parsedNew, newPathResolved, oldUrl, oldSource, newSource, oldPaste, newPaste, migrationDate]);
+
+  // ── Derived results ──
+  const view = useMemo(() => {
+    if (!result) return null;
+    const { oldP, newP, matches } = result;
+    const counts = (kind: PcKind | "all", st: PcStatus) => matches.filter((m) => (kind === "all" || m.item.kind === kind) && m.status === st).length;
+    const textMs = matches.filter((m) => m.item.kind === "text" && m.status !== "vccOnly");
+    const totalChars = textMs.reduce((t, m) => t + m.item.text.length, 0);
+    const keptChars = textMs.reduce((t, m) => t + m.item.text.length * (m.status === "found" ? 1 : m.status === "reworded" ? 0.5 : 0), 0);
+    const coverage = totalChars ? keptChars / totalChars : 1;
+    const bySection = oldP.sections.map((sec, idx) => {
+      const ms = matches.filter((m) => m.item.section === idx);
+      const missing = ms.filter((m) => m.status === "missing");
+      const reworded = ms.filter((m) => m.status === "reworded");
+      const headingMissing = ms.some((m) => m.item.kind === "heading" && m.status === "missing");
+      const textTotal = ms.filter((m) => m.item.kind === "text").length;
+      const textMissing = missing.filter((m) => m.item.kind === "text").length;
+      const status = ms.length === 0 ? "empty" : missing.length === 0 && reworded.length === 0 ? "ok" : (headingMissing && (textTotal === 0 || textMissing / textTotal >= 0.7)) ? "gone" : missing.length === 0 ? "reworded" : "partial";
+      return { sec, idx, ms, missing, reworded, status };
+    }).filter((s) => s.status !== "empty");
+    // Schema comparison by type
+    const typeCount = (p: PcPage) => { const m = new Map<string, { n: number; props: Set<string> }>(); p.schema.forEach((s) => { const x = m.get(s.type) ?? { n: 0, props: new Set<string>() }; x.n++; s.props.forEach((pp) => x.props.add(pp)); m.set(s.type, x); }); return m; };
+    const so = typeCount(oldP), sn = typeCount(newP);
+    const schemaRows = Array.from(new Set([...so.keys(), ...sn.keys()])).map((type) => {
+      const a = so.get(type), b = sn.get(type);
+      const missingProps = a && b ? Array.from(a.props).filter((p) => !b.props.has(p)) : [];
+      const addedProps = a && b ? Array.from(b.props).filter((p) => !a.props.has(p)) : [];
+      return { type, old: a?.n ?? 0, now: b?.n ?? 0, missingProps, addedProps, status: !b ? "missing" : !a ? "added" : missingProps.length ? "partial" : "ok" };
+    }).sort((x, y) => ({ missing: 0, partial: 1, added: 2, ok: 3 } as Record<string, number>)[x.status] - ({ missing: 0, partial: 1, added: 2, ok: 3 } as Record<string, number>)[y.status]);
+    const micro = { missing: oldP.microdata.filter((t) => !newP.microdata.includes(t)), added: newP.microdata.filter((t) => !oldP.microdata.includes(t)) };
+    // New-only headings (added content)
+    const oldHeadTok = oldP.items.filter((i) => i.kind === "heading").map((i) => pcTokens(i.text));
+    const addedHeadings = newP.items.filter((i) => i.kind === "heading").filter((i) => { const t = pcTokens(i.text); return !oldHeadTok.some((o) => pcContainment(t, o) >= 0.7); }).map((i) => i.text);
+    // Meta / indexing checks
+    const mo = oldP.meta, mn = newP.meta;
+    const flags: { level: "bad" | "warn"; text: string }[] = [];
+    if (/noindex/i.test(mn.robots)) flags.push({ level: "bad", text: `New page has robots “${mn.robots}” — it won't be indexed.` });
+    if (!mn.canonical) flags.push({ level: "warn", text: "New page has no canonical tag." });
+    else if (!/vintage\.com/i.test(mn.canonical)) flags.push({ level: "bad", text: `New page's canonical points off vintage.com: ${mn.canonical}` });
+    else { try { if (prKey(new URL(mn.canonical).pathname) !== prKey(new URL(newP.url).pathname)) flags.push({ level: "warn", text: `New page's canonical points to a different page: ${mn.canonical}` }); } catch { /* ignore */ } }
+    if (mn.h1.length === 0) flags.push({ level: "bad", text: "New page has no H1." }); else if (mn.h1.length > 1) flags.push({ level: "warn", text: `New page has ${mn.h1.length} H1s.` });
+    if (!mn.description && mo.description) flags.push({ level: "warn", text: "Meta description was dropped." });
+    if (!mn.title) flags.push({ level: "bad", text: "New page has no <title>." });
+    if (mo.hreflang.length > 0 && mn.hreflang.length === 0) flags.push({ level: "warn", text: `Old page had ${mo.hreflang.length} hreflang tags; new page has none.` });
+    if (newP.oldDomainRefs.length) flags.push({ level: "bad", text: `New page still references vintagecashcow.co.uk ${newP.oldDomainRefs.length} time${newP.oldDomainRefs.length > 1 ? "s" : ""} (see below).` });
+    if (schemaRows.some((r) => r.status === "missing")) flags.push({ level: "bad", text: `Structured data dropped: ${schemaRows.filter((r) => r.status === "missing").map((r) => r.type).join(", ")}.` });
+    if (newP.schemaErrors.length) flags.push({ level: "bad", text: `New page has invalid JSON-LD: ${newP.schemaErrors.join("; ")}` });
+    if (oldP.words > 0 && newP.words < oldP.words * 0.7) flags.push({ level: "warn", text: `Main content is ${Math.round((1 - newP.words / oldP.words) * 100)}% shorter (${prInt(oldP.words)} → ${prInt(newP.words)} words).` });
+    const metaRows: [string, string, string, boolean][] = [
+      ["Title", mo.title, mn.title, pcNorm(mo.title) !== pcNorm(mn.title)],
+      ["Meta description", mo.description, mn.description, pcNorm(mo.description) !== pcNorm(mn.description)],
+      ["H1", mo.h1.join(" | "), mn.h1.join(" | "), pcNorm(mo.h1.join(" ")) !== pcNorm(mn.h1.join(" "))],
+      ["Canonical", mo.canonical, mn.canonical, false],
+      ["Robots", mo.robots || "(none)", mn.robots || "(none)", (mo.robots || "") !== (mn.robots || "")],
+      ["Language", mo.lang, mn.lang, mo.lang.toLowerCase() !== mn.lang.toLowerCase()],
+      ["hreflang tags", String(mo.hreflang.length), String(mn.hreflang.length), mo.hreflang.length !== mn.hreflang.length],
+      ["og:title", mo.ogTitle, mn.ogTitle, pcNorm(mo.ogTitle) !== pcNorm(mn.ogTitle)],
+      ["og:description", mo.ogDescription, mn.ogDescription, pcNorm(mo.ogDescription) !== pcNorm(mn.ogDescription)],
+      ["og:image", mo.ogImage ? "yes" : "—", mn.ogImage ? "yes" : "—", !!mo.ogImage && !mn.ogImage],
+      ["Main-content words", prInt(oldP.words), prInt(newP.words), newP.words < oldP.words * 0.9],
+    ];
+    return { counts, coverage, bySection, schemaRows, micro, addedHeadings, flags, metaRows, vccOnly: matches.filter((m) => m.status === "vccOnly") };
+  }, [result]);
+
+  const buildCopy = useCallback(() => {
+    if (!result || !view) return "";
+    const lines = [`Content check: ${result.oldP.url} → ${result.newP.url}`, `Content carried over: ${Math.round(view.coverage * 100)}%`, ""];
+    view.flags.forEach((f) => lines.push(`${f.level === "bad" ? "❗" : "⚠️"} ${f.text}`));
+    view.bySection.filter((s) => s.missing.length).forEach((s) => {
+      lines.push("", `## ${s.sec.heading}`);
+      s.missing.forEach((m) => lines.push(`- [${PC_KIND_LABEL[m.item.kind]}] ${m.item.kind === "image" ? `${m.item.alt || "(no alt)"} — ${m.item.src}` : m.item.kind === "link" ? `${m.item.text} → ${m.best ?? m.item.href}` : m.item.text}`));
+    });
+    const sm = view.schemaRows.filter((r) => r.status === "missing" || r.status === "partial");
+    if (sm.length) { lines.push("", "## Structured data"); sm.forEach((r) => lines.push(`- ${r.type}: ${r.status === "missing" ? "missing on new page" : `missing properties ${r.missingProps.join(", ")}`}`)); }
+    return lines.join("\n");
+  }, [result, view]);
+
+  const th = "px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap";
+  const td = "px-3 py-2 text-xs text-gray-700 align-top";
+  const secCls: Record<string, [string, string]> = {
+    gone: ["Missing entirely", "bg-red-100 text-red-700 border-red-200"], partial: ["Partly missing", "bg-amber-50 text-amber-700 border-amber-200"],
+    reworded: ["Reworded", "bg-sky-50 text-sky-700 border-sky-200"], ok: ["All carried over", "bg-emerald-50 text-emerald-700 border-emerald-200"],
+  };
+  const selCls = "bg-white/10 border border-white/25 rounded-xl px-3 py-1.5 text-sm text-white focus:outline-none focus:border-white/60 [&>option]:text-gray-900";
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-2xl p-6 text-white shadow-sm" style={{ background: "linear-gradient(135deg,#4c1d95 0%,#7e22ce 55%,#0d9488 100%)" }}>
+        <p className="text-[11px] font-bold uppercase tracking-widest text-white/70">Old VCC page vs new vintage.com page · HTML + structured data</p>
+        <h2 className="text-2xl font-bold mt-1">Page Content Check</h2>
+        <p className="text-sm text-white/80 mt-1.5 max-w-3xl">Enter a vintage.com URL. The redirect list finds the old Vintage Cash Cow URL that 301s to it. Both pages are compared section by section, ignoring nav, header, footer and cookie banners, so you only see page content that didn't make it across.</p>
+        <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-[11px] font-semibold text-white/70 mb-1">vintage.com URL (or an old vintagecashcow.co.uk URL)</label>
+            <input list="pc-targets" value={newUrl} onChange={(e) => setNewUrl(e.target.value)} placeholder="https://www.vintage.com/items-we-buy/jewellery/pearls"
+              className="w-full bg-white/10 border border-white/25 rounded-xl px-3 py-2 text-sm text-white placeholder-white/40 focus:outline-none focus:border-white/60" />
+            <datalist id="pc-targets">{targets.slice(0, 3000).map((t) => <option key={t} value={`https://www.vintage.com${t}`} />)}</datalist>
+            {parsedNew && <p className="text-[11px] text-white/70 mt-1">{parsedNew.isOld ? <>Old URL entered → redirects to <strong>vintage.com{newPathResolved}</strong></> : candidates.length ? <>{candidates.length} old VCC URL{candidates.length > 1 ? "s" : ""} redirect here</> : <>No old URL in the redirect list redirects here — type one in →</>}</p>}
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-white/70 mb-1">Old Vintage Cash Cow URL</label>
+            {candidates.length > 1 && !parsedNew?.isOld ? (
+              <select value={oldUrl} onChange={(e) => setOldUrl(e.target.value)} className={`w-full ${selCls}`}>
+                {candidates.slice(0, 500).map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            ) : (
+              <input value={oldUrl} onChange={(e) => setOldUrl(e.target.value)} placeholder="/items-we-buy/pearls"
+                className="w-full bg-white/10 border border-white/25 rounded-xl px-3 py-2 text-sm text-white placeholder-white/40 focus:outline-none focus:border-white/60" />
+            )}
+            {candidates.length > 500 && <p className="text-[11px] text-white/70 mt-1">Showing 500 of {prInt(candidates.length)} — type the old URL instead if it's not listed.</p>}
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap items-end gap-x-6 gap-y-3">
+          <div>
+            <label className="block text-[11px] font-semibold text-white/70 mb-1">Old page HTML from</label>
+            <select value={oldSource} onChange={(e) => setOldSource(e.target.value as PcOldSource)} className={selCls}>
+              <option value="auto">Auto (Wayback snapshot, then staging site)</option>
+              <option value="wayback">Wayback Machine (last snapshot before {formatDisplayDate(migrationDate)})</option>
+              <option value="staging">Old Webflow staging site</option>
+              <option value="paste">Paste HTML</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-white/70 mb-1">New page HTML from</label>
+            <select value={newSource} onChange={(e) => setNewSource(e.target.value as PcNewSource)} className={selCls}>
+              <option value="live">Live vintage.com page</option>
+              <option value="paste">Paste HTML</option>
+            </select>
+          </div>
+          <button type="button" onClick={() => void run()} disabled={loading}
+            className="inline-flex items-center gap-2 bg-white text-purple-800 hover:bg-purple-50 disabled:opacity-60 px-4 py-2 rounded-xl text-sm font-bold shadow-sm">
+            <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> {loading ? "Comparing…" : "Compare pages"}
+          </button>
+        </div>
+        {(oldSource === "paste" || newSource === "paste") && (
+          <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {oldSource === "paste" && <textarea value={oldPaste} onChange={(e) => setOldPaste(e.target.value)} rows={5} placeholder="Paste the OLD VCC page's HTML (View source → copy all)" className="w-full font-mono text-xs bg-white text-gray-800 rounded-xl px-3 py-2" />}
+            {newSource === "paste" && <textarea value={newPaste} onChange={(e) => setNewPaste(e.target.value)} rows={5} placeholder="Paste the NEW vintage.com page's HTML" className="w-full font-mono text-xs bg-white text-gray-800 rounded-xl px-3 py-2" />}
+          </div>
+        )}
+      </div>
+
+      {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">{error}</div>}
+      {notes.length > 0 && <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-900 space-y-1">{notes.map((x, i) => <p key={i}>{x}</p>)}</div>}
+      {loading && <Spinner />}
+
+      {result && view && (
+        <div className="space-y-6">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs bg-white border border-purple-100 rounded-xl px-3 py-2">
+            <span className="font-semibold text-purple-700">Old:</span>
+            <a href={`https://www.vintagecashcow.co.uk${prKey(result.oldP.url.replace(/^https?:\/\/[^/]+/i, ""))}`} target="_blank" rel="noopener noreferrer" className="text-gray-700 hover:underline">{result.oldP.url}</a>
+            <span className="text-gray-400">({result.oldVia})</span>
+            <span className="text-gray-300">vs</span>
+            <span className="font-semibold text-teal-700">New:</span>
+            <a href={result.newP.url} target="_blank" rel="noopener noreferrer" className="text-gray-700 hover:underline">{result.newP.url}</a>
+            <span className="text-gray-400">({result.newVia})</span>
+          </div>
+
+          {/* Score tiles */}
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+            {[
+              { l: "Content carried over", v: `${Math.round(view.coverage * 100)}%`, s: "of old page text (reworded = half)", c: view.coverage >= 0.9 ? "text-emerald-600" : view.coverage >= 0.7 ? "text-amber-600" : "text-red-600" },
+              { l: "Text blocks missing", v: prInt(view.counts("text", "missing")), s: `${prInt(view.counts("text", "reworded"))} reworded`, c: view.counts("text", "missing") ? "text-red-600" : "text-emerald-600" },
+              { l: "Headings missing", v: prInt(view.counts("heading", "missing")), s: `of ${prInt(result.oldP.items.filter((i) => i.kind === "heading").length)} on old page`, c: view.counts("heading", "missing") ? "text-red-600" : "text-emerald-600" },
+              { l: "Images missing", v: prInt(view.counts("image", "missing")), s: `of ${prInt(result.oldP.items.filter((i) => i.kind === "image").length)} (matched by file name / alt)`, c: view.counts("image", "missing") ? "text-red-600" : "text-emerald-600" },
+              { l: "Links / CTAs missing", v: prInt(view.counts("link", "missing")), s: "internal links mapped via redirect list", c: view.counts("link", "missing") ? "text-red-600" : "text-emerald-600" },
+              { l: "Schema types missing", v: prInt(view.schemaRows.filter((r) => r.status === "missing").length), s: `${prInt(view.schemaRows.filter((r) => r.status === "partial").length)} with missing properties`, c: view.schemaRows.some((r) => r.status === "missing") ? "text-red-600" : "text-emerald-600" },
+            ].map((x) => (
+              <div key={x.l} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                <p className="text-[11px] font-semibold text-gray-500">{x.l}</p>
+                <p className={`text-2xl font-bold mt-1.5 leading-none ${x.c}`}>{x.v}</p>
+                <p className="text-[10px] text-gray-400 mt-1">{x.s}</p>
+              </div>
+            ))}
+          </div>
+
+          {view.flags.length > 0 && (
+            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm space-y-1.5">
+              <p className="text-xs font-bold text-gray-800 mb-1">Things to fix first</p>
+              {view.flags.map((f, i) => (
+                <p key={i} className={`text-xs ${f.level === "bad" ? "text-red-700" : "text-amber-700"}`}>{f.level === "bad" ? "❗" : "⚠️"} {f.text}</p>
+              ))}
+            </div>
+          )}
+
+          {/* Sections */}
+          <section className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+            <div className="flex items-end justify-between gap-3 flex-wrap mb-4">
+              <div>
+                <h2 className="text-base font-bold text-gray-900">Sections with missing content</h2>
+                <p className="text-xs text-gray-500 mt-0.5 max-w-3xl">Grouped under the old page's headings. <strong>Missing</strong> = not found anywhere on the new page. <strong>Reworded</strong> = a similar but different version exists (shown alongside). Brand names are ignored when matching, so “Vintage Cash Cow” → “Vintage.com” doesn't count as a change.</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="text-[11px] text-gray-600 flex items-center gap-1.5"><input type="checkbox" checked={onlyMissing} onChange={(e) => setOnlyMissing(e.target.checked)} /> Only sections with issues</label>
+                <label className="text-[11px] text-gray-600 flex items-center gap-1.5"><input type="checkbox" checked={showReworded} onChange={(e) => setShowReworded(e.target.checked)} /> Show reworded</label>
+                <button type="button" onClick={async () => { await navigator.clipboard.writeText(buildCopy()); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+                  className={`text-xs font-semibold px-3 py-1.5 rounded-lg border ${copied ? "bg-emerald-50 border-emerald-300 text-emerald-700" : "bg-white border-gray-200 text-gray-600 hover:border-purple-300"}`}>{copied ? "✓ Copied" : "📋 Copy missing list"}</button>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {view.bySection.filter((s) => !onlyMissing || s.missing.length > 0 || (showReworded && s.reworded.length > 0)).map((s) => (
+                <div key={s.idx} className={`border rounded-xl ${s.status === "gone" ? "border-red-200" : s.status === "partial" ? "border-amber-200" : "border-gray-100"}`}>
+                  <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-gray-50/60 rounded-t-xl">
+                    <p className="text-sm font-semibold text-gray-900 min-w-0 truncate">{s.sec.level > 0 && <span className="text-[10px] font-bold text-gray-400 mr-1.5">H{s.sec.level}</span>}{s.sec.heading}</p>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-[10px] text-gray-400">{s.missing.length} missing · {s.reworded.length} reworded · {s.ms.length} items</span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${secCls[s.status][1]}`}>{secCls[s.status][0]}</span>
+                    </div>
+                  </div>
+                  {(s.missing.length > 0 || (showReworded && s.reworded.length > 0)) && (
+                    <ul className="divide-y divide-gray-50">
+                      {[...s.missing, ...(showReworded ? s.reworded : [])].map((m, i) => (
+                        <li key={i} className="px-4 py-2 flex items-start gap-3">
+                          <span className={`shrink-0 mt-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded ${PC_KIND_CLS[m.item.kind]}`}>{PC_KIND_LABEL[m.item.kind]}</span>
+                          <div className="min-w-0 flex-1 text-xs text-gray-700">
+                            {m.item.kind === "image" ? (
+                              <div className="flex items-center gap-3">
+                                {m.item.src && <img src={m.item.src} alt="" className="w-14 h-10 object-cover rounded border border-gray-100 bg-gray-50" loading="lazy" />}
+                                <div className="min-w-0"><p className="truncate">{m.item.alt ? <>alt: “{m.item.alt}”</> : <span className="text-red-600">no alt text</span>}</p><a href={m.item.src} target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-400 hover:underline truncate block">{m.item.src}</a></div>
+                              </div>
+                            ) : m.item.kind === "link" ? (
+                              <p>“{m.item.text}”{m.item.cta && <span className="ml-1 text-[10px] text-amber-700 font-semibold">button</span>} <span className="text-gray-400">→ {m.item.href}</span>{m.best && <span className="block text-[10px] text-gray-500">{m.best} — not linked from the new page</span>}</p>
+                            ) : (
+                              <p className={m.item.kind === "heading" ? "font-semibold" : ""}>{m.item.text}</p>
+                            )}
+                            {m.status === "reworded" && m.best && <p className="mt-1 text-[11px] text-sky-700 bg-sky-50 rounded px-2 py-1"><span className="font-semibold">Closest on new page ({Math.round(m.score * 100)}% of words):</span> {m.best}</p>}
+                          </div>
+                          <span className={`shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded ${m.status === "missing" ? "bg-red-100 text-red-700" : "bg-sky-100 text-sky-700"}`}>{m.status === "missing" ? "Missing" : "Reworded"}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))}
+              {view.bySection.every((s) => s.missing.length === 0 && (!showReworded || s.reworded.length === 0)) && onlyMissing && <p className="text-sm text-emerald-700 bg-emerald-50 rounded-xl px-4 py-3">Nothing missing — every section of the old page's content was found on the new page.</p>}
+            </div>
+          </section>
+
+          {/* Structured data */}
+          <section className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+            <div className="mb-4">
+              <h2 className="text-base font-bold text-gray-900">Schema / structured data</h2>
+              <p className="text-xs text-gray-500 mt-0.5">JSON-LD types (including nested ones, e.g. Question inside FAQPage) and their properties, old vs new. Microdata itemtypes are listed underneath.</p>
+            </div>
+            {view.schemaRows.length === 0 ? <p className="text-xs text-gray-400">Neither page has JSON-LD structured data.</p> : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead className="bg-gray-50"><tr><th className={th}>Type</th><th className={`${th} text-right`}>Old</th><th className={`${th} text-right`}>New</th><th className={th}>Status</th><th className={th}>Properties missing on new page</th><th className={th}>Added</th></tr></thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {view.schemaRows.map((r) => (
+                      <tr key={r.type}>
+                        <td className={`${td} font-semibold`}>{r.type}</td>
+                        <td className={`${td} text-right`}>{r.old}</td>
+                        <td className={`${td} text-right`}>{r.now}</td>
+                        <td className={td}><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.status === "missing" ? "bg-red-100 text-red-700" : r.status === "partial" ? "bg-amber-50 text-amber-700" : r.status === "added" ? "bg-sky-50 text-sky-700" : "bg-emerald-50 text-emerald-700"}`}>{r.status === "missing" ? "Missing" : r.status === "partial" ? "Missing properties" : r.status === "added" ? "New only" : "OK"}</span></td>
+                        <td className={`${td} text-red-600`}>{r.missingProps.join(", ") || "—"}</td>
+                        <td className={`${td} text-gray-500`}>{r.addedProps.join(", ") || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {(view.micro.missing.length > 0 || view.micro.added.length > 0) && (
+              <p className="text-xs text-gray-600 mt-3">Microdata — missing on new: <strong className="text-red-600">{view.micro.missing.join(", ") || "none"}</strong> · added: {view.micro.added.join(", ") || "none"}</p>
+            )}
+            {(result.oldP.schemaErrors.length > 0 || result.newP.schemaErrors.length > 0) && (
+              <div className="mt-3 text-xs text-red-700 space-y-0.5">{[...result.oldP.schemaErrors.map((e) => `Old: ${e}`), ...result.newP.schemaErrors.map((e) => `New: ${e}`)].map((e, i) => <p key={i}>{e}</p>)}</div>
+            )}
+            <details className="mt-3">
+              <summary className="cursor-pointer text-xs font-semibold text-purple-700">Show raw JSON-LD side by side</summary>
+              <div className="mt-2 grid grid-cols-1 lg:grid-cols-2 gap-3">
+                {[["Old (VCC)", result.oldP.schemaRaw], ["New (vintage.com)", result.newP.schemaRaw]].map(([l, raw]) => (
+                  <div key={l as string}>
+                    <p className="text-[11px] font-semibold text-gray-500 mb-1">{l as string} · {(raw as string[]).length} block{(raw as string[]).length === 1 ? "" : "s"}</p>
+                    <pre className="text-[10px] bg-gray-50 border border-gray-100 rounded-lg p-2 max-h-80 overflow-auto whitespace-pre-wrap break-all">{(raw as string[]).map((r) => { try { return JSON.stringify(JSON.parse(r), null, 2); } catch { return r; } }).join("\n\n") || "(none)"}</pre>
+                  </div>
+                ))}
+              </div>
+            </details>
+          </section>
+
+          {/* Meta */}
+          <section className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+            <h2 className="text-base font-bold text-gray-900 mb-3">Meta & indexing</h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="bg-gray-50"><tr><th className={th}>Field</th><th className={th}>Old (VCC)</th><th className={th}>New (vintage.com)</th></tr></thead>
+                <tbody className="divide-y divide-gray-50">
+                  {view.metaRows.map(([f, o, n2, changed]) => (
+                    <tr key={f} className={changed ? "bg-amber-50/40" : ""}>
+                      <td className={`${td} font-semibold whitespace-nowrap`}>{f}{changed && <span className="ml-1.5 text-[9px] font-bold text-amber-700">changed</span>}</td>
+                      <td className={`${td} text-gray-500 max-w-[420px] break-words`}>{o || "—"}</td>
+                      <td className={`${td} max-w-[420px] break-words`}>{n2 || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {result.newP.oldDomainRefs.length > 0 && (
+            <section className="bg-red-50/50 border border-red-200 rounded-2xl p-5">
+              <h2 className="text-base font-bold text-red-800 mb-1">Old-domain references left on the new page</h2>
+              <p className="text-xs text-red-700 mb-3">Anything still pointing at vintagecashcow.co.uk, including nav, footer, canonical, hreflang, Open Graph and schema. These cause redirect hops or point Google back at the old domain.</p>
+              <ul className="text-xs text-red-900 space-y-0.5 font-mono break-all">{result.newP.oldDomainRefs.map((r, i) => <li key={i}>{r}</li>)}</ul>
+            </section>
+          )}
+
+          <details className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+            <summary className="cursor-pointer text-sm font-semibold text-gray-800">VCC-specific content not carried over ({view.vccOnly.length}) — probably intentional</summary>
+            <p className="text-xs text-gray-500 mt-2 mb-2">Old-page items mentioning the old brand (“cash cow”, VCC), phone numbers, company/VAT details or © lines. Check nothing important is hiding in here.</p>
+            <ul className="space-y-1">{view.vccOnly.map((m, i) => <li key={i} className="text-xs text-gray-600"><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded mr-2 ${PC_KIND_CLS[m.item.kind]}`}>{PC_KIND_LABEL[m.item.kind]}</span>{m.item.text}{m.item.href && m.item.kind === "link" ? ` → ${m.item.href}` : ""}</li>)}</ul>
+          </details>
+
+          {view.addedHeadings.length > 0 && (
+            <details className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+              <summary className="cursor-pointer text-sm font-semibold text-gray-800">New sections on vintage.com that weren't on the old page ({view.addedHeadings.length})</summary>
+              <ul className="mt-2 space-y-0.5 text-xs text-gray-600 list-disc pl-5">{view.addedHeadings.map((h, i) => <li key={i}>{h}</li>)}</ul>
+            </details>
+          )}
         </div>
       )}
     </div>
@@ -9431,10 +10203,10 @@ export default function App() {
   }, [selectedGA4, selectedGSC, accessToken, ga4FetchFilters, gscFetchFilters]);
 
   // Brand terms — anything containing these is "branded"
-  const BRAND_PATTERNS = ["vin", "cash cow", "vintage cash cow", "vintagecashcow", "cashcow", "vcc"];
+  const BRAND_PATTERNS = ["cash cow", "vintage cash cow", "vintagecashcow", "cashcow", "vcc"];
   const isBranded = (q: string) => {
     const l = q.toLowerCase();
-    return BRAND_PATTERNS.some((b) => l.includes(b));
+    return VIN_BRAND_RE.test(l) || BRAND_PATTERNS.some((b) => l.includes(b));
   };
 
   const fetchBrandData = useCallback(async () => {
@@ -11605,6 +12377,7 @@ export default function App() {
     { key: "watchWizard", label: "Watch Wizard", icon: Camera },
     { key: "migrationHelp", label: "Migration Help", icon: Link2 },
     { key: "postRebrand", label: "Post Rebrand Analysis", icon: Rocket },
+    { key: "contentCheck", label: "Page Content Check", icon: FileSearch },
   ];
 
   const VIEW_TOOLTIPS: Record<ActiveView, string> = {
@@ -11631,19 +12404,18 @@ export default function App() {
     watchWizard: "Watch Wizard — answer 5 quick questions to identify your watch",
     migrationHelp: "Migration Help — track outstanding domain-migration tasks and see what's changed in GSC since the arcavindi → vintage.com rebrand.",
     postRebrand: "Post Rebrand Analysis — every old Vintage Cash Cow URL's organic sessions before vs after the rebrand, and the vintage.com URL they moved to.",
+    contentCheck: "Page Content Check — enter a vintage.com URL to compare its HTML and structured data with the old VCC page it replaced, section by section (nav/footer ignored).",
   };
 
   // ─── Mega Nav grouping ──────────────────────────────────────────────────────
   // Groups the (growing) list of dashboard views into categorised dropdowns so
   // the top nav stays scannable instead of a single row of 18 buttons.
   const NAV_CATEGORIES: { key: string; label: string; icon: React.ElementType; views: ActiveView[] }[] = [
+    { key: "migration", label: "Rebrand", icon: Rocket, views: ["postRebrand", "contentCheck", "migrationHelp"] },
     { key: "analytics", label: "Analytics", icon: BarChart3, views: ["ga4", "gsc", "googleAds", "blend", "intl"] },
     { key: "seoInsights", label: "SEO Insights", icon: Lightbulb, views: ["opportunities", "gscOpportunities", "productCategories", "brandVsNonBrand", "nbSeo", "seoIssues", "performance", "seoActions"] },
     { key: "newPages", label: "New Pages", icon: FilePlus2, views: ["newPageSeo"] },
-    { key: "conversions", label: "Conversions", icon: ShoppingCart, views: ["conversions", "nbSignUps"] },
-    { key: "reporting", label: "Reporting", icon: Activity, views: ["dailySnapshot", "dailyStandup", "dailyObservation"] },
-    { key: "tools", label: "Tools", icon: Building2, views: ["crm", "watchWizard"] },
-    { key: "migration", label: "Rebrand", icon: Rocket, views: ["postRebrand", "migrationHelp"] },
+    // Conversions, Reporting and Tools menus removed from the nav (views still exist in code).
   ];
 
   const [openNavCategory, setOpenNavCategory] = useState<string | null>(null);
@@ -15817,6 +16589,13 @@ ${combinedHtml}
               <>
                 <SectionDivider label="MIGRATION HELP" />
                 <MigrationHelpView selectedGSC={selectedGSC} selectedGA4={selectedGA4} accessToken={accessToken} />
+              </>
+            )}
+
+            {activeView === "contentCheck" && (
+              <>
+                <SectionDivider label="PAGE CONTENT CHECK" />
+                <PageContentCheckView />
               </>
             )}
 
